@@ -1,60 +1,230 @@
 import SwiftUI
 
+private struct DiffLine: Identifiable {
+    enum Kind {
+        case hunkHeader
+        case context
+        case added
+        case removed
+        case meta
+    }
+
+    let id: Int
+    let kind: Kind
+    let oldLineNumber: Int?
+    let newLineNumber: Int?
+    let text: String
+
+    /// The line with its leading +/-/space marker stripped, since that's conveyed by color/gutter instead.
+    var displayText: String {
+        kind == .hunkHeader || kind == .meta ? text : String(text.dropFirst())
+    }
+}
+
 struct DiffView: View {
     @Bindable var appState: AppState
 
+    private static let addedTextColor = Color(red: 0.0, green: 0.35, blue: 0.05)
+    private static let removedTextColor = Color(red: 0.55, green: 0.02, blue: 0.02)
+    private static let addedBackground = Color.green.opacity(0.12)
+    private static let removedBackground = Color.red.opacity(0.12)
+
     var body: some View {
-        Group {
-            if let errorMessage = appState.errorMessage {
-                ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
-            } else if appState.selectedFile == nil {
-                ContentUnavailableView("No File Selected", systemImage: "doc.text")
-            } else if appState.diffText.isEmpty {
-                ContentUnavailableView("No Changes To Show", systemImage: "doc.text")
-            } else {
-                ScrollView([.horizontal, .vertical]) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(diffLines.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(color(for: line))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 4)
-                                .background(background(for: line))
-                        }
+        VStack(spacing: 0) {
+            if appState.selectedFile != nil {
+                header
+                Divider()
+            }
+            content
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let errorMessage = appState.errorMessage {
+            ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if appState.selectedFile == nil {
+            ContentUnavailableView("No File Selected", systemImage: "doc.text")
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if appState.diffText.isEmpty {
+            ContentUnavailableView("No Changes To Show", systemImage: "doc.text")
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(diffLines) { line in
+                        row(for: line)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(fileName)
+                    .font(.system(.body))
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if !directoryPath.isEmpty {
+                    Text(directoryPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
                 }
             }
+
+            Spacer(minLength: 8)
+
+            if addedCount > 0 {
+                Text("+\(addedCount)")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(Self.addedTextColor)
+            }
+            if removedCount > 0 {
+                Text("-\(removedCount)")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(Self.removedTextColor)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
-    private var diffLines: [String] {
-        appState.diffText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    private var fileName: String {
+        (appState.selectedFile?.path as NSString?)?.lastPathComponent ?? ""
     }
 
-    private func color(for line: String) -> Color {
-        if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("diff ") || line.hasPrefix("index ") {
-            return .secondary
-        } else if line.hasPrefix("+") {
-            return .green
-        } else if line.hasPrefix("-") {
-            return .red
-        } else if line.hasPrefix("@@") {
-            return .blue
-        }
-        return .primary
+    private var directoryPath: String {
+        guard let path = appState.selectedFile?.path else { return "" }
+        let directory = (path as NSString).deletingLastPathComponent
+        return directory.isEmpty ? "" : directory
     }
 
-    private func background(for line: String) -> Color {
-        if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("diff ") || line.hasPrefix("index ") {
-            return .clear
-        } else if line.hasPrefix("+") {
-            return .green.opacity(0.12)
-        } else if line.hasPrefix("-") {
-            return .red.opacity(0.12)
+    // MARK: - Diff rows
+
+    @ViewBuilder
+    private func row(for line: DiffLine) -> some View {
+        if line.kind == .hunkHeader {
+            Text(line.text)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.08))
+        } else {
+            HStack(alignment: .top, spacing: 0) {
+                Text(line.oldLineNumber.map(String.init) ?? "")
+                    .frame(width: 36, alignment: .trailing)
+                    .foregroundStyle(.secondary)
+                Text(line.newLineNumber.map(String.init) ?? "")
+                    .frame(width: 36, alignment: .trailing)
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 8)
+                Text(line.displayText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(foreground(for: line.kind))
+            }
+            .font(.system(.body, design: .monospaced))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(background(for: line.kind))
         }
-        return .clear
+    }
+
+    private func foreground(for kind: DiffLine.Kind) -> Color {
+        switch kind {
+        case .added: return Self.addedTextColor
+        case .removed: return Self.removedTextColor
+        case .meta: return .secondary
+        case .context, .hunkHeader: return .primary
+        }
+    }
+
+    private func background(for kind: DiffLine.Kind) -> Color {
+        switch kind {
+        case .added: return Self.addedBackground
+        case .removed: return Self.removedBackground
+        case .context, .hunkHeader, .meta: return .clear
+        }
+    }
+
+    // MARK: - Parsing
+
+    private var diffLines: [DiffLine] {
+        Self.parse(appState.diffText)
+    }
+
+    private var addedCount: Int {
+        diffLines.count { $0.kind == .added }
+    }
+
+    private var removedCount: Int {
+        diffLines.count { $0.kind == .removed }
+    }
+
+    private static let hunkHeaderRegex = try? NSRegularExpression(pattern: #"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@"#)
+
+    /// Parses unified diff text into per-line data with old/new line numbers, skipping the
+    /// `diff --git` / `index` / `---` / `+++` preamble before the first hunk.
+    private static func parse(_ diffText: String) -> [DiffLine] {
+        var result: [DiffLine] = []
+        var oldLine = 0
+        var newLine = 0
+        var sawHunk = false
+        var nextID = 0
+
+        for substring in diffText.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(substring)
+
+            if line.hasPrefix("@@") {
+                sawHunk = true
+                if let regex = hunkHeaderRegex,
+                   let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                   let oldRange = Range(match.range(at: 1), in: line),
+                   let newRange = Range(match.range(at: 2), in: line) {
+                    oldLine = Int(line[oldRange]) ?? 0
+                    newLine = Int(line[newRange]) ?? 0
+                }
+                result.append(DiffLine(id: nextID, kind: .hunkHeader, oldLineNumber: nil, newLineNumber: nil, text: line))
+                nextID += 1
+                continue
+            }
+
+            guard sawHunk else { continue }
+
+            if line.isEmpty {
+                continue
+            } else if line.hasPrefix("\\") {
+                result.append(DiffLine(id: nextID, kind: .meta, oldLineNumber: nil, newLineNumber: nil, text: line))
+            } else if line.hasPrefix("+") {
+                result.append(DiffLine(id: nextID, kind: .added, oldLineNumber: nil, newLineNumber: newLine, text: line))
+                newLine += 1
+            } else if line.hasPrefix("-") {
+                result.append(DiffLine(id: nextID, kind: .removed, oldLineNumber: oldLine, newLineNumber: nil, text: line))
+                oldLine += 1
+            } else {
+                result.append(DiffLine(id: nextID, kind: .context, oldLineNumber: oldLine, newLineNumber: newLine, text: line))
+                oldLine += 1
+                newLine += 1
+            }
+            nextID += 1
+        }
+
+        return result
     }
 }

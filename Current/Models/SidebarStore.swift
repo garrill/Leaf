@@ -1,0 +1,143 @@
+import Foundation
+
+@Observable
+final class SidebarStore {
+    private(set) var repos: [SidebarRepo] = []
+    private(set) var folders: [SidebarFolder] = []
+    private(set) var topLevelOrder: [TopLevelEntry] = []
+
+    private let defaultsKey = "sidebarState.v2"
+    private let legacyDefaultsKey = "repoPaths"
+
+    private struct Snapshot: Codable {
+        var repos: [SidebarRepo]
+        var folders: [SidebarFolder]
+        var topLevelOrder: [TopLevelEntry]
+    }
+
+    init() {
+        load()
+    }
+
+    // MARK: Repo CRUD
+
+    func addRepo(at url: URL) {
+        guard !repos.contains(where: { $0.path == url.path }) else { return }
+        let repo = SidebarRepo(id: UUID(), path: url.path, displayNameOverride: nil, iconPath: nil, folderID: nil, sortIndex: 0)
+        repos.append(repo)
+        topLevelOrder.append(.repo(repo.id))
+        persist()
+    }
+
+    func removeRepo(id: UUID) {
+        repos.removeAll { $0.id == id }
+        topLevelOrder.removeAll { if case .repo(let rid) = $0 { return rid == id }; return false }
+        persist()
+    }
+
+    func updateRepo(id: UUID, displayName: String?, iconPath: String?) {
+        guard let idx = repos.firstIndex(where: { $0.id == id }) else { return }
+        repos[idx].displayNameOverride = displayName
+        repos[idx].iconPath = iconPath
+        persist()
+    }
+
+    func moveRepo(id: UUID, toFolder folderID: UUID?, index: Int?) {
+        guard let repoIdx = repos.firstIndex(where: { $0.id == id }) else { return }
+        let oldFolderID = repos[repoIdx].folderID
+
+        if oldFolderID == nil {
+            topLevelOrder.removeAll { if case .repo(let rid) = $0 { return rid == id }; return false }
+        }
+
+        repos[repoIdx].folderID = folderID
+
+        if let folderID {
+            var siblingIDs = repos
+                .filter { $0.folderID == folderID && $0.id != id }
+                .sorted { $0.sortIndex < $1.sortIndex }
+                .map(\.id)
+            let insertAt = min(index ?? siblingIDs.count, siblingIDs.count)
+            siblingIDs.insert(id, at: insertAt)
+            for (i, rid) in siblingIDs.enumerated() {
+                if let idx = repos.firstIndex(where: { $0.id == rid }) {
+                    repos[idx].sortIndex = i
+                }
+            }
+        } else {
+            let insertAt = min(index ?? topLevelOrder.count, topLevelOrder.count)
+            topLevelOrder.insert(.repo(id), at: insertAt)
+        }
+        persist()
+    }
+
+    // MARK: Folder CRUD
+
+    @discardableResult
+    func addFolder(name: String = "New Folder") -> UUID {
+        let folder = SidebarFolder(id: UUID(), name: name, isExpanded: true)
+        folders.append(folder)
+        topLevelOrder.append(.folder(folder.id))
+        persist()
+        return folder.id
+    }
+
+    func renameFolder(id: UUID, to name: String) {
+        guard let idx = folders.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        folders[idx].name = trimmed
+        persist()
+    }
+
+    func deleteFolder(id: UUID) {
+        folders.removeAll { $0.id == id }
+        repos.removeAll { $0.folderID == id }
+        topLevelOrder.removeAll { if case .folder(let fid) = $0 { return fid == id }; return false }
+        persist()
+    }
+
+    func setFolderExpanded(id: UUID, _ expanded: Bool) {
+        guard let idx = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[idx].isExpanded = expanded
+        persist()
+    }
+
+    // MARK: Top-level reorder
+
+    func moveTopLevelEntry(_ entry: TopLevelEntry, toIndex index: Int) {
+        topLevelOrder.removeAll { $0 == entry }
+        let insertAt = min(max(index, 0), topLevelOrder.count)
+        topLevelOrder.insert(entry, at: insertAt)
+        persist()
+    }
+
+    // MARK: Persistence
+
+    private func persist() {
+        let snapshot = Snapshot(repos: repos, folders: folders, topLevelOrder: topLevelOrder)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+
+    private func load() {
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
+            repos = snapshot.repos
+            folders = snapshot.folders
+            topLevelOrder = snapshot.topLevelOrder
+        } else {
+            migrate()
+        }
+    }
+
+    private func migrate() {
+        let paths = UserDefaults.standard.stringArray(forKey: legacyDefaultsKey) ?? []
+        repos = paths.enumerated().map { index, path in
+            SidebarRepo(id: UUID(), path: path, displayNameOverride: nil, iconPath: nil, folderID: nil, sortIndex: index)
+        }
+        folders = []
+        topLevelOrder = repos.map { .repo($0.id) }
+        persist()
+    }
+}

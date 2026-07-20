@@ -3,7 +3,7 @@ import Foundation
 
 @Observable
 final class AppState {
-    let repoStore = RepoStore()
+    let sidebarStore = SidebarStore()
 
     var selectedRepoURL: URL?
     var branches: [GitBranch] = []
@@ -32,7 +32,7 @@ final class AppState {
         panel.prompt = "Add Repository"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        repoStore.addRepo(at: url)
+        sidebarStore.addRepo(at: url)
         selectRepo(url)
     }
 
