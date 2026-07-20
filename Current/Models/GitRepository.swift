@@ -169,4 +169,11 @@ struct GitRepository {
     func diff(for file: ChangedFile, in commit: GitCommit) throws -> String {
         try run(["show", commit.sha, "--", file.path])
     }
+
+    func commit(message: String, paths: [String]) throws {
+        // `git commit -- <pathspec>` fails on untracked files ("did not match any files"),
+        // so stage the chosen paths explicitly first, then commit whatever is staged.
+        try run(["add", "--"] + paths)
+        try run(["commit", "-m", message])
+    }
 }

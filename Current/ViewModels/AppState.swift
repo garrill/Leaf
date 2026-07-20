@@ -14,6 +14,8 @@ final class AppState {
 
     var changedFiles: [ChangedFile] = []
     var selectedFile: ChangedFile?
+    var checkedFilePaths: Set<String> = []
+    var commitMessage: String = ""
 
     var diffText: String = ""
     var errorMessage: String?
@@ -64,6 +66,30 @@ final class AppState {
         loadDiff()
     }
 
+    func setChecked(_ isChecked: Bool, for path: String) {
+        if isChecked {
+            checkedFilePaths.insert(path)
+        } else {
+            checkedFilePaths.remove(path)
+        }
+    }
+
+    func commitCheckedChanges() {
+        guard let repo = currentRepository else { return }
+        let paths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
+        let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !paths.isEmpty, !message.isEmpty else { return }
+
+        do {
+            try repo.commit(message: message, paths: paths)
+            commitMessage = ""
+            errorMessage = nil
+            refreshRepositoryState()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func refreshRepositoryState() {
         guard let repo = currentRepository else {
             branches = []
@@ -111,8 +137,10 @@ final class AppState {
             switch source {
             case .workingChanges:
                 changedFiles = try repo.statusEntries()
+                checkedFilePaths = Set(changedFiles.map(\.path))
             case .commit(let commit):
                 changedFiles = try repo.filesChanged(in: commit)
+                checkedFilePaths = []
             }
             errorMessage = nil
         } catch {
