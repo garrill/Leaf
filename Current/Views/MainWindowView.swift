@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct MainWindowView: View {
+    /// Shared height for the top bar of the branch, files, and diff columns, so they align.
+    static let columnHeaderHeight: CGFloat = 37
+
     @State private var appState = AppState()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -33,6 +36,7 @@ struct MainWindowView: View {
             .frame(minWidth: branchColumnWidth + filesColumnWidth + diffMinWidth, minHeight: 500)
         }
         .navigationSplitViewStyle(.balanced)
+        .background(WindowAccessor())
     }
 }
 

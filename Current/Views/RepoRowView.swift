@@ -6,7 +6,6 @@ struct RepoRowView: View {
     let appState: AppState
     let sidebarStore: SidebarStore
     let onEdit: () -> Void
-    let onDrop: (SidebarDragPayload) -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -16,16 +15,28 @@ struct RepoRowView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .draggable(SidebarDragPayload.repo(repo.id))
-        .dropDestination(for: SidebarDragPayload.self) { items, _ in
-            guard let payload = items.first else { return false }
-            onDrop(payload)
-            return true
-        }
         .contextMenu {
             Button("Edit…") { onEdit() }
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([repo.url])
+            }
+            if !sidebarStore.folders.isEmpty || repo.folderID != nil {
+                Divider()
+                Menu("Move to Folder") {
+                    if repo.folderID != nil {
+                        Button("Top Level") {
+                            sidebarStore.moveRepo(id: repo.id, toFolder: nil, index: nil)
+                        }
+                        if !sidebarStore.folders.isEmpty {
+                            Divider()
+                        }
+                    }
+                    ForEach(sidebarStore.folders.filter { $0.id != repo.folderID }) { folder in
+                        Button(folder.name) {
+                            sidebarStore.moveRepo(id: repo.id, toFolder: folder.id, index: nil)
+                        }
+                    }
+                }
             }
             Divider()
             Button("Remove", role: .destructive) {
@@ -44,7 +55,7 @@ struct RepoRowView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
         } else {
-            Image(systemName: "folder.fill")
+            Image(systemName: "book.closed.fill")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .foregroundStyle(.secondary)

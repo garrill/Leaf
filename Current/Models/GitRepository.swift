@@ -38,10 +38,20 @@ struct GitCommit: Identifiable, Hashable {
     let sha: String
     let shortSha: String
     let summary: String
-    let date: String
+    let date: Date
     let author: String
 
     var id: String { sha }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
+    var relativeDate: String {
+        Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
 }
 
 enum ChangeSource: Hashable {
@@ -142,14 +152,15 @@ struct GitRepository {
     private static let fieldSeparator = "\u{1F}"
 
     func commitLog(branch: String, limit: Int = 200) throws -> [GitCommit] {
-        let format = ["%H", "%h", "%s", "%ad", "%an"].joined(separator: Self.fieldSeparator)
-        let output = try run(["log", branch, "--date=short", "-n", String(limit), "--format=\(format)"])
+        let format = ["%H", "%h", "%s", "%at", "%an"].joined(separator: Self.fieldSeparator)
+        let output = try run(["log", branch, "-n", String(limit), "--format=\(format)"])
         return output
             .split(separator: "\n")
             .compactMap { line -> GitCommit? in
                 let parts = String(line).components(separatedBy: Self.fieldSeparator)
-                guard parts.count == 5 else { return nil }
-                return GitCommit(sha: parts[0], shortSha: parts[1], summary: parts[2], date: parts[3], author: parts[4])
+                guard parts.count == 5, let epochSeconds = TimeInterval(parts[3]) else { return nil }
+                let date = Date(timeIntervalSince1970: epochSeconds)
+                return GitCommit(sha: parts[0], shortSha: parts[1], summary: parts[2], date: date, author: parts[4])
             }
     }
 
@@ -175,5 +186,24 @@ struct GitRepository {
         // so stage the chosen paths explicitly first, then commit whatever is staged.
         try run(["add", "--"] + paths)
         try run(["commit", "-m", message])
+    }
+
+    func discardChanges(for file: ChangedFile) throws {
+        if file.status == .untracked {
+            try run(["clean", "-f", "--", file.path])
+        } else {
+            try run(["checkout", "--", file.path])
+        }
+    }
+
+    /// Appends the path to the repo's top-level `.gitignore`, creating it if needed.
+    func ignoreFile(_ file: ChangedFile) throws {
+        let gitignoreURL = rootURL.appendingPathComponent(".gitignore")
+        var existing = (try? String(contentsOf: gitignoreURL, encoding: .utf8)) ?? ""
+        if !existing.isEmpty && !existing.hasSuffix("\n") {
+            existing += "\n"
+        }
+        existing += file.path + "\n"
+        try existing.write(to: gitignoreURL, atomically: true, encoding: .utf8)
     }
 }

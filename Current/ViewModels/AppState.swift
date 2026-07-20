@@ -59,11 +59,36 @@ final class AppState {
         selectedFile = nil
         diffText = ""
         loadChangedFiles()
+        selectFile(changedFiles.first)
     }
 
     func selectFile(_ file: ChangedFile?) {
         selectedFile = file
         loadDiff()
+    }
+
+    func discardChanges(for file: ChangedFile) {
+        guard let repo = currentRepository else { return }
+        do {
+            try repo.discardChanges(for: file)
+            errorMessage = nil
+            loadChangedFiles()
+            selectFile(changedFiles.first)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func ignoreFile(_ file: ChangedFile) {
+        guard let repo = currentRepository else { return }
+        do {
+            try repo.ignoreFile(file)
+            errorMessage = nil
+            loadChangedFiles()
+            selectFile(changedFiles.first)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func setChecked(_ isChecked: Bool, for path: String) {
@@ -111,7 +136,15 @@ final class AppState {
             selectedBranch = nil
         }
         loadCommitLog()
-        selectSource(.workingChanges)
+
+        let hasUncommittedChanges = (try? repo.statusEntries().isEmpty == false) ?? false
+        if hasUncommittedChanges {
+            selectSource(.workingChanges)
+        } else if let firstCommit = commits.first {
+            selectSource(.commit(firstCommit))
+        } else {
+            selectSource(.workingChanges)
+        }
     }
 
     private func loadCommitLog() {

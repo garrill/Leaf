@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ChangedFilesView: View {
@@ -22,9 +23,21 @@ struct ChangedFilesView: View {
                         .frame(width: 16)
                 }
                 .tag(file)
+                .listRowSeparator(.visible)
+                .contextMenu {
+                    contextMenuItems(for: file)
+                }
             }
             .listStyle(.sidebar)
+            .environment(\.controlActiveState, .key)
             .opacity(showsList ? 1 : 0)
+            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            .safeAreaBar(edge: .top, spacing: 0) { header }
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                if isWorkingChanges && !appState.changedFiles.isEmpty {
+                    commitFooter
+                }
+            }
 
             if appState.selectedRepoURL == nil {
                 ContentUnavailableView("No Repo Selected", systemImage: "folder")
@@ -35,11 +48,68 @@ struct ChangedFilesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .safeAreaInset(edge: .bottom) {
-            if isWorkingChanges && !appState.changedFiles.isEmpty {
-                commitFooter
+    }
+
+    private var header: some View {
+        HStack {
+            Text(headerTitle)
+                .font(.headline)
+                .lineLimit(1)
+            Spacer()
+            if !appState.changedFiles.isEmpty {
+                Text("\(appState.changedFiles.count)")
+                    .foregroundStyle(.secondary)
             }
         }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .frame(height: MainWindowView.columnHeaderHeight)
+    }
+
+    private var headerTitle: String {
+        switch appState.selectedSource {
+        case .none: return "Files"
+        case .workingChanges: return "Uncommitted Changes"
+        case .commit(let commit): return commit.summary
+        }
+    }
+
+    @ViewBuilder
+    private func contextMenuItems(for file: ChangedFile) -> some View {
+        Button("Reveal in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([fullURL(for: file)])
+        }
+        Button("Open in Default Program") {
+            NSWorkspace.shared.open(fullURL(for: file))
+        }
+        Divider()
+        Button("Copy File Path") {
+            copyToPasteboard(fullURL(for: file).path)
+        }
+        Button("Copy Relative Path") {
+            copyToPasteboard(file.path)
+        }
+        if isWorkingChanges {
+            Divider()
+            Button("Discard Changes", role: .destructive) {
+                appState.discardChanges(for: file)
+            }
+            Button("Ignore File") {
+                appState.ignoreFile(file)
+            }
+        }
+    }
+
+    private func fullURL(for file: ChangedFile) -> URL {
+        guard let repoURL = appState.selectedRepoURL else {
+            return URL(fileURLWithPath: file.path)
+        }
+        return repoURL.appendingPathComponent(file.path)
+    }
+
+    private func copyToPasteboard(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
     }
 
     private var commitFooter: some View {

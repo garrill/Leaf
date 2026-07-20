@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private struct DiffLine: Identifiable {
@@ -24,20 +25,28 @@ private struct DiffLine: Identifiable {
 struct DiffView: View {
     @Bindable var appState: AppState
 
-    private static let addedTextColor = Color(red: 0.0, green: 0.35, blue: 0.05)
-    private static let removedTextColor = Color(red: 0.55, green: 0.02, blue: 0.02)
+    private static let addedTextColor = Color(NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.75, green: 1.0, blue: 0.8, alpha: 1)
+            : NSColor(red: 0.0, green: 0.35, blue: 0.05, alpha: 1)
+    })
+    private static let removedTextColor = Color(NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 1.0, green: 0.8, blue: 0.8, alpha: 1)
+            : NSColor(red: 0.55, green: 0.02, blue: 0.02, alpha: 1)
+    })
     private static let addedBackground = Color.green.opacity(0.12)
     private static let removedBackground = Color.red.opacity(0.12)
 
     var body: some View {
-        VStack(spacing: 0) {
-            if appState.selectedFile != nil {
-                header
-                Divider()
+        content
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .safeAreaBar(edge: .top, spacing: 0) {
+                if appState.selectedFile != nil {
+                    header
+                }
             }
-            content
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     @ViewBuilder
@@ -71,20 +80,10 @@ struct DiffView: View {
             Image(systemName: "doc.text")
                 .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(fileName)
-                    .font(.system(.body))
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if !directoryPath.isEmpty {
-                    Text(directoryPath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-            }
+            pathAndFileName
+                .font(.system(.body))
+                .lineLimit(1)
+                .truncationMode(.head)
 
             Spacer(minLength: 8)
 
@@ -100,7 +99,16 @@ struct DiffView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .frame(height: MainWindowView.columnHeaderHeight)
+    }
+
+    /// Directory in secondary/grey, file name in primary/black, on one line.
+    private var pathAndFileName: Text {
+        let name = Text(fileName).foregroundColor(.primary)
+        guard !directoryPath.isEmpty else { return name }
+        let directory = Text(directoryPath + "/").foregroundColor(.secondary)
+        return Text("\(directory)\(name)")
     }
 
     private var fileName: String {

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 @Observable
 final class SidebarStore {
@@ -103,12 +104,33 @@ final class SidebarStore {
         persist()
     }
 
-    // MARK: Top-level reorder
+    // MARK: Reordering
 
     func moveTopLevelEntry(_ entry: TopLevelEntry, toIndex index: Int) {
         topLevelOrder.removeAll { $0 == entry }
         let insertAt = min(max(index, 0), topLevelOrder.count)
         topLevelOrder.insert(entry, at: insertAt)
+        persist()
+    }
+
+    /// Reorders the top-level entries (folders and un-foldered repos) in place, for native List drag reordering.
+    func moveTopLevelEntries(fromOffsets source: IndexSet, toOffset destination: Int) {
+        topLevelOrder.move(fromOffsets: source, toOffset: destination)
+        persist()
+    }
+
+    /// Reorders a folder's repo children in place, for native List drag reordering.
+    func moveRepos(inFolder folderID: UUID, fromOffsets source: IndexSet, toOffset destination: Int) {
+        var siblingIDs = repos
+            .filter { $0.folderID == folderID }
+            .sorted { $0.sortIndex < $1.sortIndex }
+            .map(\.id)
+        siblingIDs.move(fromOffsets: source, toOffset: destination)
+        for (i, rid) in siblingIDs.enumerated() {
+            if let idx = repos.firstIndex(where: { $0.id == rid }) {
+                repos[idx].sortIndex = i
+            }
+        }
         persist()
     }
 
