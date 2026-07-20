@@ -9,6 +9,9 @@ final class AppState {
     var branches: [GitBranch] = []
     var selectedBranch: GitBranch?
 
+    var commits: [GitCommit] = []
+    var selectedSource: ChangeSource?
+
     var changedFiles: [ChangedFile] = []
     var selectedFile: ChangedFile?
 
@@ -33,9 +36,27 @@ final class AppState {
 
     func selectRepo(_ url: URL) {
         selectedRepoURL = url
+        refreshRepositoryState()
+    }
+
+    func selectBranch(_ branch: GitBranch) {
+        guard let repo = currentRepository else { return }
+        if !branch.isCurrent {
+            do {
+                try repo.checkout(branch: branch.name)
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+        refreshRepositoryState()
+    }
+
+    func selectSource(_ source: ChangeSource?) {
+        selectedSource = source
         selectedFile = nil
         diffText = ""
-        refreshBranchesAndStatus()
+        loadChangedFiles()
     }
 
     func selectFile(_ file: ChangedFile?) {
@@ -43,32 +64,75 @@ final class AppState {
         loadDiff()
     }
 
-    func refreshBranchesAndStatus() {
+    private func refreshRepositoryState() {
         guard let repo = currentRepository else {
             branches = []
+            commits = []
             changedFiles = []
             selectedBranch = nil
+            selectedSource = nil
+            selectedFile = nil
+            diffText = ""
             return
         }
         do {
             branches = try repo.branches()
-            selectedBranch = branches.first { $0.isCurrent }
-            changedFiles = try repo.statusEntries()
+            selectedBranch = branches.first { $0.isCurrent } ?? branches.first
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
             branches = []
+            selectedBranch = nil
+        }
+        loadCommitLog()
+        selectSource(.workingChanges)
+    }
+
+    private func loadCommitLog() {
+        guard let repo = currentRepository, let branch = selectedBranch else {
+            commits = []
+            return
+        }
+        do {
+            commits = try repo.commitLog(branch: branch.name)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            commits = []
+        }
+    }
+
+    private func loadChangedFiles() {
+        guard let repo = currentRepository, let source = selectedSource else {
+            changedFiles = []
+            return
+        }
+        do {
+            switch source {
+            case .workingChanges:
+                changedFiles = try repo.statusEntries()
+            case .commit(let commit):
+                changedFiles = try repo.filesChanged(in: commit)
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
             changedFiles = []
         }
     }
 
     private func loadDiff() {
-        guard let repo = currentRepository, let file = selectedFile else {
+        guard let repo = currentRepository, let file = selectedFile, let source = selectedSource else {
             diffText = ""
             return
         }
         do {
-            diffText = try repo.diff(for: file)
+            switch source {
+            case .workingChanges:
+                diffText = try repo.diff(for: file)
+            case .commit(let commit):
+                diffText = try repo.diff(for: file, in: commit)
+            }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription

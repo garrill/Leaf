@@ -4,26 +4,28 @@ struct RepoListView: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        VStack(spacing: 0) {
-            List(appState.repoStore.repoPaths, id: \.self, selection: repoSelection) { url in
-                Text(url.lastPathComponent)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .listStyle(.sidebar)
-
-            Divider()
-
-            Button {
-                appState.addRepoViaPicker()
-            } label: {
-                Label("Add Repo…", systemImage: "plus")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .padding(8)
+        List(appState.repoStore.repoPaths, id: \.self, selection: repoSelection) { url in
+            Text(url.lastPathComponent)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
-        .frame(minWidth: 180, idealWidth: 200)
+        .listStyle(.sidebar)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Spacer()
+                Button {
+                    appState.addRepoViaPicker()
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.glass)
+                .clipShape(Circle())
+                .help("Add Repo…")
+            }
+            .padding(10)
+        }
     }
 
     private var repoSelection: Binding<URL?> {

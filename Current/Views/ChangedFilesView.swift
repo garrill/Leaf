@@ -4,28 +4,35 @@ struct ChangedFilesView: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        Group {
+        ZStack {
+            List(appState.changedFiles, selection: fileSelection) { file in
+                HStack {
+                    Text(statusSymbol(for: file.status))
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(statusColor(for: file.status))
+                        .frame(width: 16)
+                    Text((file.path as NSString).lastPathComponent)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .tag(file)
+            }
+            .listStyle(.sidebar)
+            .opacity(showsList ? 1 : 0)
+
             if appState.selectedRepoURL == nil {
                 ContentUnavailableView("No Repo Selected", systemImage: "folder")
+            } else if appState.selectedSource == nil {
+                ContentUnavailableView("Select Uncommitted Changes or a Commit", systemImage: "sidebar.left")
             } else if appState.changedFiles.isEmpty {
                 ContentUnavailableView("No Changes", systemImage: "checkmark.circle")
-            } else {
-                List(appState.changedFiles, selection: fileSelection) { file in
-                    HStack {
-                        Text(statusSymbol(for: file.status))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(statusColor(for: file.status))
-                            .frame(width: 16)
-                        Text((file.path as NSString).lastPathComponent)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .tag(file)
-                }
-                .listStyle(.sidebar)
             }
         }
-        .frame(minWidth: 200, idealWidth: 220)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var showsList: Bool {
+        appState.selectedRepoURL != nil && appState.selectedSource != nil && !appState.changedFiles.isEmpty
     }
 
     private var fileSelection: Binding<ChangedFile?> {

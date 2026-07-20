@@ -34,6 +34,21 @@ struct ChangedFile: Identifiable, Hashable {
     var id: String { path }
 }
 
+struct GitCommit: Identifiable, Hashable {
+    let sha: String
+    let shortSha: String
+    let summary: String
+    let date: String
+    let author: String
+
+    var id: String { sha }
+}
+
+enum ChangeSource: Hashable {
+    case workingChanges
+    case commit(GitCommit)
+}
+
 enum GitError: Error, LocalizedError {
     case commandFailed(String)
 
@@ -118,5 +133,40 @@ struct GitRepository {
             return stdout
         }
         return try run(["diff", "--", file.path])
+    }
+
+    func checkout(branch: String) throws {
+        try run(["checkout", branch])
+    }
+
+    private static let fieldSeparator = "\u{1F}"
+
+    func commitLog(branch: String, limit: Int = 200) throws -> [GitCommit] {
+        let format = ["%H", "%h", "%s", "%ad", "%an"].joined(separator: Self.fieldSeparator)
+        let output = try run(["log", branch, "--date=short", "-n", String(limit), "--format=\(format)"])
+        return output
+            .split(separator: "\n")
+            .compactMap { line -> GitCommit? in
+                let parts = String(line).components(separatedBy: Self.fieldSeparator)
+                guard parts.count == 5 else { return nil }
+                return GitCommit(sha: parts[0], shortSha: parts[1], summary: parts[2], date: parts[3], author: parts[4])
+            }
+    }
+
+    func filesChanged(in commit: GitCommit) throws -> [ChangedFile] {
+        let output = try run(["show", "--format=", "--name-status", commit.sha])
+        return output
+            .split(separator: "\n")
+            .compactMap { line -> ChangedFile? in
+                let parts = line.split(separator: "\t")
+                guard let first = parts.first, let last = parts.last, parts.count >= 2 else { return nil }
+                let statusChar = first.first.map(String.init) ?? "?"
+                let status = FileChangeStatus(rawValue: statusChar) ?? .unknown
+                return ChangedFile(path: String(last), status: status)
+            }
+    }
+
+    func diff(for file: ChangedFile, in commit: GitCommit) throws -> String {
+        try run(["show", commit.sha, "--", file.path])
     }
 }
