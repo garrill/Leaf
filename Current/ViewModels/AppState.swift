@@ -223,20 +223,25 @@ final class AppState {
     }
 
     private func loadDiff() {
-        imageDiffOld = nil
-        imageDiffNew = nil
         guard let repo = currentRepository, let file = selectedFile, let source = selectedSource else {
             diffText = ""
+            imageDiffOld = nil
+            imageDiffNew = nil
             return
         }
         if file.isLikelyImage {
             let contents = repo.imageContents(for: file, in: source)
-            imageDiffOld = contents.old
-            imageDiffNew = contents.new
             diffText = ""
             errorMessage = nil
+            // Only touch these if the bytes actually changed — an unconditional nil-then-set
+            // makes the image view flash to its empty state on every FSEvents-triggered
+            // refresh, even when this file didn't change.
+            if contents.old != imageDiffOld { imageDiffOld = contents.old }
+            if contents.new != imageDiffNew { imageDiffNew = contents.new }
             return
         }
+        imageDiffOld = nil
+        imageDiffNew = nil
         do {
             switch source {
             case .workingChanges:
