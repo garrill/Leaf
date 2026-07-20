@@ -22,6 +22,7 @@ struct ChangedFilesView: View {
                         .foregroundStyle(statusColor(for: file.status))
                         .frame(width: 16)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .tag(file)
                 .listRowSeparator(.visible)
                 .contextMenu {
@@ -31,6 +32,7 @@ struct ChangedFilesView: View {
             .listStyle(.sidebar)
             .environment(\.controlActiveState, .key)
             .opacity(showsList ? 1 : 0)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
             .safeAreaBar(edge: .top, spacing: 0) { header }
             .safeAreaBar(edge: .bottom, spacing: 0) {

@@ -11,6 +11,7 @@ struct FolderRowView: View {
 
     @State private var draftName: String = ""
     @FocusState private var fieldFocused: Bool
+    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -25,7 +26,7 @@ struct FolderRowView: View {
                         if !focused { commitRename() }
                     }
             } else {
-                Text(folder.name.uppercased())
+                Text(folder.name)
                     .font(.caption)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
@@ -46,8 +47,10 @@ struct FolderRowView: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(folder.isExpanded ? 0 : -90))
+                .opacity(isHovering ? 1 : 0)
         }
         .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
         .onTapGesture { if !isRenaming { onToggle() } }
         .contextMenu {
             Button("Rename") { onStartRename() }

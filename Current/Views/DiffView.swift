@@ -57,6 +57,16 @@ struct DiffView: View {
         } else if appState.selectedFile == nil {
             ContentUnavailableView("No File Selected", systemImage: "doc.text")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if appState.selectedFile?.isLikelyImage == true {
+            ImageDiffView(appState: appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if appState.diffText.hasPrefix("Binary files ") {
+            ContentUnavailableView(
+                "Binary File Changed",
+                systemImage: "doc.badge.gearshape",
+                description: Text(fileName)
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else if appState.diffText.isEmpty {
             ContentUnavailableView("No Changes To Show", systemImage: "doc.text")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

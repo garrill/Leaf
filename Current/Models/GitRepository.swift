@@ -32,6 +32,14 @@ struct ChangedFile: Identifiable, Hashable {
     let status: FileChangeStatus
 
     var id: String { path }
+
+    private static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "heic", "heif", "webp"
+    ]
+
+    var isLikelyImage: Bool {
+        Self.imageExtensions.contains((path as NSString).pathExtension.lowercased())
+    }
 }
 
 struct GitCommit: Identifiable, Hashable {
@@ -145,6 +153,52 @@ struct GitRepository {
         return try run(["diff", "--", file.path])
     }
 
+    /// Like `runRaw`, but returns raw `Data` instead of decoding as UTF-8 — needed for binary
+    /// blob contents (images) where `git show` output isn't valid text.
+    private func runRawData(_ arguments: [String]) throws -> (stdout: Data, exitCode: Int32) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.currentDirectoryURL = rootURL
+        process.arguments = arguments
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        try process.run()
+
+        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+        _ = stderr.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        return (outData, process.terminationStatus)
+    }
+
+    private func blobData(_ spec: String) -> Data? {
+        guard let result = try? runRawData(["show", spec]) else { return nil }
+        return result.exitCode == 0 ? result.stdout : nil
+    }
+
+    /// Returns the "before"/"after" raw bytes of a file for image diffing. A `nil` side means
+    /// the file doesn't exist on that side (newly added, or deleted).
+    func imageContents(for file: ChangedFile, in source: ChangeSource) -> (old: Data?, new: Data?) {
+        switch source {
+        case .workingChanges:
+            let newData: Data? = file.status == .deleted
+                ? nil
+                : try? Data(contentsOf: rootURL.appendingPathComponent(file.path))
+            let oldData: Data? = (file.status == .untracked || file.status == .added)
+                ? nil
+                : blobData("HEAD:\(file.path)")
+            return (oldData, newData)
+        case .commit(let commit):
+            let newData = file.status == .deleted ? nil : blobData("\(commit.sha):\(file.path)")
+            let oldData = file.status == .added ? nil : blobData("\(commit.sha)^:\(file.path)")
+            return (oldData, newData)
+        }
+    }
+
     func checkout(branch: String) throws {
         try run(["checkout", branch])
     }
@@ -181,9 +235,14 @@ struct GitRepository {
         try run(["show", commit.sha, "--", file.path])
     }
 
-    func commit(message: String, paths: [String]) throws {
+    func commit(message: String, paths: [String], unstagePaths: [String]) throws {
         // `git commit -- <pathspec>` fails on untracked files ("did not match any files"),
         // so stage the chosen paths explicitly first, then commit whatever is staged.
+        // Unchecked files may already be staged from outside the app, so unstage them
+        // first — otherwise a plain `git commit` (no pathspec) would sweep them in too.
+        if !unstagePaths.isEmpty {
+            try run(["reset", "--"] + unstagePaths)
+        }
         try run(["add", "--"] + paths)
         try run(["commit", "-m", message])
     }

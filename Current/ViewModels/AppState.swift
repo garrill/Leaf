@@ -18,11 +18,15 @@ final class AppState {
     var commitMessage: String = ""
 
     var diffText: String = ""
+    var imageDiffOld: Data?
+    var imageDiffNew: Data?
     var errorMessage: String?
 
     private var currentRepository: GitRepository? {
         selectedRepoURL.map { GitRepository(rootURL: $0) }
     }
+
+    private var repoWatcher: RepoWatcher?
 
     func addRepoViaPicker() {
         let panel = NSOpenPanel()
@@ -39,6 +43,9 @@ final class AppState {
     func selectRepo(_ url: URL) {
         selectedRepoURL = url
         refreshRepositoryState()
+        repoWatcher = RepoWatcher(url: url) { [weak self] in
+            self?.handleExternalChange()
+        }
     }
 
     func selectBranch(_ branch: GitBranch) {
@@ -102,11 +109,12 @@ final class AppState {
     func commitCheckedChanges() {
         guard let repo = currentRepository else { return }
         let paths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
+        let unstagePaths = changedFiles.filter { !checkedFilePaths.contains($0.path) }.map(\.path)
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !paths.isEmpty, !message.isEmpty else { return }
 
         do {
-            try repo.commit(message: message, paths: paths)
+            try repo.commit(message: message, paths: paths, unstagePaths: unstagePaths)
             commitMessage = ""
             errorMessage = nil
             refreshRepositoryState()
@@ -161,16 +169,48 @@ final class AppState {
         }
     }
 
-    private func loadChangedFiles() {
+    /// Re-syncs branches/commits/files/diff after an FSEvents notification, without disturbing
+    /// the user's current selection the way `refreshRepositoryState()`'s initial-selection
+    /// heuristic would.
+    private func handleExternalChange() {
+        guard let repo = currentRepository else { return }
+        do {
+            branches = try repo.branches()
+            if let current = branches.first(where: { $0.isCurrent }) {
+                selectedBranch = current
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        loadCommitLog()
+        loadChangedFiles(preserveChecks: true)
+        if let selectedFile, changedFiles.contains(selectedFile) {
+            loadDiff()
+        } else {
+            selectFile(changedFiles.first)
+        }
+    }
+
+    private func loadChangedFiles(preserveChecks: Bool = false) {
         guard let repo = currentRepository, let source = selectedSource else {
             changedFiles = []
             return
         }
+        let previousPaths = Set(changedFiles.map(\.path))
         do {
             switch source {
             case .workingChanges:
                 changedFiles = try repo.statusEntries()
-                checkedFilePaths = Set(changedFiles.map(\.path))
+                let currentPaths = Set(changedFiles.map(\.path))
+                if preserveChecks {
+                    // Keep the user's check state for files that are still around, and default
+                    // newly-appeared files to checked, rather than resetting everything.
+                    checkedFilePaths.formIntersection(currentPaths)
+                    checkedFilePaths.formUnion(currentPaths.subtracting(previousPaths))
+                } else {
+                    checkedFilePaths = currentPaths
+                }
             case .commit(let commit):
                 changedFiles = try repo.filesChanged(in: commit)
                 checkedFilePaths = []
@@ -183,8 +223,18 @@ final class AppState {
     }
 
     private func loadDiff() {
+        imageDiffOld = nil
+        imageDiffNew = nil
         guard let repo = currentRepository, let file = selectedFile, let source = selectedSource else {
             diffText = ""
+            return
+        }
+        if file.isLikelyImage {
+            let contents = repo.imageContents(for: file, in: source)
+            imageDiffOld = contents.old
+            imageDiffNew = contents.new
+            diffText = ""
+            errorMessage = nil
             return
         }
         do {
