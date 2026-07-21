@@ -54,6 +54,57 @@ struct MainWindowView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .background(WindowAccessor())
+        .toolbar {
+            if appState.isSyncing {
+                ToolbarItem(placement: .primaryAction) {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        appState.fetchRemote()
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .help("Fetch")
+                    .disabled(appState.selectedRepoURL == nil)
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    appState.pullCurrentBranch()
+                } label: {
+                    Image(systemName: "arrow.down")
+                        .overlay(alignment: .topTrailing) {
+                            syncBadge(isVisible: appState.behindCount > 0)
+                        }
+                }
+                .help("Pull")
+                .disabled(appState.selectedRepoURL == nil || !appState.hasUpstream || appState.isSyncing)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    appState.pushCurrentBranch()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .overlay(alignment: .topTrailing) {
+                            syncBadge(isVisible: appState.aheadCount > 0)
+                        }
+                }
+                .help("Push")
+                .disabled(appState.selectedRepoURL == nil || appState.selectedBranch == nil || appState.isSyncing)
+            }
+        }
+    }
+
+    private func syncBadge(isVisible: Bool) -> some View {
+        Circle()
+            .fill(Color.accentColor)
+            .frame(width: 6, height: 6)
+            .offset(x: 2, y: -2)
+            .opacity(isVisible ? 1 : 0)
+            .animation(.default, value: isVisible)
     }
 
     private func moveFocus(by offset: Int) -> KeyPress.Result {

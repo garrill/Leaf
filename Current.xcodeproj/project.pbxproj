@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		2C6E3B4C57E9A0D835F76A72 /* HighlightSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 44EC0817DFFC7A3788D34941 /* HighlightSwift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		FBFA9B2E300E806B00AC97F6 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2C6E3B4C57E9A0D835F76A72 /* HighlightSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = Current;
 			packageProductDependencies = (
+				44EC0817DFFC7A3788D34941 /* HighlightSwift */,
 			);
 			productName = Current;
 			productReference = FBFA9B20300E806A00AC97F6 /* Current.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = FBFA9B17300E806A00AC97F6;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				8FAA94362965E3A6EE6F75C8 /* XCRemoteSwiftPackageReference "HighlightSwift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FBFA9B21300E806A00AC97F6 /* Products */;
 			projectDirPath = "";
@@ -571,6 +580,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		8FAA94362965E3A6EE6F75C8 /* XCRemoteSwiftPackageReference "HighlightSwift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/appstefan/HighlightSwift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		44EC0817DFFC7A3788D34941 /* HighlightSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8FAA94362965E3A6EE6F75C8 /* XCRemoteSwiftPackageReference "HighlightSwift" */;
+			productName = HighlightSwift;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FBFA9B18300E806A00AC97F6 /* Project object */;
 }

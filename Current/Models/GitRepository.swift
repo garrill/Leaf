@@ -203,6 +203,36 @@ struct GitRepository {
         try run(["checkout", branch])
     }
 
+    func fetch() throws {
+        try run(["fetch"])
+    }
+
+    func pull() throws {
+        try run(["pull"])
+    }
+
+    /// Pushes the current branch, setting up its upstream on the first push if none exists yet.
+    func push(branch: String) throws {
+        do {
+            try run(["push"])
+        } catch let GitError.commandFailed(message) where message.contains("has no upstream branch") {
+            try run(["push", "--set-upstream", "origin", branch])
+        }
+    }
+
+    /// Ahead/behind counts of the current branch relative to its upstream, or `nil` if it has none.
+    func aheadBehind() -> (ahead: Int, behind: Int)? {
+        guard let output = try? run(["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]) else {
+            return nil
+        }
+        let counts = output
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0 == "\t" || $0 == " " })
+            .compactMap { Int($0) }
+        guard counts.count == 2 else { return nil }
+        return (ahead: counts[1], behind: counts[0])
+    }
+
     private static let fieldSeparator = "\u{1F}"
 
     func commitLog(branch: String, limit: Int = 200) throws -> [GitCommit] {

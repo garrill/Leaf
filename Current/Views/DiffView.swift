@@ -1,4 +1,5 @@
 import AppKit
+import HighlightSwift
 import SwiftUI
 
 private struct DiffLine: Identifiable {
@@ -24,6 +25,12 @@ private struct DiffLine: Identifiable {
 
 struct DiffView: View {
     @Bindable var appState: AppState
+    @Environment(\.colorScheme) private var colorScheme
+    /// Both updated together at the end of `refreshDisplayedDiff()`, never independently, so a
+    /// file switch never renders with this frame's line numbers/gutter against last frame's
+    /// (or the *previous file's*) highlighted text.
+    @State private var displayedLines: [DiffLine] = []
+    @State private var highlightedLines: [Int: AttributedString] = [:]
 
     private static let addedTextColor = Color(NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -73,13 +80,16 @@ struct DiffView: View {
         } else {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(diffLines) { line in
+                    ForEach(displayedLines) { line in
                         row(for: line)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
+                await refreshDisplayedDiff()
+            }
         }
     }
 
@@ -152,7 +162,7 @@ struct DiffView: View {
                     .frame(width: 36, alignment: .trailing)
                     .foregroundStyle(.secondary)
                     .padding(.trailing, 8)
-                Text(line.displayText)
+                Text(highlightedLines[line.id] ?? AttributedString(line.displayText))
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .foregroundStyle(foreground(for: line.kind))
@@ -183,16 +193,12 @@ struct DiffView: View {
 
     // MARK: - Parsing
 
-    private var diffLines: [DiffLine] {
-        Self.parse(appState.diffText)
-    }
-
     private var addedCount: Int {
-        diffLines.count { $0.kind == .added }
+        displayedLines.count { $0.kind == .added }
     }
 
     private var removedCount: Int {
-        diffLines.count { $0.kind == .removed }
+        displayedLines.count { $0.kind == .removed }
     }
 
     private static let hunkHeaderRegex = try? NSRegularExpression(pattern: #"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@"#)
@@ -245,4 +251,102 @@ struct DiffView: View {
 
         return result
     }
+
+    // MARK: - Syntax highlighting
+
+    /// Highlights the diff by reconstructing each hunk's old side (context + removed lines) and
+    /// new side (context + added lines) as one text block per side, in order, and sending each
+    /// block through HighlightSwift as a single call. This needs no extra git blob fetches — the
+    /// hunk already carries both sides' text — and gives hljs enough surrounding code to tokenize
+    /// multi-line constructs (strings, comments) far better than highlighting line-by-line, at the
+    /// cost of occasionally mis-tokenizing right at a hunk boundary.
+    private func refreshDisplayedDiff() async {
+        let lines = Self.parse(appState.diffText)
+        guard !lines.isEmpty else {
+            displayedLines = []
+            highlightedLines = [:]
+            return
+        }
+
+        let language = appState.selectedFile.flatMap { CodeHighlighter.language(forPath: $0.path) }
+        let colors: HighlightColors = colorScheme == .dark ? .dark(.xcode) : .light(.xcode)
+
+        var oldSideRun: [DiffLine] = []
+        var newSideRun: [DiffLine] = []
+        var runs: [[DiffLine]] = []
+
+        func flush() {
+            if !oldSideRun.isEmpty { runs.append(oldSideRun); oldSideRun = [] }
+            if !newSideRun.isEmpty { runs.append(newSideRun); newSideRun = [] }
+        }
+
+        for line in lines {
+            switch line.kind {
+            case .hunkHeader, .meta:
+                flush()
+            case .context:
+                oldSideRun.append(line)
+                newSideRun.append(line)
+            case .removed:
+                oldSideRun.append(line)
+            case .added:
+                newSideRun.append(line)
+            }
+        }
+        flush()
+
+        var result: [Int: AttributedString] = [:]
+
+        for run in runs {
+            if Task.isCancelled { return }
+            let text = run.map(\.displayText).joined(separator: "\n")
+            guard let attributed = try? await Self.highlightedText(text, language: language, colors: colors) else {
+                continue
+            }
+            let pieces = Self.splitLines(attributed)
+            guard pieces.count == run.count else { continue }
+            for (line, piece) in zip(run, pieces) {
+                result[line.id] = piece
+            }
+        }
+
+        if !Task.isCancelled {
+            displayedLines = lines
+            highlightedLines = result
+        }
+    }
+
+    private static func highlightedText(
+        _ text: String,
+        language: HighlightLanguage?,
+        colors: HighlightColors
+    ) async throws -> AttributedString {
+        if let language {
+            return try await CodeHighlighter.shared.attributedText(text, language: language, colors: colors)
+        }
+        return try await CodeHighlighter.shared.attributedText(text, colors: colors)
+    }
+
+    /// Splits a syntax-highlighted block back into its per-line pieces on "\n", preserving each
+    /// line's token colors, since HighlightSwift only hands back one AttributedString per call.
+    private static func splitLines(_ attributed: AttributedString) -> [AttributedString] {
+        var lines: [AttributedString] = []
+        var start = attributed.startIndex
+        var index = attributed.startIndex
+        while index < attributed.endIndex {
+            if attributed.characters[index] == "\n" {
+                lines.append(AttributedString(attributed[start..<index]))
+                start = attributed.index(afterCharacter: index)
+            }
+            index = attributed.index(afterCharacter: index)
+        }
+        lines.append(AttributedString(attributed[start..<attributed.endIndex]))
+        return lines
+    }
+}
+
+private struct HighlightRequest: Equatable {
+    let path: String?
+    let diffText: String
+    let isDark: Bool
 }

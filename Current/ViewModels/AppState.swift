@@ -22,6 +22,11 @@ final class AppState {
     var imageDiffNew: Data?
     var errorMessage: String?
 
+    var isSyncing = false
+    var hasUpstream = false
+    var aheadCount = 0
+    var behindCount = 0
+
     private var currentRepository: GitRepository? {
         selectedRepoURL.map { GitRepository(rootURL: $0) }
     }
@@ -123,6 +128,84 @@ final class AppState {
         }
     }
 
+    func fetchRemote() {
+        guard let repo = currentRepository, !isSyncing else { return }
+        isSyncing = true
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.fetch() }.value
+                await MainActor.run {
+                    self.errorMessage = nil
+                    self.refreshSyncStatus()
+                    self.isSyncing = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isSyncing = false
+                }
+            }
+        }
+    }
+
+    func pullCurrentBranch() {
+        guard let repo = currentRepository, !isSyncing else { return }
+        isSyncing = true
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.pull() }.value
+                await MainActor.run {
+                    self.errorMessage = nil
+                    self.isSyncing = false
+                    self.refreshRepositoryState()
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isSyncing = false
+                }
+            }
+        }
+    }
+
+    func pushCurrentBranch() {
+        guard let repo = currentRepository, let branch = selectedBranch?.name, !isSyncing else { return }
+        isSyncing = true
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.push(branch: branch) }.value
+                await MainActor.run {
+                    self.errorMessage = nil
+                    self.isSyncing = false
+                    self.refreshSyncStatus()
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isSyncing = false
+                }
+            }
+        }
+    }
+
+    private func refreshSyncStatus() {
+        guard let repo = currentRepository else {
+            hasUpstream = false
+            aheadCount = 0
+            behindCount = 0
+            return
+        }
+        if let counts = repo.aheadBehind() {
+            hasUpstream = true
+            aheadCount = counts.ahead
+            behindCount = counts.behind
+        } else {
+            hasUpstream = false
+            aheadCount = 0
+            behindCount = 0
+        }
+    }
+
     private func refreshRepositoryState() {
         guard let repo = currentRepository else {
             branches = []
@@ -144,6 +227,7 @@ final class AppState {
             selectedBranch = nil
         }
         loadCommitLog()
+        refreshSyncStatus()
 
         let hasUncommittedChanges = (try? repo.statusEntries().isEmpty == false) ?? false
         if hasUncommittedChanges {
@@ -184,6 +268,7 @@ final class AppState {
             errorMessage = error.localizedDescription
         }
         loadCommitLog()
+        refreshSyncStatus()
         loadChangedFiles(preserveChecks: true)
         if let selectedFile, changedFiles.contains(selectedFile) {
             loadDiff()

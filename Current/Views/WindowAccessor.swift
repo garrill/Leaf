@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Configures the hosting NSWindow directly for a flush, traffic-light-only title bar:
-/// no title text, no reserved toolbar strip, content extends to the very top of the window
-/// while the close/minimize/zoom buttons stay visible and functional.
+/// Configures the hosting NSWindow directly for a title-text-free title bar that blends into
+/// the SwiftUI-managed `.toolbar { }` content (attached separately via the `toolbar` modifier
+/// on the view hierarchy) while the close/minimize/zoom buttons stay visible and functional.
 struct WindowAccessor: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -20,6 +20,5 @@ struct WindowAccessor: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
-        window.toolbar = nil
     }
 }
