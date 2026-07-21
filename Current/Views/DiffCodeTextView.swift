@@ -20,8 +20,14 @@ struct DiffLineMetadata {
 /// Built explicitly on the legacy TextKit 1 stack (`NSLayoutManager` + `NSTextContainer` wired up
 /// by hand) rather than via `NSTextView()`'s default initializer — a default-initialized text view
 /// on newer SDKs can come back TextKit 2-backed, where `.layoutManager` is nil and none of the
-/// `enumerateLineFragments`/`characterIndexForGlyph` glyph APIs this view and its ruler depend on
+/// `enumerateLineFragments`/`characterIndexForGlyph` glyph APIs this view and its gutter depend on
 /// are available.
+///
+/// Sized by an explicit `fittingHeight(forWidth:)` rather than `enclosingScrollView`-based
+/// resizing — this view is no longer inside its own private `NSScrollView`. It's laid out by
+/// `DiffCodeContainerView` and ultimately scrolled by a real SwiftUI `ScrollView`, which is what's
+/// needed for `.scrollEdgeEffectStyle` to actually blur content under the diff header (a plain
+/// `NSScrollView` wrapped via `NSViewRepresentable` never participates in that SwiftUI-only API).
 final class DiffCodeTextView: NSTextView {
     private(set) var lineMetadata: [DiffLineMetadata] = []
     private var paragraphStartOffsets: [Int] = [0]
@@ -31,7 +37,7 @@ final class DiffCodeTextView: NSTextView {
         let layoutManager = NSLayoutManager()
         textStorage.addLayoutManager(layoutManager)
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-        container.widthTracksTextView = true
+        container.widthTracksTextView = false
         container.heightTracksTextView = false
         container.lineFragmentPadding = 4
         layoutManager.addTextContainer(container)
@@ -42,33 +48,24 @@ final class DiffCodeTextView: NSTextView {
         lineMetadata = metadata
         textStorage?.setAttributedString(attributedString)
         recomputeParagraphOffsets()
-        resizeToFitContent()
         needsDisplay = true
     }
 
-    /// Setting `textStorage` directly (rather than typing into the view) never fires the
-    /// notifications `isVerticallyResizable` normally relies on to grow the document view's frame,
-    /// so the scroll view kept treating the content as exactly one viewport tall regardless of the
-    /// diff's real length — this is what caused scrolling to be clamped to the initial size (with
-    /// a rubber-band bounce even on short documents, since the frame never actually matched the
-    /// content). Called after every content change and on every `layout()` pass, so it also re-fits
-    /// when the enclosing scroll view is resized and lines re-wrap.
-    private func resizeToFitContent() {
-        guard let layoutManager, let textContainer else { return }
+    /// The height needed to lay out the full document at a given width — used by
+    /// `DiffCodeContainerView`/`DiffCodeScrollView.sizeThatFits` to report this view's real
+    /// intrinsic content size to the enclosing SwiftUI `ScrollView`.
+    func fittingHeight(forWidth width: CGFloat) -> CGFloat {
+        guard let layoutManager, let textContainer else { return 0 }
+        textContainer.containerSize = NSSize(width: max(width, 0), height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
-        let usedHeight = layoutManager.usedRect(for: textContainer).height + textContainerInset.height * 2
-        let viewportSize = enclosingScrollView?.contentSize ?? frame.size
-        let availableWidth = viewportSize.width > 0 ? viewportSize.width - DiffGutterRulerView.totalThickness : frame.width
-        let newWidth = max(availableWidth, 0)
-        let newHeight = max(usedHeight, viewportSize.height)
-        if abs(frame.width - newWidth) > 0.5 || abs(frame.height - newHeight) > 0.5 {
-            setFrameSize(NSSize(width: newWidth, height: newHeight))
-        }
+        return layoutManager.usedRect(for: textContainer).height + textContainerInset.height * 2
     }
 
     override func layout() {
         super.layout()
-        resizeToFitContent()
+        // Keep the text container tracking this view's actual assigned frame width, in case it
+        // differs slightly (rounding) from whatever width `fittingHeight(forWidth:)` last saw.
+        textContainer?.containerSize = NSSize(width: max(bounds.width, 0), height: .greatestFiniteMagnitude)
     }
 
     private func recomputeParagraphOffsets() {
@@ -126,39 +123,36 @@ final class DiffCodeTextView: NSTextView {
     }
 }
 
-/// Dual old/new line-number gutter, drawn in the scroll view's ruler area — entirely outside the
-/// text view's own bounds and text storage, exactly like Xcode's or BBEdit's gutters, so numbers
-/// can never get swept into a text selection or a copy.
-final class DiffGutterRulerView: NSRulerView {
+/// Dual old/new line-number gutter, drawn in its own plain `NSView` to the left of the code text
+/// view — entirely outside the text view's own bounds and text storage, exactly like Xcode's or
+/// BBEdit's gutters, so numbers can never get swept into a text selection or a copy. Previously
+/// this was an `NSRulerView` hosted by a private `NSScrollView`; now that the code view is laid
+/// out and scrolled by a real SwiftUI `ScrollView` (see `DiffCodeContainerView`), there's no
+/// `NSScrollView` for an `NSRulerView` to attach to, so it draws directly off the text view's
+/// `NSLayoutManager` instead of the ruler's coordinate-transform APIs.
+final class DiffGutterView: NSView {
     weak var codeTextView: DiffCodeTextView?
 
     private static let numberFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
     private static let columnWidth: CGFloat = 36
     private static let columnGap: CGFloat = 8
-    /// Total gutter width — shared with `DiffCodeTextView.resizeToFitContent()`, which must
-    /// subtract this from the scroll view's content width when sizing the text container. The
-    /// clip view's own width already excludes the ruler, but the *code text* also needs to wrap
-    /// narrower than that, otherwise long lines lay out right up to the clip view's edge and get
-    /// clipped/scrolled sideways instead of wrapping inside the space actually left for them.
-    static let totalThickness: CGFloat = 2 * columnWidth + columnGap + 8
+    /// Total gutter width — shared with `DiffCodeContainerView.layout()`, which must reserve this
+    /// much space to the left of the code text view.
+    static let totalWidth: CGFloat = 2 * columnWidth + columnGap + 8
 
-    init(scrollView: NSScrollView) {
-        super.init(scrollView: scrollView, orientation: .verticalRuler)
-        ruleThickness = Self.totalThickness
-    }
+    override var isFlipped: Bool { true }
 
-    required init(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func drawHashMarksAndLabels(in rect: NSRect) {
+    override func draw(_ dirtyRect: NSRect) {
         guard let textView = codeTextView,
               let layoutManager = textView.layoutManager,
               let container = textView.textContainer,
               layoutManager.numberOfGlyphs > 0 else { return }
 
-        let visibleRect = scrollView?.contentView.bounds ?? textView.visibleRect
-        let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: container)
+        // The gutter and text view share the same y-origin and flip (both are non-scrolling
+        // siblings inside `DiffCodeContainerView`), so the dirty rect's y-range maps directly onto
+        // the text view's own coordinate space without any scroll-offset translation.
+        let searchRect = NSRect(x: 0, y: dirtyRect.minY, width: textView.bounds.width, height: dirtyRect.height)
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: searchRect, in: container)
         let text = textView.string as NSString
 
         layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { fragRect, _, _, fragGlyphRange, _ in
@@ -176,10 +170,9 @@ final class DiffGutterRulerView: NSRulerView {
 
             var lineRect = fragRect
             lineRect.origin.y += textView.textContainerOrigin.y
-            let converted = textView.convert(lineRect, to: self)
 
-            self.drawNumber(meta.oldLineNumber, x: 4, width: Self.columnWidth, rowRect: converted)
-            self.drawNumber(meta.newLineNumber, x: 4 + Self.columnWidth, width: Self.columnWidth, rowRect: converted)
+            self.drawNumber(meta.oldLineNumber, x: 4, width: Self.columnWidth, rowRect: lineRect)
+            self.drawNumber(meta.newLineNumber, x: 4 + Self.columnWidth, width: Self.columnWidth, rowRect: lineRect)
         }
     }
 
@@ -203,16 +196,73 @@ final class DiffGutterRulerView: NSRulerView {
     }
 }
 
-/// SwiftUI bridge for the `NSTextView`/`NSRulerView` pair above. Builds the per-line
-/// `NSAttributedString` and background/gutter metadata from the already-parsed diff lines and
-/// (once ready) the syntax-highlighted pieces computed by `DiffView`.
+/// Hosts the gutter and code text view as plain (non-scrolling) sibling subviews, laid out
+/// side-by-side and sized to fit their full content — the whole thing is scrolled by a real
+/// SwiftUI `ScrollView` one level up, not by an internal `NSScrollView`.
+final class DiffCodeContainerView: NSView {
+    let textView = DiffCodeTextView.makeLegacyTextKit1()
+    let gutterView = DiffGutterView()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        gutterView.codeTextView = textView
+        addSubview(gutterView)
+        addSubview(textView)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        let gutterWidth = DiffGutterView.totalWidth
+        gutterView.frame = NSRect(x: 0, y: 0, width: gutterWidth, height: bounds.height)
+        let textWidth = max(bounds.width - gutterWidth, 0)
+        textView.frame = NSRect(x: gutterWidth, y: 0, width: textWidth, height: bounds.height)
+    }
+
+    func fittingHeight(forWidth width: CGFloat) -> CGFloat {
+        textView.fittingHeight(forWidth: max(width - DiffGutterView.totalWidth, 0))
+    }
+
+    func setContent(attributedString: NSAttributedString, metadata: [DiffLineMetadata]) {
+        textView.setContent(attributedString: attributedString, metadata: metadata)
+        needsLayout = true
+        gutterView.needsDisplay = true
+    }
+}
+
+/// SwiftUI bridge for the gutter/text-view pair above. Builds the per-line `NSAttributedString`
+/// and background/gutter metadata from the already-parsed diff lines and (once ready) the
+/// syntax-highlighted pieces computed by `DiffView`. Reports its own intrinsic size via
+/// `sizeThatFits` so it can be scrolled by a real SwiftUI `ScrollView` (see `DiffView.content`)
+/// instead of owning a private `NSScrollView`.
 struct DiffCodeScrollView: NSViewRepresentable {
     let lines: [DiffLine]
     let highlightSnapshot: HighlightSnapshot?
     let diffText: String
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let textView = DiffCodeTextView.makeLegacyTextKit1()
+    func makeNSView(context: Context) -> DiffCodeContainerView {
+        let container = DiffCodeContainerView(frame: .zero)
+        configure(textView: container.textView)
+        updateContent(container: container)
+        return container
+    }
+
+    func updateNSView(_ container: DiffCodeContainerView, context: Context) {
+        updateContent(container: container)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: DiffCodeContainerView, context: Context) -> CGSize? {
+        let width = proposal.width ?? nsView.bounds.width
+        let height = nsView.fittingHeight(forWidth: width)
+        return CGSize(width: width, height: height)
+    }
+
+    private func configure(textView: DiffCodeTextView) {
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
@@ -222,49 +272,13 @@ struct DiffCodeScrollView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.isVerticallyResizable = true
+        textView.isVerticallyResizable = false
         textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-
-        let scrollView = NSScrollView()
-        scrollView.documentView = textView
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.drawsBackground = false
-        scrollView.autohidesScrollers = true
-        // Lines always wrap to the container width, so there's never real horizontal content to
-        // reveal — without this, trackpad swipes still rubber-band the content sideways since
-        // elasticity bounce is independent of `hasHorizontalScroller`.
-        scrollView.horizontalScrollElasticity = .none
-
-        let ruler = DiffGutterRulerView(scrollView: scrollView)
-        ruler.codeTextView = textView
-        scrollView.verticalRulerView = ruler
-        scrollView.hasVerticalRuler = true
-        scrollView.rulersVisible = true
-
-        context.coordinator.textView = textView
-        context.coordinator.ruler = ruler
-        updateContent(textView: textView, ruler: ruler)
-        return scrollView
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = context.coordinator.textView, let ruler = context.coordinator.ruler else { return }
-        updateContent(textView: textView, ruler: ruler)
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator {
-        var textView: DiffCodeTextView?
-        var ruler: DiffGutterRulerView?
-    }
-
-    private func updateContent(textView: DiffCodeTextView, ruler: DiffGutterRulerView) {
+    private func updateContent(container: DiffCodeContainerView) {
         let (attributed, metadata) = Self.buildContent(lines: lines, highlightSnapshot: highlightSnapshot, diffText: diffText)
-        textView.setContent(attributedString: attributed, metadata: metadata)
-        ruler.needsDisplay = true
+        container.setContent(attributedString: attributed, metadata: metadata)
     }
 
     private static func buildContent(

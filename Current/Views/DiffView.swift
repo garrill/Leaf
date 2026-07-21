@@ -112,11 +112,14 @@ struct DiffView: View {
             ContentUnavailableView("No Changes To Show", systemImage: "doc.text")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
-            DiffCodeScrollView(lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
-                    await refreshHighlighting()
-                }
+            ScrollView {
+                DiffCodeScrollView(lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
+                await refreshHighlighting()
+            }
         }
     }
 

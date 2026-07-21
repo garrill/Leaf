@@ -36,6 +36,7 @@ struct ChangedFilesView: View {
             .opacity(showsList ? 1 : 0)
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            .safeAreaBar(edge: .top, spacing: 0) { header }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 if isWorkingChanges && !appState.changedFiles.isEmpty {
                     commitFooter
@@ -53,6 +54,26 @@ struct ChangedFilesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var header: some View {
+        HStack {
+            Text(headerTitle)
+                .font(.headline)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .frame(height: MainWindowView.columnHeaderHeight)
+    }
+
+    private var headerTitle: String {
+        switch appState.selectedSource {
+        case .none: return ""
+        case .workingChanges: return "Uncommitted Changes"
+        case .commit(let commit): return commit.summary
+        }
     }
 
     @ViewBuilder
