@@ -68,8 +68,10 @@ final class AppState {
 
     func selectSource(_ source: ChangeSource?) {
         selectedSource = source
-        selectedFile = nil
-        diffText = ""
+        // Go straight to the new file, without ever writing `selectedFile = nil` as an
+        // intermediate step — that observable nil is what showed up in the diff view as a
+        // flash of "No File Selected" between commits, even though this whole function runs
+        // synchronously to completion before SwiftUI's next render.
         loadChangedFiles()
         selectFile(changedFiles.first)
     }

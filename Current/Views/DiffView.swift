@@ -26,11 +26,12 @@ private struct DiffLine: Identifiable {
 struct DiffView: View {
     @Bindable var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
-    /// Both updated together at the end of `refreshDisplayedDiff()`, never independently, so a
-    /// file switch never renders with this frame's line numbers/gutter against last frame's
-    /// (or the *previous file's*) highlighted text.
-    @State private var displayedLines: [DiffLine] = []
-    @State private var highlightedLines: [Int: AttributedString] = [:]
+    /// Tagged with the diff text it was computed for. Row rendering only trusts it when that tag
+    /// still matches `appState.diffText`, so a still-running (or superseded) highlight task can
+    /// never paint stale colors onto a newly-selected file's text — the text itself always comes
+    /// straight from `diffLines`, computed synchronously, so switching files never waits on
+    /// highlighting to show anything.
+    @State private var highlightSnapshot: HighlightSnapshot?
 
     private static let addedTextColor = Color(NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -79,8 +80,8 @@ struct DiffView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(displayedLines) { line in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(diffLines) { line in
                         row(for: line)
                     }
                 }
@@ -88,7 +89,7 @@ struct DiffView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
-                await refreshDisplayedDiff()
+                await refreshHighlighting()
             }
         }
     }
@@ -162,7 +163,7 @@ struct DiffView: View {
                     .frame(width: 36, alignment: .trailing)
                     .foregroundStyle(.secondary)
                     .padding(.trailing, 8)
-                Text(highlightedLines[line.id] ?? AttributedString(line.displayText))
+                Text(highlightedText(for: line))
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .foregroundStyle(foreground(for: line.kind))
@@ -172,6 +173,14 @@ struct DiffView: View {
             .padding(.vertical, 1)
             .background(background(for: line.kind))
         }
+    }
+
+    private func highlightedText(for line: DiffLine) -> AttributedString {
+        guard let highlightSnapshot, highlightSnapshot.diffText == appState.diffText,
+              let piece = highlightSnapshot.lines[line.id] else {
+            return AttributedString(line.displayText)
+        }
+        return piece
     }
 
     private func foreground(for kind: DiffLine.Kind) -> Color {
@@ -193,12 +202,16 @@ struct DiffView: View {
 
     // MARK: - Parsing
 
+    private var diffLines: [DiffLine] {
+        Self.parse(appState.diffText)
+    }
+
     private var addedCount: Int {
-        displayedLines.count { $0.kind == .added }
+        diffLines.count { $0.kind == .added }
     }
 
     private var removedCount: Int {
-        displayedLines.count { $0.kind == .removed }
+        diffLines.count { $0.kind == .removed }
     }
 
     private static let hunkHeaderRegex = try? NSRegularExpression(pattern: #"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@"#)
@@ -260,16 +273,21 @@ struct DiffView: View {
     /// hunk already carries both sides' text — and gives hljs enough surrounding code to tokenize
     /// multi-line constructs (strings, comments) far better than highlighting line-by-line, at the
     /// cost of occasionally mis-tokenizing right at a hunk boundary.
-    private func refreshDisplayedDiff() async {
-        let lines = Self.parse(appState.diffText)
-        guard !lines.isEmpty else {
-            displayedLines = []
-            highlightedLines = [:]
-            return
-        }
+    ///
+    /// Text renders immediately from `diffLines` regardless of how long this takes — this only
+    /// ever adds color on top, later, once (and if) it finishes.
+    /// Above this many lines, skip highlighting entirely — a huge diff means many concurrent
+    /// hljs calls competing with the main thread for CPU, which is felt as jank even though the
+    /// calls themselves are async, and syntax color is the least useful on a diff this size anyway.
+    private static let maxHighlightedLineCount = 2000
+
+    private func refreshHighlighting() async {
+        let targetDiffText = appState.diffText
+        let lines = Self.parse(targetDiffText)
+        guard !lines.isEmpty, lines.count <= Self.maxHighlightedLineCount else { return }
 
         let language = appState.selectedFile.flatMap { CodeHighlighter.language(forPath: $0.path) }
-        let colors: HighlightColors = colorScheme == .dark ? .dark(.xcode) : .light(.xcode)
+        let isDark = colorScheme == .dark
 
         var oldSideRun: [DiffLine] = []
         var newSideRun: [DiffLine] = []
@@ -297,34 +315,32 @@ struct DiffView: View {
 
         var result: [Int: AttributedString] = [:]
 
-        for run in runs {
-            if Task.isCancelled { return }
-            let text = run.map(\.displayText).joined(separator: "\n")
-            guard let attributed = try? await Self.highlightedText(text, language: language, colors: colors) else {
-                continue
+        // Runs are independent hunk-side blocks, so highlight them all concurrently rather than
+        // waiting on one JS round-trip before starting the next.
+        await withTaskGroup(of: (run: [DiffLine], attributed: AttributedString?).self) { group in
+            for run in runs {
+                // Joined here, on the main actor, since `DiffLine.displayText` is a main-actor
+                // isolated computed property (this file's default isolation) and can't be
+                // referenced via key path from inside the concurrently-executing child task below.
+                let text = run.map(\.displayText).joined(separator: "\n")
+                group.addTask {
+                    let attributed = await CodeHighlighter.attributedText(text, language: language, isDark: isDark)
+                    return (run, attributed)
+                }
             }
-            let pieces = Self.splitLines(attributed)
-            guard pieces.count == run.count else { continue }
-            for (line, piece) in zip(run, pieces) {
-                result[line.id] = piece
+            for await (run, attributed) in group {
+                guard let attributed else { continue }
+                let pieces = Self.splitLines(attributed)
+                guard pieces.count == run.count else { continue }
+                for (line, piece) in zip(run, pieces) {
+                    result[line.id] = piece
+                }
             }
         }
 
         if !Task.isCancelled {
-            displayedLines = lines
-            highlightedLines = result
+            highlightSnapshot = HighlightSnapshot(diffText: targetDiffText, lines: result)
         }
-    }
-
-    private static func highlightedText(
-        _ text: String,
-        language: HighlightLanguage?,
-        colors: HighlightColors
-    ) async throws -> AttributedString {
-        if let language {
-            return try await CodeHighlighter.shared.attributedText(text, language: language, colors: colors)
-        }
-        return try await CodeHighlighter.shared.attributedText(text, colors: colors)
     }
 
     /// Splits a syntax-highlighted block back into its per-line pieces on "\n", preserving each
@@ -343,6 +359,11 @@ struct DiffView: View {
         lines.append(AttributedString(attributed[start..<attributed.endIndex]))
         return lines
     }
+}
+
+private struct HighlightSnapshot {
+    let diffText: String
+    let lines: [Int: AttributedString]
 }
 
 private struct HighlightRequest: Equatable {

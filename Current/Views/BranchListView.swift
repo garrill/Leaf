@@ -103,7 +103,14 @@ struct BranchListView: View {
     private var sourceSelection: Binding<ChangeSource?> {
         Binding(
             get: { appState.selectedSource },
-            set: { appState.selectSource($0) }
+            // List(selection:) with an Optional binding fires this setter with nil first (its
+            // internal deselect) then the real value on the same click — ignore the nil so the
+            // diff view never flashes to "no file selected" in between.
+            set: { newValue in
+                if let newValue {
+                    appState.selectSource(newValue)
+                }
+            }
         )
     }
 }

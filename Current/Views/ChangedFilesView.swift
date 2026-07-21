@@ -160,7 +160,13 @@ struct ChangedFilesView: View {
     private var fileSelection: Binding<ChangedFile?> {
         Binding(
             get: { appState.selectedFile },
-            set: { appState.selectFile($0) }
+            // Same List(selection:) deselect-then-select quirk as BranchListView's source list —
+            // ignore the transient nil so the diff view never flashes empty between files.
+            set: { newValue in
+                if let newValue {
+                    appState.selectFile(newValue)
+                }
+            }
         )
     }
 
