@@ -2,7 +2,7 @@ import AppKit
 import HighlightSwift
 import SwiftUI
 
-private struct DiffLine: Identifiable {
+struct DiffLine: Identifiable {
     enum Kind {
         case hunkHeader
         case context
@@ -33,18 +33,51 @@ struct DiffView: View {
     /// highlighting to show anything.
     @State private var highlightSnapshot: HighlightSnapshot?
 
-    private static let addedTextColor = Color(NSColor(name: nil) { appearance in
+    static let addedTextNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 0.75, green: 1.0, blue: 0.8, alpha: 1)
             : NSColor(red: 0.0, green: 0.35, blue: 0.05, alpha: 1)
-    })
-    private static let removedTextColor = Color(NSColor(name: nil) { appearance in
+    }
+    static let removedTextNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 1.0, green: 0.8, blue: 0.8, alpha: 1)
             : NSColor(red: 0.55, green: 0.02, blue: 0.02, alpha: 1)
-    })
-    private static let addedBackground = Color.green.opacity(0.12)
-    private static let removedBackground = Color.red.opacity(0.12)
+    }
+    private static let addedTextColor = Color(addedTextNSColor)
+    private static let removedTextColor = Color(removedTextNSColor)
+    static let addedBackgroundNSColor = NSColor.systemGreen.withAlphaComponent(0.12)
+    static let removedBackgroundNSColor = NSColor.systemRed.withAlphaComponent(0.12)
+    static let strongAddedBackgroundNSColor = NSColor.systemGreen.withAlphaComponent(0.4)
+    static let strongRemovedBackgroundNSColor = NSColor.systemRed.withAlphaComponent(0.4)
+    static let hunkHeaderBackgroundNSColor = NSColor.secondaryLabelColor.withAlphaComponent(0.08)
+
+    /// Code text always uses the default label color — added/removed lines are conveyed by the
+    /// row/word background tinting, not by tinting the text itself, so syntax highlighting colors
+    /// stay legible and consistent regardless of a line's diff kind.
+    static func foregroundNSColor(for kind: DiffLine.Kind) -> NSColor {
+        switch kind {
+        case .meta: return .secondaryLabelColor
+        case .added, .removed, .context, .hunkHeader: return .labelColor
+        }
+    }
+
+    static func backgroundNSColor(for kind: DiffLine.Kind) -> NSColor? {
+        switch kind {
+        case .added: return addedBackgroundNSColor
+        case .removed: return removedBackgroundNSColor
+        case .context, .hunkHeader, .meta: return nil
+        }
+    }
+
+    /// The stronger "word diff" highlight for the sub-range of an added/removed line that
+    /// actually changed, layered on top of the line's own faint full-row background.
+    static func strongBackgroundNSColor(for kind: DiffLine.Kind) -> NSColor? {
+        switch kind {
+        case .added: return strongAddedBackgroundNSColor
+        case .removed: return strongRemovedBackgroundNSColor
+        case .context, .hunkHeader, .meta: return nil
+        }
+    }
 
     var body: some View {
         content
@@ -79,19 +112,11 @@ struct DiffView: View {
             ContentUnavailableView("No Changes To Show", systemImage: "doc.text")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(diffLines) { line in
-                        row(for: line)
-                    }
+            DiffCodeScrollView(lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
+                    await refreshHighlighting()
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
-                await refreshHighlighting()
-            }
         }
     }
 
@@ -141,66 +166,6 @@ struct DiffView: View {
         guard let path = appState.selectedFile?.path else { return "" }
         let directory = (path as NSString).deletingLastPathComponent
         return directory.isEmpty ? "" : directory
-    }
-
-    // MARK: - Diff rows
-
-    @ViewBuilder
-    private func row(for line: DiffLine) -> some View {
-        if line.kind == .hunkHeader {
-            Text(line.text)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 4)
-                .padding(.horizontal, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.secondary.opacity(0.08))
-        } else {
-            HStack(alignment: .top, spacing: 0) {
-                Text(line.oldLineNumber.map(String.init) ?? "")
-                    .frame(width: 36, alignment: .trailing)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.disabled)
-                Text(line.newLineNumber.map(String.init) ?? "")
-                    .frame(width: 36, alignment: .trailing)
-                    .foregroundStyle(.secondary)
-                    .padding(.trailing, 8)
-                    .textSelection(.disabled)
-                Text(highlightedText(for: line))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(foreground(for: line.kind))
-            }
-            .font(.system(.body, design: .monospaced))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(background(for: line.kind))
-        }
-    }
-
-    private func highlightedText(for line: DiffLine) -> AttributedString {
-        guard let highlightSnapshot, highlightSnapshot.diffText == appState.diffText,
-              let piece = highlightSnapshot.lines[line.id] else {
-            return AttributedString(line.displayText)
-        }
-        return piece
-    }
-
-    private func foreground(for kind: DiffLine.Kind) -> Color {
-        switch kind {
-        case .added: return Self.addedTextColor
-        case .removed: return Self.removedTextColor
-        case .meta: return .secondary
-        case .context, .hunkHeader: return .primary
-        }
-    }
-
-    private func background(for kind: DiffLine.Kind) -> Color {
-        switch kind {
-        case .added: return Self.addedBackground
-        case .removed: return Self.removedBackground
-        case .context, .hunkHeader, .meta: return .clear
-        }
     }
 
     // MARK: - Parsing
@@ -364,7 +329,7 @@ struct DiffView: View {
     }
 }
 
-private struct HighlightSnapshot {
+struct HighlightSnapshot {
     let diffText: String
     let lines: [Int: AttributedString]
 }
