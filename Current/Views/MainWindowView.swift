@@ -56,57 +56,75 @@ struct MainWindowView: View {
         .navigationSplitViewStyle(.balanced)
         .navigationTitle(windowTitle)
         .background(WindowAccessor())
+        .onKeyPress(.escape) {
+            appState.deselectRepo()
+            return .handled
+        }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                branchMenu
-            }
-            if appState.isSyncing {
-                ToolbarItem(placement: .primaryAction) {
-                    ProgressView()
-                        .controlSize(.small)
+            
+            if appState.selectedRepoURL != nil {
+                ToolbarItem(placement: .navigation){
+                    branchMenu
                 }
-            } else {
-                ToolbarItem(placement: .primaryAction) {
+                
+            }
+
+
+            // One flexible-width group filling the space after the native window title: the
+            // branch dropdown at its leading edge (so it lands immediately after the title, as
+            // far left as the toolbar allows) and a `Spacer()` pushing the sync buttons to the
+            // trailing edge — `.navigation`-placed items always render after AppKit's own
+            // title with no supported way to reorder that, so this is the only way to get the
+            // dropdown to sit beside the title instead of at the toolbar's far right.
+            ToolbarItem(placement: .primaryAction) {
+                
+                HStack {
+                    
+
+                    if appState.isSyncing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Button {
+                            appState.fetchRemote()
+                        } label: {
+                            Label("Fetch", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .help("Fetch")
+                        .disabled(appState.selectedRepoURL == nil)
+                    }
+
                     Button {
-                        appState.fetchRemote()
+                        appState.pullCurrentBranch()
                     } label: {
-                        Label("Fetch", systemImage: "arrow.triangle.2.circlepath")
+                        Label {
+                            Text("Pull")
+                        } icon: {
+                            Image(systemName: "arrow.down")
+                                .overlay(alignment: .topTrailing) {
+                                    syncBadge(isVisible: appState.behindCount > 0)
+                                }
+                        }
                     }
-                    .help("Fetch")
-                    .disabled(appState.selectedRepoURL == nil)
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    appState.pullCurrentBranch()
-                } label: {
-                    Label {
-                        Text("Pull")
-                    } icon: {
-                        Image(systemName: "arrow.down")
-                            .overlay(alignment: .topTrailing) {
-                                syncBadge(isVisible: appState.behindCount > 0)
-                            }
+                    .help("Pull")
+                    .disabled(appState.selectedRepoURL == nil || !appState.hasUpstream || appState.isSyncing)
+
+                    Button {
+                        appState.pushCurrentBranch()
+                    } label: {
+                        Label {
+                            Text("Push")
+                        } icon: {
+                            Image(systemName: "arrow.up")
+                                .overlay(alignment: .topTrailing) {
+                                    syncBadge(isVisible: appState.aheadCount > 0)
+                                }
+                        }
                     }
+                    .help("Push")
+                    .disabled(appState.selectedRepoURL == nil || appState.selectedBranch == nil || appState.isSyncing)
                 }
-                .help("Pull")
-                .disabled(appState.selectedRepoURL == nil || !appState.hasUpstream || appState.isSyncing)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    appState.pushCurrentBranch()
-                } label: {
-                    Label {
-                        Text("Push")
-                    } icon: {
-                        Image(systemName: "arrow.up")
-                            .overlay(alignment: .topTrailing) {
-                                syncBadge(isVisible: appState.aheadCount > 0)
-                            }
-                    }
-                }
-                .help("Push")
-                .disabled(appState.selectedRepoURL == nil || appState.selectedBranch == nil || appState.isSyncing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
     }
@@ -118,10 +136,11 @@ struct MainWindowView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(appState.selectedBranch?.name ?? "Branch")
+                Image(systemName: "arrow.trianglehead.branch")
+                Text(branchLabelText)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Image(systemName: "chevron.up.chevron.down")
+                Image(systemName: "chevron.down")
                     .font(.caption2)
                     .fontWeight(.semibold)
             }
@@ -133,6 +152,13 @@ struct MainWindowView: View {
         .buttonBorderShape(.capsule)
         .fixedSize()
         .disabled(appState.branches.isEmpty)
+    }
+
+    private var branchLabelText: String {
+        if appState.isDetachedHead {
+            return "Detached (\(appState.detachedHeadShortSHA ?? "HEAD"))"
+        }
+        return appState.selectedBranch?.name ?? "Branch"
     }
 
     private var windowTitle: String {

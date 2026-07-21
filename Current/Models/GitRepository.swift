@@ -206,6 +206,11 @@ struct GitRepository {
         try run(["checkout", branch])
     }
 
+    /// Short SHA of HEAD, used to label a detached-HEAD state since there's no branch name to show.
+    func currentHEADShortSHA() -> String? {
+        (try? run(["rev-parse", "--short", "HEAD"]))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func fetch() throws {
         try run(["fetch"])
     }

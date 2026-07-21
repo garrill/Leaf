@@ -16,9 +16,9 @@ struct FolderRowView: View {
     var body: some View {
         HStack(spacing: 4) {
             if isRenaming {
-                TextField("Folder Name", text: $draftName)
+                TextField("Group Name", text: $draftName)
                     .textFieldStyle(.plain)
-                    .font(.caption)
+                    .font(.subheadline)
                     .fontWeight(.semibold)
                     .focused($fieldFocused)
                     .onSubmit { commitRename() }
@@ -27,7 +27,7 @@ struct FolderRowView: View {
                     }
             } else {
                 Text(folder.name)
-                    .font(.caption)
+                    .font(.subheadline)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

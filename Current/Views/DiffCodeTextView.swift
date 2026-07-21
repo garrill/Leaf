@@ -58,7 +58,8 @@ final class DiffCodeTextView: NSTextView {
         layoutManager.ensureLayout(for: textContainer)
         let usedHeight = layoutManager.usedRect(for: textContainer).height + textContainerInset.height * 2
         let viewportSize = enclosingScrollView?.contentSize ?? frame.size
-        let newWidth = viewportSize.width > 0 ? viewportSize.width : frame.width
+        let availableWidth = viewportSize.width > 0 ? viewportSize.width - DiffGutterRulerView.totalThickness : frame.width
+        let newWidth = max(availableWidth, 0)
         let newHeight = max(usedHeight, viewportSize.height)
         if abs(frame.width - newWidth) > 0.5 || abs(frame.height - newHeight) > 0.5 {
             setFrameSize(NSSize(width: newWidth, height: newHeight))
@@ -134,10 +135,16 @@ final class DiffGutterRulerView: NSRulerView {
     private static let numberFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
     private static let columnWidth: CGFloat = 36
     private static let columnGap: CGFloat = 8
+    /// Total gutter width — shared with `DiffCodeTextView.resizeToFitContent()`, which must
+    /// subtract this from the scroll view's content width when sizing the text container. The
+    /// clip view's own width already excludes the ruler, but the *code text* also needs to wrap
+    /// narrower than that, otherwise long lines lay out right up to the clip view's edge and get
+    /// clipped/scrolled sideways instead of wrapping inside the space actually left for them.
+    static let totalThickness: CGFloat = 2 * columnWidth + columnGap + 8
 
     init(scrollView: NSScrollView) {
         super.init(scrollView: scrollView, orientation: .verticalRuler)
-        ruleThickness = 2 * Self.columnWidth + Self.columnGap + 8
+        ruleThickness = Self.totalThickness
     }
 
     required init(coder: NSCoder) {
@@ -225,6 +232,10 @@ struct DiffCodeScrollView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
         scrollView.autohidesScrollers = true
+        // Lines always wrap to the container width, so there's never real horizontal content to
+        // reveal — without this, trackpad swipes still rubber-band the content sideways since
+        // elasticity bounce is independent of `hasHorizontalScroller`.
+        scrollView.horizontalScrollElasticity = .none
 
         let ruler = DiffGutterRulerView(scrollView: scrollView)
         ruler.codeTextView = textView

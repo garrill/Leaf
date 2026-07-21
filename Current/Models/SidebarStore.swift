@@ -75,7 +75,7 @@ final class SidebarStore {
     // MARK: Folder CRUD
 
     @discardableResult
-    func addFolder(name: String = "New Folder") -> UUID {
+    func addFolder(name: String = "New Group") -> UUID {
         let folder = SidebarFolder(id: UUID(), name: name, isExpanded: true)
         folders.append(folder)
         topLevelOrder.append(.folder(folder.id))

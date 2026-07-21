@@ -32,30 +32,19 @@ struct BranchListView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(Color(nsColor: .controlBackgroundColor))
             .environment(\.controlActiveState, .key)
             .opacity(appState.selectedRepoURL == nil ? 0 : 1)
             .scrollEdgeEffectStyle(.soft, for: .top)
-            .safeAreaBar(edge: .top, spacing: 0) { header }
 
             if appState.selectedRepoURL == nil {
-                ContentUnavailableView("No Repo Selected", systemImage: "folder")
+                Text("No Repository Selected")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Text(appState.selectedBranch?.name ?? "")
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity)
-        .frame(height: MainWindowView.columnHeaderHeight)
     }
 
     private var sourceSelection: Binding<ChangeSource?> {

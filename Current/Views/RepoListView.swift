@@ -24,23 +24,24 @@ struct RepoListView: View {
                 Spacer()
                 Menu {
                     Button("Add Repository") { appState.addRepoViaPicker() }
-                    Button("Add Folder") {
+                    Button("Add Group") {
                         let id = sidebarStore.addFolder()
                         renamingFolderID = id
                     }
                 } label: {
                     Image(systemName: "plus")
                         .font(.title2)
-                        .frame(width: 32, height: 32)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Color.blue))
                 }
-                .buttonStyle(.glassProminent)
-                .controlSize(.large)
-                .clipShape(Circle())
+                .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .help("Add…")
             }
-            .padding(10)
+            .padding(16)
         }
         .sheet(item: $editingRepo) { repo in
             EditRepoSheet(repo: repo, sidebarStore: sidebarStore)

@@ -8,6 +8,8 @@ final class AppState {
     var selectedRepoURL: URL?
     var branches: [GitBranch] = []
     var selectedBranch: GitBranch?
+    var isDetachedHead = false
+    var detachedHeadShortSHA: String?
 
     var commits: [GitCommit] = []
     var selectedSource: ChangeSource?
@@ -51,6 +53,12 @@ final class AppState {
         repoWatcher = RepoWatcher(url: url) { [weak self] in
             self?.handleExternalChange()
         }
+    }
+
+    func deselectRepo() {
+        selectedRepoURL = nil
+        repoWatcher = nil
+        refreshRepositoryState()
     }
 
     func selectBranch(_ branch: GitBranch) {
@@ -217,16 +225,35 @@ final class AppState {
             selectedSource = nil
             selectedFile = nil
             diffText = ""
+            isDetachedHead = false
+            detachedHeadShortSHA = nil
+            errorMessage = nil
+            checkedFilePaths = []
+            imageDiffOld = nil
+            imageDiffNew = nil
+            hasUpstream = false
+            aheadCount = 0
+            behindCount = 0
             return
         }
         do {
             branches = try repo.branches()
-            selectedBranch = branches.first { $0.isCurrent } ?? branches.first
+            if let current = branches.first(where: { $0.isCurrent }) {
+                selectedBranch = current
+                isDetachedHead = false
+                detachedHeadShortSHA = nil
+            } else {
+                selectedBranch = nil
+                isDetachedHead = true
+                detachedHeadShortSHA = repo.currentHEADShortSHA()
+            }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
             branches = []
             selectedBranch = nil
+            isDetachedHead = false
+            detachedHeadShortSHA = nil
         }
         loadCommitLog()
         refreshSyncStatus()
@@ -264,6 +291,12 @@ final class AppState {
             branches = try repo.branches()
             if let current = branches.first(where: { $0.isCurrent }) {
                 selectedBranch = current
+                isDetachedHead = false
+                detachedHeadShortSHA = nil
+            } else {
+                selectedBranch = nil
+                isDetachedHead = true
+                detachedHeadShortSHA = repo.currentHEADShortSHA()
             }
             errorMessage = nil
         } catch {

@@ -22,7 +22,7 @@ struct RepoRowView: View {
             }
             if !sidebarStore.folders.isEmpty || repo.folderID != nil {
                 Divider()
-                Menu("Move to Folder") {
+                Menu("Move to Group") {
                     if repo.folderID != nil {
                         Button("Top Level") {
                             sidebarStore.moveRepo(id: repo.id, toFolder: nil, index: nil)
@@ -42,7 +42,7 @@ struct RepoRowView: View {
             Button("Remove", role: .destructive) {
                 sidebarStore.removeRepo(id: repo.id)
                 if appState.selectedRepoURL == repo.url {
-                    appState.selectedRepoURL = nil
+                    appState.deselectRepo()
                 }
             }
         }

@@ -30,11 +30,12 @@ struct ChangedFilesView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(Color(nsColor: .controlBackgroundColor))
             .environment(\.controlActiveState, .key)
             .opacity(showsList ? 1 : 0)
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-            .safeAreaBar(edge: .top, spacing: 0) { header }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 if isWorkingChanges && !appState.changedFiles.isEmpty {
                     commitFooter
@@ -42,38 +43,16 @@ struct ChangedFilesView: View {
             }
 
             if appState.selectedRepoURL == nil {
-                ContentUnavailableView("No Repo Selected", systemImage: "folder")
+                // Blank — column 2 already communicates "no repository selected".
             } else if appState.selectedSource == nil {
                 ContentUnavailableView("Select Uncommitted Changes or a Commit", systemImage: "sidebar.left")
             } else if appState.changedFiles.isEmpty {
-                ContentUnavailableView("No Changes", systemImage: "checkmark.circle")
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var header: some View {
-        HStack {
-            Text(headerTitle)
-                .font(.headline)
-                .lineLimit(1)
-            Spacer()
-            if !appState.changedFiles.isEmpty {
-                Text("\(appState.changedFiles.count)")
+                Text("No Changes")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity)
-        .frame(height: MainWindowView.columnHeaderHeight)
-    }
-
-    private var headerTitle: String {
-        switch appState.selectedSource {
-        case .none: return "Files"
-        case .workingChanges: return "Uncommitted Changes"
-        case .commit(let commit): return commit.summary
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
