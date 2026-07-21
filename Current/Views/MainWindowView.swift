@@ -47,14 +47,19 @@ struct MainWindowView: View {
                 DiffView(appState: appState)
                     .frame(minWidth: diffMinWidth, maxWidth: .infinity, maxHeight: .infinity)
                     .focusable()
+                    .focusEffectDisabled()
                     .focused($focusedColumn, equals: .diff)
                     .onKeyPress(.leftArrow) { moveFocus(by: -1) }
             }
             .frame(minWidth: branchColumnWidth + filesColumnWidth + diffMinWidth, minHeight: 500)
         }
         .navigationSplitViewStyle(.balanced)
+        .navigationTitle(windowTitle)
         .background(WindowAccessor())
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                branchMenu
+            }
             if appState.isSyncing {
                 ToolbarItem(placement: .primaryAction) {
                     ProgressView()
@@ -65,7 +70,7 @@ struct MainWindowView: View {
                     Button {
                         appState.fetchRemote()
                     } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Label("Fetch", systemImage: "arrow.triangle.2.circlepath")
                     }
                     .help("Fetch")
                     .disabled(appState.selectedRepoURL == nil)
@@ -75,10 +80,14 @@ struct MainWindowView: View {
                 Button {
                     appState.pullCurrentBranch()
                 } label: {
-                    Image(systemName: "arrow.down")
-                        .overlay(alignment: .topTrailing) {
-                            syncBadge(isVisible: appState.behindCount > 0)
-                        }
+                    Label {
+                        Text("Pull")
+                    } icon: {
+                        Image(systemName: "arrow.down")
+                            .overlay(alignment: .topTrailing) {
+                                syncBadge(isVisible: appState.behindCount > 0)
+                            }
+                    }
                 }
                 .help("Pull")
                 .disabled(appState.selectedRepoURL == nil || !appState.hasUpstream || appState.isSyncing)
@@ -87,15 +96,48 @@ struct MainWindowView: View {
                 Button {
                     appState.pushCurrentBranch()
                 } label: {
-                    Image(systemName: "arrow.up")
-                        .overlay(alignment: .topTrailing) {
-                            syncBadge(isVisible: appState.aheadCount > 0)
-                        }
+                    Label {
+                        Text("Push")
+                    } icon: {
+                        Image(systemName: "arrow.up")
+                            .overlay(alignment: .topTrailing) {
+                                syncBadge(isVisible: appState.aheadCount > 0)
+                            }
+                    }
                 }
                 .help("Push")
                 .disabled(appState.selectedRepoURL == nil || appState.selectedBranch == nil || appState.isSyncing)
             }
         }
+    }
+
+    private var branchMenu: some View {
+        Menu {
+            ForEach(appState.branches) { branch in
+                Button(branch.name) { appState.selectBranch(branch) }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(appState.selectedBranch?.name ?? "Branch")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .fixedSize()
+        .disabled(appState.branches.isEmpty)
+    }
+
+    private var windowTitle: String {
+        guard let url = appState.selectedRepoURL else { return "Current" }
+        return appState.sidebarStore.repos.first(where: { $0.url == url })?.displayName ?? url.lastPathComponent
     }
 
     private func syncBadge(isVisible: Bool) -> some View {

@@ -86,6 +86,7 @@ struct DiffView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
@@ -159,10 +160,12 @@ struct DiffView: View {
                 Text(line.oldLineNumber.map(String.init) ?? "")
                     .frame(width: 36, alignment: .trailing)
                     .foregroundStyle(.secondary)
+                    .textSelection(.disabled)
                 Text(line.newLineNumber.map(String.init) ?? "")
                     .frame(width: 36, alignment: .trailing)
                     .foregroundStyle(.secondary)
                     .padding(.trailing, 8)
+                    .textSelection(.disabled)
                 Text(highlightedText(for: line))
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)

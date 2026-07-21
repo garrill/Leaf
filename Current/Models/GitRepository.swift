@@ -58,7 +58,10 @@ struct GitCommit: Identifiable, Hashable {
     }()
 
     var relativeDate: String {
-        Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+        if abs(date.timeIntervalSinceNow) < 60 {
+            return "Just now"
+        }
+        return Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
 

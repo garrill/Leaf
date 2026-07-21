@@ -46,58 +46,16 @@ struct BranchListView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text(repoDisplayName)
+            Text(appState.selectedBranch?.name ?? "")
                 .font(.headline)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             Spacer(minLength: 8)
-
-            branchMenu
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
         .frame(height: MainWindowView.columnHeaderHeight)
-    }
-
-    private var branchMenu: some View {
-        Menu {
-            ForEach(appState.branches) { branch in
-                Button(branch.name) { appState.selectBranch(branch) }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(appState.selectedBranch?.name ?? "Branch")
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.glass)
-        .buttonBorderShape(.capsule)
-        .fixedSize()
-        .disabled(appState.branches.isEmpty)
-    }
-
-    private var repoDisplayName: String {
-        guard let url = appState.selectedRepoURL else { return "" }
-        return appState.sidebarStore.repos.first(where: { $0.url == url })?.displayName ?? url.lastPathComponent
-    }
-
-    private var branchSelection: Binding<GitBranch?> {
-        Binding(
-            get: { appState.selectedBranch },
-            set: { newValue in
-                if let newValue {
-                    appState.selectBranch(newValue)
-                }
-            }
-        )
     }
 
     private var sourceSelection: Binding<ChangeSource?> {
