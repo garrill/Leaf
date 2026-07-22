@@ -11,7 +11,6 @@ struct FolderRowView: View {
 
     @State private var draftName: String = ""
     @FocusState private var fieldFocused: Bool
-    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -42,16 +41,11 @@ struct FolderRowView: View {
                     .foregroundStyle(.tertiary)
                     .monospacedDigit()
             }
-
-            Image(systemName: "chevron.down")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(folder.isExpanded ? 0 : -90))
-                .opacity(isHovering ? 1 : 0)
         }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
         .onTapGesture { if !isRenaming { onToggle() } }
         .contextMenu {
             Button("Rename") { onStartRename() }
@@ -69,4 +63,68 @@ struct FolderRowView: View {
     private func commitRename() {
         onCommitRename(draftName)
     }
+}
+
+private struct FolderRowPreviewRepo: View {
+    let name: String
+    let selected: Bool
+    let appState: AppState
+    let sidebarStore: SidebarStore
+
+    var body: some View {
+        RepoRowView(
+            repo: SidebarRepo(id: UUID(), path: "/tmp/\(name)", displayNameOverride: name, iconPath: nil, folderID: UUID(), sortIndex: 0),
+            appState: appState,
+            sidebarStore: sidebarStore,
+            isRenaming: false,
+            onStartRename: {},
+            onCommitRename: { _ in }
+        )
+        .background(selected ? Color.accentColor : Color.clear)
+        .foregroundStyle(selected ? .white : .primary)
+    }
+}
+
+#Preview {
+    let appState = AppState()
+    let sidebarStore = appState.sidebarStore
+
+    return VStack(spacing: 0) {
+        FolderRowView(
+            folder: SidebarFolder(id: UUID(), name: "Websites", isExpanded: true),
+            repoCount: 3,
+            isRenaming: false,
+            onToggle: {},
+            onStartRename: {},
+            onCommitRename: { _ in },
+            onDelete: {}
+        )
+        FolderRowPreviewRepo(name: "Oakdoor", selected: true, appState: appState, sidebarStore: sidebarStore)
+        FolderRowPreviewRepo(name: "pepper.digital", selected: false, appState: appState, sidebarStore: sidebarStore)
+        FolderRowPreviewRepo(name: "Chigwell", selected: false, appState: appState, sidebarStore: sidebarStore)
+
+        FolderRowView(
+            folder: SidebarFolder(id: UUID(), name: "Apps", isExpanded: true),
+            repoCount: 2,
+            isRenaming: false,
+            onToggle: {},
+            onStartRename: {},
+            onCommitRename: { _ in },
+            onDelete: {}
+        )
+        FolderRowPreviewRepo(name: "Radio", selected: false, appState: appState, sidebarStore: sidebarStore)
+        FolderRowPreviewRepo(name: "Current", selected: false, appState: appState, sidebarStore: sidebarStore)
+
+        FolderRowView(
+            folder: SidebarFolder(id: UUID(), name: "Renaming Me", isExpanded: true),
+            repoCount: 0,
+            isRenaming: true,
+            onToggle: {},
+            onStartRename: {},
+            onCommitRename: { _ in },
+            onDelete: {}
+        )
+    }
+    .frame(width: 220)
+    .padding(.vertical, 8)
 }

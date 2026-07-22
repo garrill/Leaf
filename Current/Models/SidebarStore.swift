@@ -43,31 +43,42 @@ final class SidebarStore {
         persist()
     }
 
-    func moveRepo(id: UUID, toFolder folderID: UUID?, index: Int?) {
+    /// Moves a repo to the top level, inserted immediately before `target` (nil = append at the end).
+    func moveRepoToTopLevel(id: UUID, before target: TopLevelEntry?) {
         guard let repoIdx = repos.firstIndex(where: { $0.id == id }) else { return }
-        let oldFolderID = repos[repoIdx].folderID
+        if target == .repo(id) { return }
 
-        if oldFolderID == nil {
+        repos[repoIdx].folderID = nil
+        topLevelOrder.removeAll { if case .repo(let rid) = $0 { return rid == id }; return false }
+
+        if let target, let idx = topLevelOrder.firstIndex(of: target) {
+            topLevelOrder.insert(.repo(id), at: idx)
+        } else {
+            topLevelOrder.append(.repo(id))
+        }
+        persist()
+    }
+
+    /// Moves a repo into `folderID`, inserted immediately before the sibling `beforeRepoID` (nil = append at the end).
+    func moveRepo(id: UUID, intoFolder folderID: UUID, before beforeRepoID: UUID?) {
+        guard let repoIdx = repos.firstIndex(where: { $0.id == id }) else { return }
+        if beforeRepoID == id { return }
+
+        if repos[repoIdx].folderID == nil {
             topLevelOrder.removeAll { if case .repo(let rid) = $0 { return rid == id }; return false }
         }
-
         repos[repoIdx].folderID = folderID
 
-        if let folderID {
-            var siblingIDs = repos
-                .filter { $0.folderID == folderID && $0.id != id }
-                .sorted { $0.sortIndex < $1.sortIndex }
-                .map(\.id)
-            let insertAt = min(index ?? siblingIDs.count, siblingIDs.count)
-            siblingIDs.insert(id, at: insertAt)
-            for (i, rid) in siblingIDs.enumerated() {
-                if let idx = repos.firstIndex(where: { $0.id == rid }) {
-                    repos[idx].sortIndex = i
-                }
+        var siblingIDs = repos
+            .filter { $0.folderID == folderID && $0.id != id }
+            .sorted { $0.sortIndex < $1.sortIndex }
+            .map(\.id)
+        let insertAt = beforeRepoID.flatMap { siblingIDs.firstIndex(of: $0) } ?? siblingIDs.count
+        siblingIDs.insert(id, at: insertAt)
+        for (i, rid) in siblingIDs.enumerated() {
+            if let idx = repos.firstIndex(where: { $0.id == rid }) {
+                repos[idx].sortIndex = i
             }
-        } else {
-            let insertAt = min(index ?? topLevelOrder.count, topLevelOrder.count)
-            topLevelOrder.insert(.repo(id), at: insertAt)
         }
         persist()
     }
@@ -106,32 +117,39 @@ final class SidebarStore {
 
     // MARK: Reordering
 
-    func moveTopLevelEntry(_ entry: TopLevelEntry, toIndex index: Int) {
+    /// Moves a folder within the top level, inserted immediately before `target` (nil = append at the end).
+    func moveFolder(id: UUID, before target: TopLevelEntry?) {
+        let entry = TopLevelEntry.folder(id)
+        if target == entry { return }
         topLevelOrder.removeAll { $0 == entry }
-        let insertAt = min(max(index, 0), topLevelOrder.count)
-        topLevelOrder.insert(entry, at: insertAt)
-        persist()
-    }
-
-    /// Reorders the top-level entries (folders and un-foldered repos) in place, for native List drag reordering.
-    func moveTopLevelEntries(fromOffsets source: IndexSet, toOffset destination: Int) {
-        topLevelOrder.move(fromOffsets: source, toOffset: destination)
-        persist()
-    }
-
-    /// Reorders a folder's repo children in place, for native List drag reordering.
-    func moveRepos(inFolder folderID: UUID, fromOffsets source: IndexSet, toOffset destination: Int) {
-        var siblingIDs = repos
-            .filter { $0.folderID == folderID }
-            .sorted { $0.sortIndex < $1.sortIndex }
-            .map(\.id)
-        siblingIDs.move(fromOffsets: source, toOffset: destination)
-        for (i, rid) in siblingIDs.enumerated() {
-            if let idx = repos.firstIndex(where: { $0.id == rid }) {
-                repos[idx].sortIndex = i
-            }
+        if let target, let idx = topLevelOrder.firstIndex(of: target) {
+            topLevelOrder.insert(entry, at: idx)
+        } else {
+            topLevelOrder.append(entry)
         }
         persist()
+    }
+
+    /// Applies a drag-and-drop move for `item` to `target`. Invalid combinations (e.g. nesting a folder
+    /// into another folder) are silently ignored.
+    @discardableResult
+    func applyDrop(_ item: SidebarDragItem, target: SidebarDropTarget) -> Bool {
+        switch (item.kind, target) {
+        case (.repo, .topLevel(let before)):
+            moveRepoToTopLevel(id: item.id, before: before)
+            return true
+        case (.repo, .folderAppend(let folderID)):
+            moveRepo(id: item.id, intoFolder: folderID, before: nil)
+            return true
+        case (.repo, .folderChild(let folderID, let before)):
+            moveRepo(id: item.id, intoFolder: folderID, before: before)
+            return true
+        case (.folder, .topLevel(let before)):
+            moveFolder(id: item.id, before: before)
+            return true
+        case (.folder, .folderAppend), (.folder, .folderChild):
+            return false
+        }
     }
 
     // MARK: Persistence

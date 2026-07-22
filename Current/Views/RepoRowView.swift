@@ -31,6 +31,7 @@ struct RepoRowView: View {
                     .truncationTooltip(repo.displayName)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .onChange(of: isRenaming) { _, renaming in
             if renaming {
                 draftName = repo.displayName
@@ -49,7 +50,7 @@ struct RepoRowView: View {
                 Menu("Move to Group") {
                     if repo.folderID != nil {
                         Button("Top Level") {
-                            sidebarStore.moveRepo(id: repo.id, toFolder: nil, index: nil)
+                            sidebarStore.moveRepoToTopLevel(id: repo.id, before: nil)
                         }
                         if !sidebarStore.folders.isEmpty {
                             Divider()
@@ -57,7 +58,7 @@ struct RepoRowView: View {
                     }
                     ForEach(sidebarStore.folders.filter { $0.id != repo.folderID }) { folder in
                         Button(folder.name) {
-                            sidebarStore.moveRepo(id: repo.id, toFolder: folder.id, index: nil)
+                            sidebarStore.moveRepo(id: repo.id, intoFolder: folder.id, before: nil)
                         }
                     }
                 }
