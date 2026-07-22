@@ -19,7 +19,11 @@ private struct TruncationTooltip: ViewModifier {
         content
             .background(
                 GeometryReader { visibleGeo in
-                    Text(text)
+                    // Reuses `content` itself (not a fresh `Text`) so the ideal-width probe below
+                    // carries the exact same font/weight/etc. as what's actually rendered —
+                    // otherwise a mismatched font here (e.g. a caller-applied `.font`/`.fontWeight`)
+                    // throws off the width comparison and reports truncation that isn't real.
+                    content
                         .lineLimit(1)
                         .fixedSize()
                         .hidden()

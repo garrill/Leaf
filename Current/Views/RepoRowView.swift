@@ -17,7 +17,7 @@ struct RepoRowView: View {
             iconView
                 .frame(width: 16, height: 16)
             if isRenaming {
-                TextField("Repository Name", text: $draftName)
+                TextField(repo.displayName, text: $draftName)
                     .textFieldStyle(.plain)
                     .focused($fieldFocused)
                     .onSubmit { commitRename() }
@@ -32,11 +32,9 @@ struct RepoRowView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .onAppear { beginRenamingIfNeeded() }
         .onChange(of: isRenaming) { _, renaming in
-            if renaming {
-                draftName = repo.displayName
-                fieldFocused = true
-            }
+            if renaming { beginRenamingIfNeeded() }
         }
         .contextMenu {
             Button("Rename") { onStartRename() }
@@ -84,6 +82,14 @@ struct RepoRowView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func beginRenamingIfNeeded() {
+        guard isRenaming else { return }
+        draftName = repo.displayName
+        DispatchQueue.main.async {
+            fieldFocused = true
         }
     }
 

@@ -34,7 +34,8 @@ struct SidebarOutlineView: NSViewRepresentable {
 
         let scrollView = NSScrollView()
         scrollView.documentView = outlineView
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
 
         context.coordinator.outlineView = outlineView
@@ -314,7 +315,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     // MARK: Cell building
 
     private func makeRepoCell(repo: SidebarRepo, outlineView: NSOutlineView) -> NSView {
-        let identifier = NSUserInterfaceItemIdentifier("RepoCell")
+        // Identifier is unique per repo (not shared across all repo rows) so AppKit's view-reuse
+        // pool never hands this repo's cell a different repo's stale SwiftUI @State (rename
+        // draft text, focus) left over from a previous reload.
+        let identifier = NSUserInterfaceItemIdentifier("RepoCell-\(repo.id.uuidString)")
         let content = RepoRowView(
             repo: repo,
             appState: appState,
@@ -339,7 +343,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     }
 
     private func makeFolderCell(folder: SidebarFolder, outlineView: NSOutlineView) -> NSView {
-        let identifier = NSUserInterfaceItemIdentifier("FolderCell")
+        let identifier = NSUserInterfaceItemIdentifier("FolderCell-\(folder.id.uuidString)")
         let content = FolderRowView(
             folder: folder,
             repoCount: sidebarStore.repos.count { $0.folderID == folder.id },

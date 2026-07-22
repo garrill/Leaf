@@ -15,7 +15,7 @@ struct FolderRowView: View {
     var body: some View {
         HStack(spacing: 4) {
             if isRenaming {
-                TextField("Group Name", text: $draftName)
+                TextField(folder.name, text: $draftName)
                     .textFieldStyle(.plain)
                     .font(.subheadline)
                     .fontWeight(.semibold)
@@ -45,18 +45,31 @@ struct FolderRowView: View {
         .padding(.vertical, 4)
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture { if !isRenaming { onToggle() } }
+        .overlay {
+            // Only exists (and only intercepts clicks) while NOT renaming — otherwise a plain
+            // `.onTapGesture` on the whole row would swallow clicks meant to focus the TextField.
+            if !isRenaming {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { onToggle() }
+            }
+        }
         .contextMenu {
             Button("Rename") { onStartRename() }
             Divider()
             Button("Delete", role: .destructive) { onDelete() }
         }
+        .onAppear { beginRenamingIfNeeded() }
         .onChange(of: isRenaming) { _, renaming in
-            if renaming {
-                draftName = folder.name
-                fieldFocused = true
-            }
+            if renaming { beginRenamingIfNeeded() }
+        }
+    }
+
+    private func beginRenamingIfNeeded() {
+        guard isRenaming else { return }
+        draftName = folder.name
+        DispatchQueue.main.async {
+            fieldFocused = true
         }
     }
 

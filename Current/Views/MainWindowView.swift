@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum MainColumn: Int, CaseIterable {
@@ -178,6 +179,9 @@ struct MainWindowView: View {
     }
 
     private func moveFocus(by offset: Int) -> KeyPress.Result {
+        // Let arrow keys move the cursor normally while editing text (e.g. renaming a sidebar
+        // item) instead of hijacking them to switch columns.
+        if NSApp.keyWindow?.firstResponder is NSTextView { return .ignored }
         let current = focusedColumn?.rawValue ?? MainColumn.repos.rawValue
         guard let next = MainColumn(rawValue: current + offset) else { return .ignored }
         focusedColumn = next
