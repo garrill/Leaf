@@ -16,6 +16,7 @@ struct BranchListView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(commit.summary)
                                 .lineLimit(1)
+                                .truncationTooltip(commit.summary)
                             Text("\(commit.shortSha) · \(commit.relativeDate)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -54,6 +55,7 @@ struct BranchListView: View {
                 .font(.headline)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .truncationTooltip(repoDisplayName)
 
             Spacer(minLength: 8)
         }

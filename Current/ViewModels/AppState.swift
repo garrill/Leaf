@@ -16,6 +16,9 @@ final class AppState {
 
     var changedFiles: [ChangedFile] = []
     var selectedFile: ChangedFile?
+    /// All files selected in the changed-files list, for shift/cmd multi-select and batch
+    /// actions. Always a superset containing `selectedFile` when non-empty.
+    var selectedFilePaths: Set<String> = []
     var checkedFilePaths: Set<String> = []
     var commitMessage: String = ""
 
@@ -86,13 +89,36 @@ final class AppState {
 
     func selectFile(_ file: ChangedFile?) {
         selectedFile = file
+        selectedFilePaths = file.map { [$0.path] } ?? []
+        loadDiff()
+    }
+
+    /// Updates the multi-selection from the list's native shift/cmd-click selection. The diff
+    /// pane keeps following a single "primary" file: whichever one was just added to the
+    /// selection, or the sole remaining one if the selection shrank back down to one.
+    func updateFileSelection(_ paths: Set<String>) {
+        let previousPaths = selectedFilePaths
+        selectedFilePaths = paths
+        guard !paths.isEmpty else {
+            selectedFile = nil
+            loadDiff()
+            return
+        }
+        let added = paths.subtracting(previousPaths)
+        let primaryPath = added.first ?? (paths.count == 1 ? paths.first : selectedFile?.path)
+        let primaryFile = changedFiles.first(where: { $0.path == primaryPath }) ?? changedFiles.first(where: { paths.contains($0.path) })
+        selectedFile = primaryFile
         loadDiff()
     }
 
     func discardChanges(for file: ChangedFile) {
-        guard let repo = currentRepository else { return }
+        discardChanges(for: [file])
+    }
+
+    func discardChanges(for files: [ChangedFile]) {
+        guard let repo = currentRepository, !files.isEmpty else { return }
         do {
-            try repo.discardChanges(for: file)
+            try repo.discardChanges(for: files)
             errorMessage = nil
             loadChangedFiles()
             selectFile(changedFiles.first)
@@ -102,9 +128,13 @@ final class AppState {
     }
 
     func ignoreFile(_ file: ChangedFile) {
-        guard let repo = currentRepository else { return }
+        ignoreFiles([file])
+    }
+
+    func ignoreFiles(_ files: [ChangedFile]) {
+        guard let repo = currentRepository, !files.isEmpty else { return }
         do {
-            try repo.ignoreFile(file)
+            try repo.ignoreFiles(files)
             errorMessage = nil
             loadChangedFiles()
             selectFile(changedFiles.first)
@@ -224,6 +254,7 @@ final class AppState {
             selectedBranch = nil
             selectedSource = nil
             selectedFile = nil
+            selectedFilePaths = []
             diffText = ""
             isDetachedHead = false
             detachedHeadShortSHA = nil

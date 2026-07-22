@@ -4,7 +4,7 @@ struct RepoListView: View {
     @Bindable var appState: AppState
 
     @State private var renamingFolderID: UUID?
-    @State private var editingRepo: SidebarRepo?
+    @State private var renamingRepoID: UUID?
 
     private var sidebarStore: SidebarStore { appState.sidebarStore }
 
@@ -42,9 +42,6 @@ struct RepoListView: View {
                 .help("Add…")
             }
             .padding(16)
-        }
-        .sheet(item: $editingRepo) { repo in
-            EditRepoSheet(repo: repo, sidebarStore: sidebarStore)
         }
     }
 
@@ -91,9 +88,21 @@ struct RepoListView: View {
     }
 
     private func repoRow(_ repo: SidebarRepo, indented: Bool) -> some View {
-        RepoRowView(repo: repo, appState: appState, sidebarStore: sidebarStore, onEdit: { editingRepo = repo })
-            .tag(repo.id)
-            .padding(.leading, indented ? 20 : 0)
+        RepoRowView(
+            repo: repo,
+            appState: appState,
+            sidebarStore: sidebarStore,
+            isRenaming: renamingRepoID == repo.id,
+            onStartRename: { renamingRepoID = repo.id },
+            onCommitRename: { newName in
+                let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let override = (trimmed.isEmpty || trimmed == repo.url.lastPathComponent) ? nil : trimmed
+                sidebarStore.updateRepo(id: repo.id, displayName: override, iconPath: repo.iconPath)
+                renamingRepoID = nil
+            }
+        )
+        .tag(repo.id)
+        .padding(.leading, indented ? 20 : 0)
     }
 
     private func children(of folder: SidebarFolder) -> [SidebarRepo] {

@@ -136,12 +136,71 @@ struct GitRepository {
                 guard line.count > 3 else { return nil }
                 let indexStatus = line[line.startIndex]
                 let workTreeStatus = line[line.index(after: line.startIndex)]
-                let path = String(line.dropFirst(3))
+                var rawPath = String(line.dropFirst(3))
 
                 let statusChar = workTreeStatus != " " ? workTreeStatus : indexStatus
                 let status = FileChangeStatus(rawValue: String(statusChar)) ?? .unknown
+                // Renamed entries are formatted as "old -> new" — only the destination path is
+                // the file's current path.
+                if status == .renamed, let arrowRange = rawPath.range(of: " -> ") {
+                    rawPath = String(rawPath[arrowRange.upperBound...])
+                }
+                let path = Self.unquoteGitPath(rawPath)
                 return ChangedFile(path: path, status: status)
             }
+    }
+
+    /// Git quotes a pathname as a C-style double-quoted string (escaping spaces-adjacent
+    /// quote/backslash characters and any non-ASCII bytes as octal escapes) whenever the raw
+    /// path would otherwise be ambiguous in porcelain/name-status output. Left unquoted, a path
+    /// like `"foo bar.txt"` gets passed to later git commands (checkout/clean/add) as if the
+    /// file were literally named with quote characters, so those commands silently fail to find it.
+    static func unquoteGitPath(_ raw: String) -> String {
+        guard raw.hasPrefix("\""), raw.hasSuffix("\""), raw.count >= 2 else { return raw }
+        let inner = raw.dropFirst().dropLast()
+        var bytes: [UInt8] = []
+        let chars = Array(inner)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if c == "\\", i + 1 < chars.count {
+                let next = chars[i + 1]
+                switch next {
+                case "\"": bytes.append(0x22); i += 2
+                case "\\": bytes.append(0x5C); i += 2
+                case "n": bytes.append(0x0A); i += 2
+                case "t": bytes.append(0x09); i += 2
+                case "r": bytes.append(0x0D); i += 2
+                case "a": bytes.append(0x07); i += 2
+                case "b": bytes.append(0x08); i += 2
+                case "f": bytes.append(0x0C); i += 2
+                case "v": bytes.append(0x0B); i += 2
+                default:
+                    if next.isNumber {
+                        var digits = ""
+                        var j = i + 1
+                        while j < chars.count, digits.count < 3, chars[j].isNumber {
+                            digits.append(chars[j])
+                            j += 1
+                        }
+                        if let value = UInt8(digits, radix: 8) {
+                            bytes.append(value)
+                            i = j
+                        } else {
+                            bytes.append(contentsOf: Array(String(c).utf8))
+                            i += 1
+                        }
+                    } else {
+                        bytes.append(contentsOf: Array(String(next).utf8))
+                        i += 2
+                    }
+                }
+            } else {
+                bytes.append(contentsOf: Array(String(c).utf8))
+                i += 1
+            }
+        }
+        return String(bytes: bytes, encoding: .utf8) ?? raw
     }
 
     func diff(for file: ChangedFile) throws -> String {
@@ -265,7 +324,7 @@ struct GitRepository {
                 guard let first = parts.first, let last = parts.last, parts.count >= 2 else { return nil }
                 let statusChar = first.first.map(String.init) ?? "?"
                 let status = FileChangeStatus(rawValue: statusChar) ?? .unknown
-                return ChangedFile(path: String(last), status: status)
+                return ChangedFile(path: Self.unquoteGitPath(String(last)), status: status)
             }
     }
 
@@ -293,14 +352,32 @@ struct GitRepository {
         }
     }
 
+    /// Discards a batch of files in one pass, splitting into an untracked group (`clean`) and a
+    /// tracked group (`checkout`) since the two need different git subcommands.
+    func discardChanges(for files: [ChangedFile]) throws {
+        let untracked = files.filter { $0.status == .untracked }.map(\.path)
+        let tracked = files.filter { $0.status != .untracked }.map(\.path)
+        if !untracked.isEmpty {
+            try run(["clean", "-f", "--"] + untracked)
+        }
+        if !tracked.isEmpty {
+            try run(["checkout", "--"] + tracked)
+        }
+    }
+
     /// Appends the path to the repo's top-level `.gitignore`, creating it if needed.
     func ignoreFile(_ file: ChangedFile) throws {
+        try ignoreFiles([file])
+    }
+
+    /// Appends multiple paths to the repo's top-level `.gitignore` in one write, creating it if needed.
+    func ignoreFiles(_ files: [ChangedFile]) throws {
         let gitignoreURL = rootURL.appendingPathComponent(".gitignore")
         var existing = (try? String(contentsOf: gitignoreURL, encoding: .utf8)) ?? ""
         if !existing.isEmpty && !existing.hasSuffix("\n") {
             existing += "\n"
         }
-        existing += file.path + "\n"
+        existing += files.map(\.path).joined(separator: "\n") + "\n"
         try existing.write(to: gitignoreURL, atomically: true, encoding: .utf8)
     }
 }

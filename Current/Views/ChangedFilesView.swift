@@ -13,9 +13,10 @@ struct ChangedFilesView: View {
                             .toggleStyle(.checkbox)
                             .labelsHidden()
                     }
-                    Text((file.path as NSString).lastPathComponent)
+                    pathAndFileName(for: file)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.head)
+                        .truncationTooltip(file.path)
                     Spacer()
                     Text(statusSymbol(for: file.status))
                         .font(.system(.body, design: .monospaced))
@@ -23,7 +24,7 @@ struct ChangedFilesView: View {
                         .frame(width: 16)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .tag(file)
+                .tag(file.path)
                 .listRowSeparator(.visible)
                 .contextMenu {
                     contextMenuItems(for: file)
@@ -61,6 +62,7 @@ struct ChangedFilesView: View {
             Text(headerTitle)
                 .font(.headline)
                 .lineLimit(1)
+                .truncationTooltip(headerTitle)
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -76,28 +78,58 @@ struct ChangedFilesView: View {
         }
     }
 
+    /// The files a context-menu action should apply to: the full multi-selection if the
+    /// right-clicked file is part of it, otherwise just the right-clicked file on its own
+    /// (matching Finder's behavior for right-clicking outside the current selection).
+    private func targetFiles(for file: ChangedFile) -> [ChangedFile] {
+        guard appState.selectedFilePaths.contains(file.path), appState.selectedFilePaths.count > 1 else {
+            return [file]
+        }
+        return appState.changedFiles.filter { appState.selectedFilePaths.contains($0.path) }
+    }
+
     @ViewBuilder
     private func contextMenuItems(for file: ChangedFile) -> some View {
-        Button("Reveal in Finder") {
-            NSWorkspace.shared.activateFileViewerSelecting([fullURL(for: file)])
-        }
-        Button("Open in Default Program") {
-            NSWorkspace.shared.open(fullURL(for: file))
-        }
-        Divider()
-        Button("Copy File Path") {
-            copyToPasteboard(fullURL(for: file).path)
-        }
-        Button("Copy Relative Path") {
-            copyToPasteboard(file.path)
-        }
-        if isWorkingChanges {
-            Divider()
-            Button("Discard Changes", role: .destructive) {
-                appState.discardChanges(for: file)
+        let files = targetFiles(for: file)
+        if files.count == 1 {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([fullURL(for: file)])
             }
-            Button("Ignore File") {
-                appState.ignoreFile(file)
+            Button("Open in Default Program") {
+                NSWorkspace.shared.open(fullURL(for: file))
+            }
+            Divider()
+            Button("Copy File Path") {
+                copyToPasteboard(fullURL(for: file).path)
+            }
+            Button("Copy Relative Path") {
+                copyToPasteboard(file.path)
+            }
+            if isWorkingChanges {
+                Divider()
+                Button("Discard Changes", role: .destructive) {
+                    appState.discardChanges(for: file)
+                }
+                Button("Ignore File") {
+                    appState.ignoreFile(file)
+                }
+            }
+        } else {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting(files.map(fullURL(for:)))
+            }
+            Divider()
+            Button("Copy Relative Paths") {
+                copyToPasteboard(files.map(\.path).joined(separator: "\n"))
+            }
+            if isWorkingChanges {
+                Divider()
+                Button("Discard Changes in \(files.count) Files", role: .destructive) {
+                    appState.discardChanges(for: files)
+                }
+                Button("Add \(files.count) Files to .gitignore") {
+                    appState.ignoreFiles(files)
+                }
             }
         }
     }
@@ -157,17 +189,23 @@ struct ChangedFilesView: View {
         appState.selectedRepoURL != nil && appState.selectedSource != nil && !appState.changedFiles.isEmpty
     }
 
-    private var fileSelection: Binding<ChangedFile?> {
+    /// Backed by a `Set<String>` (file paths) rather than `Set<ChangedFile>` so native
+    /// shift/cmd-click multi-selection works, tagging rows with `file.path` above.
+    private var fileSelection: Binding<Set<String>> {
         Binding(
-            get: { appState.selectedFile },
-            // Same List(selection:) deselect-then-select quirk as BranchListView's source list —
-            // ignore the transient nil so the diff view never flashes empty between files.
-            set: { newValue in
-                if let newValue {
-                    appState.selectFile(newValue)
-                }
-            }
+            get: { appState.selectedFilePaths },
+            set: { newValue in appState.updateFileSelection(newValue) }
         )
+    }
+
+    /// Directory in secondary/grey, file name in primary color, on one line — matching
+    /// `DiffView`'s header treatment, with `.truncationMode(.head)` so a long path truncates
+    /// from the front and the file name (the most useful part) always stays visible.
+    private func pathAndFileName(for file: ChangedFile) -> Text {
+        let name = Text((file.path as NSString).lastPathComponent).foregroundColor(.primary)
+        let directory = (file.path as NSString).deletingLastPathComponent
+        guard !directory.isEmpty else { return name }
+        return Text("\(Text(directory + "/").foregroundColor(.secondary))\(name)")
     }
 
     private func checkedBinding(for file: ChangedFile) -> Binding<Bool> {

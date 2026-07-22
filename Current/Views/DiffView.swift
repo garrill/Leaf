@@ -25,6 +25,7 @@ struct DiffLine: Identifiable {
 
 struct DiffView: View {
     @Bindable var appState: AppState
+    var focusedColumn: FocusState<MainColumn?>.Binding
     @Environment(\.colorScheme) private var colorScheme
     /// Tagged with the diff text it was computed for. Row rendering only trusts it when that tag
     /// still matches `appState.diffText`, so a still-running (or superseded) highlight task can
@@ -32,6 +33,12 @@ struct DiffView: View {
     /// straight from `diffLines`, computed synchronously, so switching files never waits on
     /// highlighting to show anything.
     @State private var highlightSnapshot: HighlightSnapshot?
+    /// Scroll state for the diff pane so the up/down arrow keys can drive it once focus has
+    /// moved here (right arrow from the files list) — synced from real scroll events via
+    /// `onScrollGeometryChange` and driven programmatically via `scrollPosition`.
+    @State private var scrollPosition = ScrollPosition()
+    @State private var scrollOffsetY: CGFloat = 0
+    private static let arrowScrollStep: CGFloat = 40
 
     static let addedTextNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -88,6 +95,26 @@ struct DiffView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .focusable()
+            .focusEffectDisabled()
+            .focused(focusedColumn, equals: .diff)
+            .onKeyPress(.leftArrow) {
+                focusedColumn.wrappedValue = .files
+                return .handled
+            }
+            .onKeyPress(.upArrow) {
+                scrollBy(-Self.arrowScrollStep)
+                return .handled
+            }
+            .onKeyPress(.downArrow) {
+                scrollBy(Self.arrowScrollStep)
+                return .handled
+            }
+    }
+
+    private func scrollBy(_ delta: CGFloat) {
+        let newY = max(0, scrollOffsetY + delta)
+        scrollPosition.scrollTo(point: CGPoint(x: 0, y: newY))
     }
 
     @ViewBuilder
@@ -96,8 +123,15 @@ struct DiffView: View {
             ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else if appState.selectedFile == nil {
-            ContentUnavailableView("No File Selected", systemImage: "doc.text")
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            if appState.selectedSource != nil && appState.changedFiles.isEmpty {
+                // A selected commit/source with no changed files at all (e.g. an empty commit) —
+                // there's nothing wrong here, so no "No File Selected" message either.
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                ContentUnavailableView("No File Selected", systemImage: "doc.text")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
         } else if appState.selectedFile?.isLikelyImage == true {
             ImageDiffView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -115,6 +149,12 @@ struct DiffView: View {
             ScrollView {
                 DiffCodeScrollView(lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText)
                     .frame(maxWidth: .infinity)
+            }
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y
+            } action: { _, newValue in
+                scrollOffsetY = newValue
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
@@ -134,6 +174,7 @@ struct DiffView: View {
                 .font(.system(.body))
                 .lineLimit(1)
                 .truncationMode(.head)
+                .truncationTooltip(appState.selectedFile?.path ?? "")
 
             Spacer(minLength: 8)
 

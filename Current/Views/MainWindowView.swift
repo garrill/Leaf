@@ -11,8 +11,8 @@ struct MainWindowView: View {
     @State private var appState = AppState()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
-    @State private var branchColumnWidth: CGFloat = 220
-    @State private var filesColumnWidth: CGFloat = 260
+    @State private var branchColumnWidth: CGFloat = 260
+    @State private var filesColumnWidth: CGFloat = 300
 
     @FocusState private var focusedColumn: MainColumn?
 
@@ -44,12 +44,8 @@ struct MainWindowView: View {
 
                 ResizableDivider(width: $filesColumnWidth, minWidth: filesColumnRange.lowerBound, maxWidth: filesColumnRange.upperBound)
 
-                DiffView(appState: appState)
+                DiffView(appState: appState, focusedColumn: $focusedColumn)
                     .frame(minWidth: diffMinWidth, maxWidth: .infinity, maxHeight: .infinity)
-                    .focusable()
-                    .focusEffectDisabled()
-                    .focused($focusedColumn, equals: .diff)
-                    .onKeyPress(.leftArrow) { moveFocus(by: -1) }
             }
             .frame(minWidth: branchColumnWidth + filesColumnWidth + diffMinWidth, minHeight: 500)
         }
@@ -77,10 +73,7 @@ struct MainWindowView: View {
             // title with no supported way to reorder that, so this is the only way to get the
             // dropdown to sit beside the title instead of at the toolbar's far right.
             ToolbarItem(placement: .primaryAction) {
-                
-                HStack {
-                    
-
+                HStack(spacing: 12) {
                     if appState.isSyncing {
                         ProgressView()
                             .controlSize(.small)
@@ -94,35 +87,43 @@ struct MainWindowView: View {
                         .disabled(appState.selectedRepoURL == nil)
                     }
 
-                    Button {
-                        appState.pullCurrentBranch()
-                    } label: {
-                        Label {
-                            Text("Pull")
-                        } icon: {
-                            Image(systemName: "arrow.down")
-                                .overlay(alignment: .topTrailing) {
-                                    syncBadge(isVisible: appState.behindCount > 0)
-                                }
-                        }
-                    }
-                    .help("Pull")
-                    .disabled(appState.selectedRepoURL == nil || !appState.hasUpstream || appState.isSyncing)
+                    Divider()
+                        .frame(height: 16)
 
-                    Button {
-                        appState.pushCurrentBranch()
-                    } label: {
-                        Label {
-                            Text("Push")
-                        } icon: {
-                            Image(systemName: "arrow.up")
-                                .overlay(alignment: .topTrailing) {
-                                    syncBadge(isVisible: appState.aheadCount > 0)
-                                }
+                    HStack(spacing: 4) {
+                        Button {
+                            appState.pullCurrentBranch()
+                        } label: {
+                            Label {
+                                Text("Pull")
+                            } icon: {
+                                Image(systemName: "arrow.down")
+                                    .overlay(alignment: .topTrailing) {
+                                        syncBadge(isVisible: appState.behindCount > 0)
+                                    }
+                            }
                         }
+                        .help("Pull")
+                        .disabled(appState.selectedRepoURL == nil || !appState.hasUpstream || appState.isSyncing)
+
+                        Divider()
+                            .frame(height: 16)
+
+                        Button {
+                            appState.pushCurrentBranch()
+                        } label: {
+                            Label {
+                                Text("Push")
+                            } icon: {
+                                Image(systemName: "arrow.up")
+                                    .overlay(alignment: .topTrailing) {
+                                        syncBadge(isVisible: appState.aheadCount > 0)
+                                    }
+                            }
+                        }
+                        .help("Push")
+                        .disabled(appState.selectedRepoURL == nil || appState.selectedBranch == nil || appState.isSyncing)
                     }
-                    .help("Push")
-                    .disabled(appState.selectedRepoURL == nil || appState.selectedBranch == nil || appState.isSyncing)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -140,6 +141,7 @@ struct MainWindowView: View {
                 Text(branchLabelText)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .truncationTooltip(branchLabelText)
                 Image(systemName: "chevron.down")
                     .font(.caption2)
                     .fontWeight(.semibold)
