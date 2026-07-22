@@ -40,7 +40,7 @@ struct ChangedFilesView: View {
             .safeAreaBar(edge: .top, spacing: 0) { header }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 if isWorkingChanges && !appState.changedFiles.isEmpty {
-                    commitFooter
+                    CommitFooterView(appState: appState)
                 }
             }
 
@@ -146,41 +146,6 @@ struct ChangedFilesView: View {
         NSPasteboard.general.setString(string, forType: .string)
     }
 
-    private var commitFooter: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-
-            TextField("Commit message", text: $appState.commitMessage, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
-
-            Button {
-                appState.commitCheckedChanges()
-            } label: {
-                Text(commitButtonTitle)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glassProminent)
-            .disabled(!canCommit)
-        }
-        .padding(10)
-    }
-
-    private var checkedCount: Int {
-        appState.checkedFilePaths.count
-    }
-
-    private var canCommit: Bool {
-        checkedCount > 0 && !appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var commitButtonTitle: String {
-        let branchName = appState.selectedBranch?.name ?? "…"
-        return "Commit \(checkedCount) file\(checkedCount == 1 ? "" : "s") to \(branchName)"
-    }
-
     private var isWorkingChanges: Bool {
         appState.selectedSource == .workingChanges
     }
@@ -234,5 +199,49 @@ struct ChangedFilesView: View {
         case .renamed: return .blue
         case .unknown: return .secondary
         }
+    }
+}
+
+/// Split out from `ChangedFilesView` so typing in the commit message field only invalidates
+/// this small view's `body` — `@Observable` tracks dependencies per `body` call, so keeping the
+/// text field inline in `ChangedFilesView.body` meant every keystroke re-ran the whole parent
+/// body, including reconstructing the entire changed-files `List`, which is what made typing feel
+/// laggy on repos with many changed files.
+private struct CommitFooterView: View {
+    @Bindable var appState: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            TextField("Commit message", text: $appState.commitMessage, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
+
+            Button {
+                appState.commitCheckedChanges()
+            } label: {
+                Text(commitButtonTitle)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.glassProminent)
+            .disabled(!canCommit)
+        }
+        .padding(10)
+    }
+
+    private var checkedCount: Int {
+        appState.checkedFilePaths.count
+    }
+
+    private var canCommit: Bool {
+        checkedCount > 0 && !appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var commitButtonTitle: String {
+        let branchName = appState.selectedBranch?.name ?? "…"
+        return "Commit \(checkedCount) file\(checkedCount == 1 ? "" : "s") to \(branchName)"
     }
 }

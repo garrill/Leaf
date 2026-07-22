@@ -17,10 +17,11 @@ struct BranchListView: View {
                             Text(commit.summary)
                                 .lineLimit(1)
                                 .truncationTooltip(commit.summary)
-                            Text("\(commit.shortSha) · \(commit.relativeDate)")
+                            Text("\(commit.author) · \(commit.relativeDate)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 6)
                         .tag(ChangeSource.commit(commit))
                         .listRowSeparator(.visible)
                         .contextMenu {

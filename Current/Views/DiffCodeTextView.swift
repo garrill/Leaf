@@ -32,6 +32,14 @@ final class DiffCodeTextView: NSTextView {
     private(set) var lineMetadata: [DiffLineMetadata] = []
     private var paragraphStartOffsets: [Int] = [0]
 
+    /// Floor for the text container's wrap width. `NSTextContainer` treats a width of 0 (or
+    /// close to it) as effectively unbounded — each line lays out as one long fragment instead of
+    /// wrapping — so as the diff column is squeezed down to nothing, wrapping would silently stop
+    /// instead of degrading gracefully. Clamping to a small positive floor keeps wrapping active
+    /// (very tight, single-word-per-line) all the way down, with the excess simply clipped by the
+    /// column's own bounds rather than the wrap behavior breaking.
+    static let minWrapWidth: CGFloat = 60
+
     static func makeLegacyTextKit1() -> DiffCodeTextView {
         let textStorage = NSTextStorage()
         let layoutManager = NSLayoutManager()
@@ -56,7 +64,7 @@ final class DiffCodeTextView: NSTextView {
     /// intrinsic content size to the enclosing SwiftUI `ScrollView`.
     func fittingHeight(forWidth width: CGFloat) -> CGFloat {
         guard let layoutManager, let textContainer else { return 0 }
-        textContainer.containerSize = NSSize(width: max(width, 0), height: .greatestFiniteMagnitude)
+        textContainer.containerSize = NSSize(width: max(width, Self.minWrapWidth), height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         return layoutManager.usedRect(for: textContainer).height + textContainerInset.height * 2
     }
@@ -65,7 +73,7 @@ final class DiffCodeTextView: NSTextView {
         super.layout()
         // Keep the text container tracking this view's actual assigned frame width, in case it
         // differs slightly (rounding) from whatever width `fittingHeight(forWidth:)` last saw.
-        textContainer?.containerSize = NSSize(width: max(bounds.width, 0), height: .greatestFiniteMagnitude)
+        textContainer?.containerSize = NSSize(width: max(bounds.width, Self.minWrapWidth), height: .greatestFiniteMagnitude)
     }
 
     private func recomputeParagraphOffsets() {
@@ -134,11 +142,21 @@ final class DiffGutterView: NSView {
     weak var codeTextView: DiffCodeTextView?
 
     private static let numberFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+    private static let leadingPadding: CGFloat = 4
     private static let columnWidth: CGFloat = 36
     private static let columnGap: CGFloat = 8
+    private static let trailingPadding: CGFloat = 8
+
+    private static let oldColumnX: CGFloat = leadingPadding
+    private static let newColumnX: CGFloat = leadingPadding + columnWidth + columnGap
+    /// Vertical border between the old/new number columns, centered in the gap between them.
+    private static let middleBorderX: CGFloat = oldColumnX + columnWidth + columnGap / 2
+    /// Vertical border separating the gutter from the code text view, centered in the gap after
+    /// the new-number column (rather than flush against it) so it doesn't crowd either side.
+    private static let rightBorderX: CGFloat = newColumnX + columnWidth + trailingPadding / 2
     /// Total gutter width — shared with `DiffCodeContainerView.layout()`, which must reserve this
     /// much space to the left of the code text view.
-    static let totalWidth: CGFloat = 2 * columnWidth + columnGap + 8
+    static let totalWidth: CGFloat = newColumnX + columnWidth + trailingPadding
 
     override var isFlipped: Bool { true }
 
@@ -171,9 +189,34 @@ final class DiffGutterView: NSView {
             var lineRect = fragRect
             lineRect.origin.y += textView.textContainerOrigin.y
 
-            self.drawNumber(meta.oldLineNumber, x: 4, width: Self.columnWidth, rowRect: lineRect)
-            self.drawNumber(meta.newLineNumber, x: 4 + Self.columnWidth, width: Self.columnWidth, rowRect: lineRect)
+            // Full-row background tint, matching the code side's own row background — added/
+            // removed is conveyed by the whole gutter row, not just the number's text color.
+            if let color = meta.backgroundColor {
+                var fillRect = lineRect
+                fillRect.origin.x = 0
+                fillRect.size.width = self.bounds.width
+                color.setFill()
+                fillRect.fill()
+            }
+
+            self.drawNumber(meta.oldLineNumber, x: Self.oldColumnX, width: Self.columnWidth, rowRect: lineRect)
+            self.drawNumber(meta.newLineNumber, x: Self.newColumnX, width: Self.columnWidth, rowRect: lineRect)
         }
+
+        // Two vertical borders — between the old/new columns, and between the gutter and the code
+        // text — clipped to the actual laid-out text (`usedRect`, not the full dirty rect) so they
+        // start exactly at the top of the first line, underneath the diff header, rather than
+        // bleeding upward into blank space above the content on the initial full-bounds draw pass.
+        let contentRect = layoutManager.usedRect(for: container)
+        let contentTop = contentRect.minY + textView.textContainerOrigin.y
+        let contentBottom = contentRect.maxY + textView.textContainerOrigin.y
+        let borderMinY = max(dirtyRect.minY, contentTop)
+        let borderMaxY = min(dirtyRect.maxY, contentBottom)
+        guard borderMaxY > borderMinY else { return }
+
+        NSColor.separatorColor.setFill()
+        NSRect(x: Self.middleBorderX, y: borderMinY, width: 1, height: borderMaxY - borderMinY).fill()
+        NSRect(x: Self.rightBorderX, y: borderMinY, width: 1, height: borderMaxY - borderMinY).fill()
     }
 
     private func drawNumber(_ number: Int?, x: CGFloat, width: CGFloat, rowRect: NSRect) {

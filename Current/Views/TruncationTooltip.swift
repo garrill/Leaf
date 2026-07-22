@@ -169,6 +169,25 @@ private final class TooltipPanel {
         panel.hidesOnDeactivate = false
         panel.contentView = contentView
         self.panel = panel
+
+        // `NSTrackingArea`'s `.activeInKeyWindow` option only sends mouseExited while the window
+        // is key — cmd-tabbing away, or the row's window losing key status, or scrolling the row
+        // out from under a stationary cursor, produces no such event, which otherwise leaves the
+        // panel stuck on screen indefinitely pointing at a row that's no longer under the mouse.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.hideUnconditionally() }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.hideUnconditionally() }
+        NotificationCenter.default.addObserver(
+            forName: NSScrollView.didLiveScrollNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.hideUnconditionally() }
+    }
+
+    private func hideUnconditionally() {
+        panel.orderOut(nil)
+        currentOwner = nil
     }
 
     private static func backgroundColor(forDark isDark: Bool) -> NSColor {
