@@ -118,6 +118,41 @@ struct GitRepository {
         return (output, errorOutput, process.terminationStatus)
     }
 
+    /// Derives the folder name git itself would use for a clone destination, e.g.
+    /// "https://github.com/user/repo.git" -> "repo".
+    static func repoName(fromURLString urlString: String) -> String {
+        var name = (urlString as NSString).lastPathComponent
+        if name.hasSuffix(".git") {
+            name = String(name.dropLast(4))
+        }
+        return name.isEmpty ? "repository" : name
+    }
+
+    /// Runs `git clone` directly (not via the instance `run`/`runRaw` helpers, which pin
+    /// `currentDirectoryURL` to an already-existing `rootURL` — the clone destination doesn't
+    /// exist yet).
+    static func clone(from urlString: String, into destination: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.currentDirectoryURL = destination.deletingLastPathComponent()
+        process.arguments = ["clone", urlString, destination.path]
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        try process.run()
+        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+        _ = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let errorOutput = String(data: errData, encoding: .utf8) ?? ""
+            throw GitError.commandFailed(errorOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
     func branches() throws -> [GitBranch] {
         let output = try run(["for-each-ref", "--format=%(refname:short)|%(HEAD)", "refs/heads/"])
         return output

@@ -65,16 +65,17 @@ struct MainWindowView: View {
                 }
                 
             }
-
-
-            // One flexible-width group filling the space after the native window title: the
-            // branch dropdown at its leading edge (so it lands immediately after the title, as
-            // far left as the toolbar allows) and a `Spacer()` pushing the sync buttons to the
-            // trailing edge — `.navigation`-placed items always render after AppKit's own
-            // title with no supported way to reorder that, so this is the only way to get the
-            // dropdown to sit beside the title instead of at the toolbar's far right.
+            
+            // Fetch, Pull, and Push all live in `.primaryAction` (the toolbar's trailing group)
+            // so they sit together on the right. Adjacent `.primaryAction` items with the
+            // default Liquid Glass style still automatically share one capsule background —
+            // `ToolbarSpacer` doesn't prevent that on macOS — so Pull and Push are wrapped in
+            // a `ControlGroup` inside a single `ToolbarItem`, which renders as one pill by
+            // design, while Fetch sits in its own separate `ToolbarItem` right next to it with
+            // its own capsule. (`.principal` was tried first but centers the item in the
+            // toolbar instead of anchoring it to the trailing edge.)
             ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 12) {
+                Group {
                     if appState.isSyncing {
                         ProgressView()
                             .controlSize(.small)
@@ -87,46 +88,46 @@ struct MainWindowView: View {
                         .help("Fetch")
                         .disabled(appState.selectedRepoURL == nil)
                     }
-
-                    Divider()
-                        .frame(height: 16)
-
-                    HStack(spacing: 4) {
-                        Button {
-                            appState.pullCurrentBranch()
-                        } label: {
-                            Label {
-                                Text("Pull")
-                            } icon: {
-                                Image(systemName: "arrow.down")
-                                    .overlay(alignment: .topTrailing) {
-                                        syncBadge(isVisible: appState.behindCount > 0)
-                                    }
-                            }
-                        }
-                        .help("Pull")
-                        .disabled(appState.selectedRepoURL == nil || !appState.hasUpstream || appState.isSyncing)
-
-                        Divider()
-                            .frame(height: 16)
-
-                        Button {
-                            appState.pushCurrentBranch()
-                        } label: {
-                            Label {
-                                Text("Push")
-                            } icon: {
-                                Image(systemName: "arrow.up")
-                                    .overlay(alignment: .topTrailing) {
-                                        syncBadge(isVisible: appState.aheadCount > 0)
-                                    }
-                            }
-                        }
-                        .help("Push")
-                        .disabled(appState.selectedRepoURL == nil || appState.selectedBranch == nil || appState.isSyncing)
-                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                .frame(width: 36, height: 36)
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                ControlGroup {
+                    Button {
+                        appState.pullCurrentBranch()
+                    } label: {
+                        Label {
+                            Text("Pull")
+                        } icon: {
+                            Image(systemName: "arrow.down")
+                                .overlay(alignment: .topTrailing) {
+                                    syncBadge(isVisible: appState.behindCount > 0)
+                                }
+                        }
+                    }
+                    .help("Pull")
+                    .disabled(appState.selectedRepoURL == nil ||
+                              !appState.hasUpstream ||
+                              appState.isSyncing)
+
+                    Button {
+                        appState.pushCurrentBranch()
+                    } label: {
+                        Label {
+                            Text("Push")
+                        } icon: {
+                            Image(systemName: "arrow.up")
+                                .overlay(alignment: .topTrailing) {
+                                    syncBadge(isVisible: appState.aheadCount > 0)
+                                }
+                        }
+                    }
+                    .help("Push")
+                    .disabled(appState.selectedRepoURL == nil ||
+                              appState.selectedBranch == nil ||
+                              appState.isSyncing)
+                }
             }
         }
     }

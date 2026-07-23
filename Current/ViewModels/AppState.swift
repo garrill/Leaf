@@ -35,6 +35,9 @@ final class AppState {
     var isMergeInProgress = false
     var mergeMessage: String?
 
+    var isCloning = false
+    var cloneErrorMessage: String?
+
     private var currentRepository: GitRepository? {
         selectedRepoURL.map { GitRepository(rootURL: $0) }
     }
@@ -51,6 +54,45 @@ final class AppState {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         sidebarStore.addRepo(at: url)
         selectRepo(url)
+    }
+
+    /// Clones `urlString` into a new folder (named after the repo) under `destinationParent`,
+    /// then registers and selects it, mirroring `addRepoViaPicker()`'s add-then-select flow.
+    /// `completion` reports success so the presenting sheet knows whether to dismiss.
+    func cloneRepo(urlString: String, destinationParent: URL, completion: @escaping (Bool) -> Void) {
+        let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty, !isCloning else {
+            completion(false)
+            return
+        }
+        let destination = destinationParent.appendingPathComponent(GitRepository.repoName(fromURLString: trimmedURL))
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            cloneErrorMessage = "A folder named \"\(destination.lastPathComponent)\" already exists at that location."
+            completion(false)
+            return
+        }
+
+        isCloning = true
+        cloneErrorMessage = nil
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try GitRepository.clone(from: trimmedURL, into: destination)
+                }.value
+                await MainActor.run {
+                    self.isCloning = false
+                    self.sidebarStore.addRepo(at: destination)
+                    self.selectRepo(destination)
+                    completion(true)
+                }
+            } catch {
+                await MainActor.run {
+                    self.isCloning = false
+                    self.cloneErrorMessage = error.localizedDescription
+                    completion(false)
+                }
+            }
+        }
     }
 
     func selectRepo(_ url: URL) {

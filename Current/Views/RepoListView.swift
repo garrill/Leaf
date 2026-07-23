@@ -5,6 +5,7 @@ struct RepoListView: View {
 
     @State private var renamingFolderID: UUID?
     @State private var renamingRepoID: UUID?
+    @State private var isCloneSheetPresented = false
 
     private var sidebarStore: SidebarStore { appState.sidebarStore }
 
@@ -16,6 +17,7 @@ struct RepoListView: View {
                     
                     Menu {
                         Button("Add Repository") { appState.addRepoViaPicker() }
+                        Button("Clone Repository…") { isCloneSheetPresented = true }
                         Button("Add Group") {
                             let id = sidebarStore.addFolder()
                             renamingFolderID = id
@@ -34,6 +36,9 @@ struct RepoListView: View {
                     .help("Add…")
                 }
                 .padding(12)
+            }
+            .sheet(isPresented: $isCloneSheetPresented) {
+                CloneRepoSheet(appState: appState, isPresented: $isCloneSheetPresented)
             }
     }
 }
