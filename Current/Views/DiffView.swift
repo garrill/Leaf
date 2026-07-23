@@ -215,7 +215,10 @@ struct DiffView: View {
     // MARK: - Parsing
 
     private var diffLines: [DiffLine] {
-        Self.parse(appState.diffText)
+        if appState.selectedFile?.status == .conflicted {
+            return Self.parsePlainText(appState.diffText)
+        }
+        return Self.parse(appState.diffText)
     }
 
     private var addedCount: Int {
@@ -274,6 +277,23 @@ struct DiffView: View {
             nextID += 1
         }
 
+        return result
+    }
+
+    /// Renders raw file text (a conflicted file's working-tree contents, markers and all) as
+    /// plain context lines — unlike `parse`, this doesn't require `@@` hunk headers, since a
+    /// conflicted file's content is not unified-diff output at all.
+    private static func parsePlainText(_ text: String) -> [DiffLine] {
+        let substrings = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var result: [DiffLine] = []
+        var lineNumber = 1
+        for (index, substring) in substrings.enumerated() {
+            if substring.isEmpty && index == substrings.count - 1 { continue }
+            // Leading space mirrors unified-diff's context-line marker, since `displayText`
+            // unconditionally drops the first character for non-header/meta lines.
+            result.append(DiffLine(id: index, kind: .context, oldLineNumber: nil, newLineNumber: lineNumber, text: " " + String(substring)))
+            lineNumber += 1
+        }
         return result
     }
 

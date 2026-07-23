@@ -13,7 +13,7 @@ struct RepoListView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom) {
                 HStack {
-                    Spacer()
+                    
                     Menu {
                         Button("Add Repository") { appState.addRepoViaPicker() }
                         Button("Add Group") {
@@ -25,7 +25,7 @@ struct RepoListView: View {
                             .font(.title2)
                             .fontWeight(.semibold)
                             .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 36, height: 36)
                             .background(Circle().fill(Color.blue))
                     }
                     .buttonStyle(.plain)
@@ -33,7 +33,7 @@ struct RepoListView: View {
                     .fixedSize()
                     .help("Add…")
                 }
-                .padding(16)
+                .padding(12)
             }
     }
 }

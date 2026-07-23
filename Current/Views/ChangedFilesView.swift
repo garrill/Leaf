@@ -18,10 +18,18 @@ struct ChangedFilesView: View {
                         .truncationMode(.head)
                         .truncationTooltip(file.path)
                     Spacer()
-                    Text(statusSymbol(for: file.status))
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(statusColor(for: file.status))
-                        .frame(width: 16)
+                    if file.status == .conflicted {
+                        Button("Mark Resolved") {
+                            appState.markResolved(file)
+                        }
+                        .controlSize(.mini)
+                        .buttonStyle(.bordered)
+                    } else {
+                        Text(statusSymbol(for: file.status))
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(statusColor(for: file.status))
+                            .frame(width: 16)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .tag(file.path)
@@ -37,7 +45,14 @@ struct ChangedFilesView: View {
             .opacity(showsList ? 1 : 0)
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-            .safeAreaBar(edge: .top, spacing: 0) { header }
+            .safeAreaBar(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    header
+                    if isWorkingChanges && appState.isMergeInProgress {
+                        mergeBanner
+                    }
+                }
+            }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 if isWorkingChanges && !appState.changedFiles.isEmpty {
                     CommitFooterView(appState: appState)
@@ -68,6 +83,28 @@ struct ChangedFilesView: View {
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
         .frame(height: MainWindowView.columnHeaderHeight)
+    }
+
+    private var mergeConflictCount: Int {
+        appState.changedFiles.count { $0.status == .conflicted }
+    }
+
+    private var mergeBanner: some View {
+        HStack {
+            Image(systemName: "arrow.triangle.merge")
+                .foregroundStyle(.orange)
+            Text(mergeConflictCount > 0 ? "Merging — \(mergeConflictCount) conflict\(mergeConflictCount == 1 ? "" : "s") remaining" : "Merging — ready to commit")
+                .font(.subheadline)
+                .lineLimit(1)
+            Spacer()
+            Button("Abort", role: .destructive) {
+                appState.abortMerge()
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.12))
     }
 
     private var headerTitle: String {
@@ -105,7 +142,7 @@ struct ChangedFilesView: View {
             Button("Copy Relative Path") {
                 copyToPasteboard(file.path)
             }
-            if isWorkingChanges {
+            if isWorkingChanges, file.status != .conflicted {
                 Divider()
                 Button("Discard Changes", role: .destructive) {
                     appState.discardChanges(for: file)
@@ -123,12 +160,15 @@ struct ChangedFilesView: View {
                 copyToPasteboard(files.map(\.path).joined(separator: "\n"))
             }
             if isWorkingChanges {
-                Divider()
-                Button("Discard Changes in \(files.count) Files", role: .destructive) {
-                    appState.discardChanges(for: files)
-                }
-                Button("Add \(files.count) Files to .gitignore") {
-                    appState.ignoreFiles(files)
+                let discardableFiles = files.filter { $0.status != .conflicted }
+                if !discardableFiles.isEmpty {
+                    Divider()
+                    Button("Discard Changes in \(discardableFiles.count) Files", role: .destructive) {
+                        appState.discardChanges(for: discardableFiles)
+                    }
+                    Button("Add \(discardableFiles.count) Files to .gitignore") {
+                        appState.ignoreFiles(discardableFiles)
+                    }
                 }
             }
         }
@@ -187,6 +227,7 @@ struct ChangedFilesView: View {
         case .deleted: return "D"
         case .renamed: return "R"
         case .untracked: return "U"
+        case .conflicted: return "!"
         case .unknown: return "?"
         }
     }
@@ -197,6 +238,7 @@ struct ChangedFilesView: View {
         case .added, .untracked: return .green
         case .deleted: return .red
         case .renamed: return .blue
+        case .conflicted: return .orange
         case .unknown: return .secondary
         }
     }
@@ -221,7 +263,7 @@ private struct CommitFooterView: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
 
             Button {
-                appState.commitCheckedChanges()
+                appState.commitOrCompleteMerge()
             } label: {
                 Text(commitButtonTitle)
                     .frame(maxWidth: .infinity)
@@ -236,11 +278,22 @@ private struct CommitFooterView: View {
         appState.checkedFilePaths.count
     }
 
+    private var hasUnresolvedConflicts: Bool {
+        appState.changedFiles.contains { $0.status == .conflicted }
+    }
+
     private var canCommit: Bool {
-        checkedCount > 0 && !appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasMessage = !appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if appState.isMergeInProgress {
+            return hasMessage && !hasUnresolvedConflicts
+        }
+        return checkedCount > 0 && hasMessage
     }
 
     private var commitButtonTitle: String {
+        if appState.isMergeInProgress {
+            return "Complete Merge"
+        }
         let branchName = appState.selectedBranch?.name ?? "…"
         return "Commit \(checkedCount) file\(checkedCount == 1 ? "" : "s") to \(branchName)"
     }

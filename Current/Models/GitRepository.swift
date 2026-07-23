@@ -13,6 +13,7 @@ enum FileChangeStatus: String {
     case deleted = "D"
     case renamed = "R"
     case untracked = "?"
+    case conflicted = "U"
     case unknown
 
     var label: String {
@@ -22,6 +23,7 @@ enum FileChangeStatus: String {
         case .deleted: return "Deleted"
         case .renamed: return "Renamed"
         case .untracked: return "Untracked"
+        case .conflicted: return "Conflicted"
         case .unknown: return "Changed"
         }
     }
@@ -128,6 +130,10 @@ struct GitRepository {
             }
     }
 
+    /// Two-letter porcelain codes git uses for unmerged (conflicted) paths — these don't fit the
+    /// normal "prefer worktree char over index char" scheme since e.g. `AA`/`DD` have no `U` at all.
+    private static let conflictStatusCodes: Set<String> = ["UU", "AA", "DD", "AU", "UA", "DU", "UD"]
+
     func statusEntries() throws -> [ChangedFile] {
         let output = try run(["status", "--porcelain=v1", "--untracked-files=all"])
         return output
@@ -138,8 +144,13 @@ struct GitRepository {
                 let workTreeStatus = line[line.index(after: line.startIndex)]
                 var rawPath = String(line.dropFirst(3))
 
-                let statusChar = workTreeStatus != " " ? workTreeStatus : indexStatus
-                let status = FileChangeStatus(rawValue: String(statusChar)) ?? .unknown
+                let status: FileChangeStatus
+                if Self.conflictStatusCodes.contains(String(indexStatus) + String(workTreeStatus)) {
+                    status = .conflicted
+                } else {
+                    let statusChar = workTreeStatus != " " ? workTreeStatus : indexStatus
+                    status = FileChangeStatus(rawValue: String(statusChar)) ?? .unknown
+                }
                 // Renamed entries are formatted as "old -> new" — only the destination path is
                 // the file's current path.
                 if status == .renamed, let arrowRange = rawPath.range(of: " -> ") {
@@ -342,6 +353,72 @@ struct GitRepository {
         }
         try run(["add", "--"] + paths)
         try run(["commit", "-m", message])
+    }
+
+    enum MergeResult {
+        case upToDate
+        case fastForward
+        case merged
+        case conflicts
+    }
+
+    /// True while a merge is stopped partway through (conflicts, or an explicit `--no-commit`),
+    /// i.e. `.git/MERGE_HEAD` exists — git's own ground truth for "a merge is in progress".
+    func isMergeInProgress() -> Bool {
+        FileManager.default.fileExists(atPath: rootURL.appendingPathComponent(".git/MERGE_HEAD").path)
+    }
+
+    /// Git's suggested merge commit message (`.git/MERGE_MSG`), used to prefill the commit box
+    /// when finishing a merge.
+    func mergeMessage() -> String? {
+        try? String(contentsOf: rootURL.appendingPathComponent(".git/MERGE_MSG"), encoding: .utf8)
+    }
+
+    /// Merges `branch` into the current branch. A merge that stops on conflicts exits 1 by
+    /// git's own design, not as a process failure, so exit code alone can't distinguish
+    /// "conflicts" from a real error (dirty worktree, unrelated histories, etc. also exit 1) —
+    /// `MERGE_HEAD` presence after a non-zero exit is the reliable signal that git stopped
+    /// mid-merge rather than failing outright.
+    func merge(branch: String) throws -> MergeResult {
+        let (stdout, stderr, exitCode) = try runRaw(["merge", "--no-edit", branch])
+        if exitCode == 0 {
+            if stdout.contains("Already up to date") { return .upToDate }
+            if stdout.contains("Fast-forward") { return .fastForward }
+            return .merged
+        }
+        if isMergeInProgress() { return .conflicts }
+        throw GitError.commandFailed(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func mergeAbort() throws {
+        try run(["merge", "--abort"])
+    }
+
+    /// Completes an in-progress merge: stages the given (now-resolved) paths and commits with
+    /// the given message. Unlike `commit(message:paths:unstagePaths:)`, this never unstages
+    /// anything — a merge commit must include the full merge, not a partial selection.
+    func completeMerge(message: String, resolvedPaths: [String]) throws {
+        if !resolvedPaths.isEmpty {
+            try run(["add", "--"] + resolvedPaths)
+        }
+        // `-m` alone defaults to `--cleanup=whitespace`, not `strip` — without this, the
+        // `# Conflicts:` comment lines from MERGE_MSG (prefilled into the commit box) would be
+        // baked into the actual commit message verbatim instead of being dropped as advisory text.
+        try run(["commit", "-m", message, "--cleanup=strip"])
+    }
+
+    /// Stages a conflicted file once the user has hand-edited it to remove the conflict markers —
+    /// `git status` only stops reporting a path as unmerged (`UU`) once it's staged, so this is
+    /// the actual "mark as resolved" action, not just bookkeeping.
+    func markResolved(_ file: ChangedFile) throws {
+        try run(["add", "--", file.path])
+    }
+
+    /// Raw working-tree contents of a conflicted file, which already contains git's
+    /// `<<<<<<<`/`=======`/`>>>>>>>` markers — shown as-is in the diff pane rather than as a
+    /// real diff, since `git diff` of a conflicted path isn't the useful thing to show here.
+    func conflictedFileContents(_ file: ChangedFile) throws -> String {
+        try String(contentsOf: rootURL.appendingPathComponent(file.path), encoding: .utf8)
     }
 
     func discardChanges(for file: ChangedFile) throws {

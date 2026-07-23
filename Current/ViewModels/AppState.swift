@@ -32,6 +32,9 @@ final class AppState {
     var aheadCount = 0
     var behindCount = 0
 
+    var isMergeInProgress = false
+    var mergeMessage: String?
+
     private var currentRepository: GitRepository? {
         selectedRepoURL.map { GitRepository(rootURL: $0) }
     }
@@ -168,6 +171,78 @@ final class AppState {
         }
     }
 
+    /// Calls `completeMerge()` while a merge is in progress, otherwise the normal commit.
+    /// The shared entry point for the commit footer's single button.
+    func commitOrCompleteMerge() {
+        if isMergeInProgress {
+            completeMerge()
+        } else {
+            commitCheckedChanges()
+        }
+    }
+
+    func mergeBranch(_ branch: GitBranch) {
+        guard let repo = currentRepository, !isSyncing else { return }
+        isSyncing = true
+        Task {
+            do {
+                _ = try await Task.detached(priority: .userInitiated) { try repo.merge(branch: branch.name) }.value
+                await MainActor.run {
+                    self.errorMessage = nil
+                    self.isSyncing = false
+                    self.refreshRepositoryState()
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isSyncing = false
+                }
+            }
+        }
+    }
+
+    /// Stages a hand-edited conflicted file, which is what actually flips its status away from
+    /// `.conflicted` — editing the file alone doesn't change what `git status` reports.
+    func markResolved(_ file: ChangedFile) {
+        guard let repo = currentRepository else { return }
+        do {
+            try repo.markResolved(file)
+            errorMessage = nil
+            loadChangedFiles(preserveChecks: true)
+            if selectedFile?.path == file.path {
+                loadDiff()
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func abortMerge() {
+        guard let repo = currentRepository else { return }
+        do {
+            try repo.mergeAbort()
+            errorMessage = nil
+            refreshRepositoryState()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func completeMerge() {
+        guard let repo = currentRepository else { return }
+        let resolvedPaths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
+        let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        do {
+            try repo.completeMerge(message: message, resolvedPaths: resolvedPaths)
+            commitMessage = ""
+            errorMessage = nil
+            refreshRepositoryState()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func fetchRemote() {
         guard let repo = currentRepository, !isSyncing else { return }
         isSyncing = true
@@ -265,7 +340,14 @@ final class AppState {
             hasUpstream = false
             aheadCount = 0
             behindCount = 0
+            isMergeInProgress = false
+            mergeMessage = nil
             return
+        }
+        isMergeInProgress = repo.isMergeInProgress()
+        mergeMessage = repo.mergeMessage()
+        if isMergeInProgress, commitMessage.isEmpty {
+            commitMessage = mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
         do {
             branches = try repo.branches()
@@ -318,6 +400,11 @@ final class AppState {
     /// heuristic would.
     private func handleExternalChange() {
         guard let repo = currentRepository else { return }
+        isMergeInProgress = repo.isMergeInProgress()
+        mergeMessage = repo.mergeMessage()
+        if isMergeInProgress, commitMessage.isEmpty {
+            commitMessage = mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
         do {
             branches = try repo.branches()
             if let current = branches.first(where: { $0.isCurrent }) {
@@ -394,11 +481,17 @@ final class AppState {
         imageDiffOld = nil
         imageDiffNew = nil
         do {
-            switch source {
-            case .workingChanges:
-                diffText = try repo.diff(for: file)
-            case .commit(let commit):
-                diffText = try repo.diff(for: file, in: commit)
+            if file.status == .conflicted {
+                // Raw working-tree contents (with git's own conflict markers), not a real diff —
+                // `git diff` of a conflicted path isn't the useful thing to show here.
+                diffText = try repo.conflictedFileContents(file)
+            } else {
+                switch source {
+                case .workingChanges:
+                    diffText = try repo.diff(for: file)
+                case .commit(let commit):
+                    diffText = try repo.diff(for: file, in: commit)
+                }
             }
             errorMessage = nil
         } catch {

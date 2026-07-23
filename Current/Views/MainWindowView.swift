@@ -134,7 +134,15 @@ struct MainWindowView: View {
     private var branchMenu: some View {
         Menu {
             ForEach(appState.branches) { branch in
-                Button(branch.name) { appState.selectBranch(branch) }
+                if branch.isCurrent {
+                    Label(branch.name, systemImage: "checkmark")
+                } else {
+                    Menu(branch.name) {
+                        Button("Checkout") { appState.selectBranch(branch) }
+                        Button("Merge into \(branchLabelText)") { appState.mergeBranch(branch) }
+                            .disabled(appState.isSyncing || appState.isMergeInProgress)
+                    }
+                }
             }
         } label: {
             HStack(spacing: 4) {
