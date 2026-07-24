@@ -12,43 +12,39 @@ struct MainWindowView: View {
     @State private var appState = AppState()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
-    @State private var branchColumnWidth: CGFloat = 260
-    @State private var filesColumnWidth: CGFloat = 300
-
     @FocusState private var focusedColumn: MainColumn?
 
-    private let branchColumnRange: ClosedRange<CGFloat> = 160...400
-    private let filesColumnRange: ClosedRange<CGFloat> = 160...500
     private let diffMinWidth: CGFloat = 320
 
     var body: some View {
+        // A real three-column split view (Mail's shape: sidebar | list | detail), so the
+        // sidebar and branch/history columns resize with native dividers and the system
+        // partitions the toolbar with tracking separators. Only the files|diff divider
+        // inside `detail` is an extra split (`HSplitView`) — NavigationSplitView tops out
+        // at three columns.
         NavigationSplitView(columnVisibility: $columnVisibility) {
             RepoListView(appState: appState)
                 .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 400)
                 .focused($focusedColumn, equals: .repos)
                 .onKeyPress(.rightArrow) { moveFocus(by: 1) }
+        } content: {
+            BranchListView(appState: appState)
+                .navigationSplitViewColumnWidth(min: 160, ideal: 260, max: 400)
+                .focused($focusedColumn, equals: .branches)
+                .onKeyPress(.leftArrow) { moveFocus(by: -1) }
+                .onKeyPress(.rightArrow) { moveFocus(by: 1) }
         } detail: {
-            HStack(spacing: 0) {
-                BranchListView(appState: appState)
-                    .frame(width: branchColumnWidth)
-                    .focused($focusedColumn, equals: .branches)
-                    .onKeyPress(.leftArrow) { moveFocus(by: -1) }
-                    .onKeyPress(.rightArrow) { moveFocus(by: 1) }
-
-                ResizableDivider(width: $branchColumnWidth, minWidth: branchColumnRange.lowerBound, maxWidth: branchColumnRange.upperBound)
-
+            HSplitView {
                 ChangedFilesView(appState: appState)
-                    .frame(width: filesColumnWidth)
+                    .frame(minWidth: 160, idealWidth: 300, maxWidth: 500)
                     .focused($focusedColumn, equals: .files)
                     .onKeyPress(.leftArrow) { moveFocus(by: -1) }
                     .onKeyPress(.rightArrow) { moveFocus(by: 1) }
 
-                ResizableDivider(width: $filesColumnWidth, minWidth: filesColumnRange.lowerBound, maxWidth: filesColumnRange.upperBound)
-
                 DiffView(appState: appState, focusedColumn: $focusedColumn)
                     .frame(minWidth: diffMinWidth, maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(minWidth: branchColumnWidth + filesColumnWidth + diffMinWidth, minHeight: 500)
+            .frame(minWidth: 160 + diffMinWidth, minHeight: 500)
         }
         .navigationSplitViewStyle(.balanced)
         .navigationTitle(windowTitle)
@@ -58,14 +54,13 @@ struct MainWindowView: View {
             return .handled
         }
         .toolbar {
-            
+
             if appState.selectedRepoURL != nil {
-                ToolbarItem(placement: .navigation){
+                ToolbarItem(placement: .navigation) {
                     branchMenu
                 }
-                
             }
-            
+
             // Fetch, Pull, and Push all live in `.primaryAction` (the toolbar's trailing group)
             // so they sit together on the right. Adjacent `.primaryAction` items with the
             // default Liquid Glass style still automatically share one capsule background —

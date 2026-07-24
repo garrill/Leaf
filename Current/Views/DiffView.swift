@@ -89,11 +89,7 @@ struct DiffView: View {
     var body: some View {
         content
             .scrollEdgeEffectStyle(.soft, for: .top)
-            .safeAreaBar(edge: .top, spacing: 0) {
-                if appState.selectedFile != nil {
-                    header
-                }
-            }
+            .safeAreaBar(edge: .top, spacing: 0) { header }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .focusable()
             .focusEffectDisabled()
@@ -167,27 +163,29 @@ struct DiffView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
-            Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
+            if appState.selectedFile != nil {
+                Image(systemName: "doc.text")
+                    .foregroundStyle(.secondary)
 
-            pathAndFileName
-                .font(.system(.body))
-                .lineLimit(1)
-                .truncationMode(.head)
-                .truncationTooltip(appState.selectedFile?.path ?? "")
+                pathAndFileName
+                    .font(.system(.body))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .truncationTooltip(appState.selectedFile?.path ?? "")
+
+                if addedCount > 0 {
+                    Text("+\(addedCount)")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(Self.addedTextColor)
+                }
+                if removedCount > 0 {
+                    Text("-\(removedCount)")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(Self.removedTextColor)
+                }
+            }
 
             Spacer(minLength: 8)
-
-            if addedCount > 0 {
-                Text("+\(addedCount)")
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(Self.addedTextColor)
-            }
-            if removedCount > 0 {
-                Text("-\(removedCount)")
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(Self.removedTextColor)
-            }
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)

@@ -85,6 +85,14 @@ struct ChangedFilesView: View {
         .frame(height: MainWindowView.columnHeaderHeight)
     }
 
+    private var headerTitle: String {
+        switch appState.selectedSource {
+        case .none: return ""
+        case .workingChanges: return "Uncommitted Changes"
+        case .commit(let commit): return commit.summary
+        }
+    }
+
     private var mergeConflictCount: Int {
         appState.changedFiles.count { $0.status == .conflicted }
     }
@@ -105,14 +113,6 @@ struct ChangedFilesView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.orange.opacity(0.12))
-    }
-
-    private var headerTitle: String {
-        switch appState.selectedSource {
-        case .none: return ""
-        case .workingChanges: return "Uncommitted Changes"
-        case .commit(let commit): return commit.summary
-        }
     }
 
     /// The files a context-menu action should apply to: the full multi-selection if the

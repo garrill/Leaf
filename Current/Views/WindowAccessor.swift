@@ -22,6 +22,9 @@ struct WindowAccessor: NSViewRepresentable {
     private func configure(_ window: NSWindow?) {
         guard let window else { return }
         window.titlebarAppearsTransparent = true
+        // The title (repo name, via `.navigationTitle`) is visible in the toolbar, placed by
+        // the system over the branch/history column — the same pattern as Mail's "All
+        // Inboxes" title over its message list.
         window.titleVisibility = .visible
         window.styleMask.insert(.fullSizeContentView)
     }
