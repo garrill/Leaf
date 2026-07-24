@@ -38,8 +38,6 @@ struct BranchListView: View {
             .background(Color(nsColor: .controlBackgroundColor))
             .environment(\.controlActiveState, .key)
             .opacity(appState.selectedRepoURL == nil ? 0 : 1)
-            .scrollEdgeEffectStyle(.soft, for: .top)
-            .safeAreaBar(edge: .top, spacing: 0) { header }
 
             if appState.selectedRepoURL == nil {
                 Text("No Repository Selected")
@@ -48,26 +46,6 @@ struct BranchListView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Text(repoDisplayName)
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .truncationTooltip(repoDisplayName)
-
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity)
-        .frame(height: MainWindowView.columnHeaderHeight)
-    }
-
-    private var repoDisplayName: String {
-        guard let url = appState.selectedRepoURL else { return "" }
-        return appState.sidebarStore.repos.first(where: { $0.url == url })?.displayName ?? url.lastPathComponent
     }
 
     private var sourceSelection: Binding<ChangeSource?> {

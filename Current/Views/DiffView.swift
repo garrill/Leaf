@@ -189,7 +189,7 @@ struct DiffView: View {
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
-        .frame(height: MainWindowView.columnHeaderHeight)
+        .frame(height: ColumnLayout.headerHeight)
     }
 
     /// Directory in secondary/grey, file name in primary/black, on one line.

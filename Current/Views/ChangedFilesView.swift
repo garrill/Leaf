@@ -82,7 +82,7 @@ struct ChangedFilesView: View {
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
-        .frame(height: MainWindowView.columnHeaderHeight)
+        .frame(height: ColumnLayout.headerHeight)
     }
 
     private var headerTitle: String {
