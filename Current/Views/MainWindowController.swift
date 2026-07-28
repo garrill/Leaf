@@ -24,7 +24,6 @@ final class MainWindowController: NSWindowController {
         window.title = "Current"
         window.minSize = NSSize(width: 900, height: 500)
         window.toolbarStyle = .unified
-        window.center()
 
         // Must be set before the toolbar is attached to the window: assigning `window.toolbar`
         // synchronously asks the delegate for every default item, including tracking separators,
@@ -34,6 +33,16 @@ final class MainWindowController: NSWindowController {
         toolbar.delegate = delegate
         toolbar.displayMode = .iconOnly
         window.toolbar = toolbar
+
+        // Assigning `contentViewController` above (and then the toolbar) makes AppKit re-derive
+        // the window's size from the split view's Auto Layout constraints — before
+        // `MainSplitViewController.viewDidAppear()` has positioned its dividers, that collapses to
+        // the sum of every column's `minimumThickness`, silently discarding the 1520×900
+        // `contentRect` the window was constructed with. Re-asserting the size (and re-centering,
+        // since centering earlier would've centered the since-discarded size) after both are set
+        // is what actually makes the requested size stick.
+        window.setContentSize(NSSize(width: 1520, height: 900))
+        window.center()
 
         super.init(window: window)
 
