@@ -9,6 +9,7 @@ struct DiffLineMetadata {
     let newLineNumber: Int?
     let backgroundColor: NSColor?
     let isHunkHeader: Bool
+    let kind: DiffLine.Kind
 }
 
 /// The code-only text view: trades SwiftUI's per-row `Text` (which gave us full row-width
@@ -177,10 +178,6 @@ final class DiffGutterView: NSView {
             guard fragGlyphRange.location < layoutManager.numberOfGlyphs else { return }
             let charIndex = layoutManager.characterIndexForGlyph(at: fragGlyphRange.location)
 
-            // Only the first wrapped fragment of a paragraph carries its line numbers.
-            let isFirstFragmentOfParagraph = charIndex == 0 || text.character(at: charIndex - 1) == 10
-            guard isFirstFragmentOfParagraph else { return }
-
             let paragraphIndex = textView.paragraphIndex(forCharacterIndex: charIndex)
             guard paragraphIndex < textView.lineMetadata.count else { return }
             let meta = textView.lineMetadata[paragraphIndex]
@@ -190,7 +187,9 @@ final class DiffGutterView: NSView {
             lineRect.origin.y += textView.textContainerOrigin.y
 
             // Full-row background tint, matching the code side's own row background — added/
-            // removed is conveyed by the whole gutter row, not just the number's text color.
+            // removed is conveyed by the whole gutter row, not just the number's text color. Every
+            // wrapped fragment of a paragraph gets tinted, not just the first, or a multi-line-wrap
+            // change would leave the gutter unpainted alongside its own continuation rows.
             if let color = meta.backgroundColor {
                 var fillRect = lineRect
                 fillRect.origin.x = 0
@@ -199,24 +198,33 @@ final class DiffGutterView: NSView {
                 fillRect.fill()
             }
 
+            // Only the first wrapped fragment of a paragraph carries its line numbers.
+            let isFirstFragmentOfParagraph = charIndex == 0 || text.character(at: charIndex - 1) == 10
+            guard isFirstFragmentOfParagraph else { return }
+
             self.drawNumber(meta.oldLineNumber, x: Self.oldColumnX, width: Self.columnWidth, rowRect: lineRect)
             self.drawNumber(meta.newLineNumber, x: Self.newColumnX, width: Self.columnWidth, rowRect: lineRect)
         }
 
         // Two vertical borders — between the old/new columns, and between the gutter and the code
-        // text — clipped to the actual laid-out text (`usedRect`, not the full dirty rect) so they
-        // start exactly at the top of the first line, underneath the diff header, rather than
-        // bleeding upward into blank space above the content on the initial full-bounds draw pass.
-        let contentRect = layoutManager.usedRect(for: container)
-        let contentTop = contentRect.minY + textView.textContainerOrigin.y
-        let contentBottom = contentRect.maxY + textView.textContainerOrigin.y
-        let borderMinY = max(dirtyRect.minY, contentTop)
-        let borderMaxY = min(dirtyRect.maxY, contentBottom)
-        guard borderMaxY > borderMinY else { return }
+        // text — drawn per line fragment (rather than as one solid line for the whole visible
+        // range) so each row's border segment can take on that row's added/removed color instead
+        // of a uniform separator color throughout.
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { fragRect, _, _, fragGlyphRange, _ in
+            guard fragGlyphRange.location < layoutManager.numberOfGlyphs else { return }
+            let charIndex = layoutManager.characterIndexForGlyph(at: fragGlyphRange.location)
+            let paragraphIndex = textView.paragraphIndex(forCharacterIndex: charIndex)
+            guard paragraphIndex < textView.lineMetadata.count else { return }
+            let meta = textView.lineMetadata[paragraphIndex]
 
-        NSColor.separatorColor.setFill()
-        NSRect(x: Self.middleBorderX, y: borderMinY, width: 1, height: borderMaxY - borderMinY).fill()
-        NSRect(x: Self.rightBorderX, y: borderMinY, width: 1, height: borderMaxY - borderMinY).fill()
+            var lineRect = fragRect
+            lineRect.origin.y += textView.textContainerOrigin.y
+
+            let borderColor = meta.isHunkHeader ? NSColor.separatorColor : DiffView.borderNSColor(for: meta.kind)
+            borderColor.setFill()
+            NSRect(x: Self.middleBorderX, y: lineRect.minY, width: 1, height: lineRect.height).fill()
+            NSRect(x: Self.rightBorderX, y: lineRect.minY, width: 1, height: lineRect.height).fill()
+        }
     }
 
     private func drawNumber(_ number: Int?, x: CGFloat, width: CGFloat, rowRect: NSRect) {
@@ -331,6 +339,11 @@ struct DiffCodeScrollView: NSViewRepresentable {
     ) -> (NSAttributedString, [DiffLineMetadata]) {
         let bodyFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         let headerFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        // Applied to every line (header and body alike) so row height — which the gutter and its
+        // background/border fills read straight off the layout manager's line fragments — grows
+        // along with it everywhere, not just where the code font itself is used.
+        let lineParagraphStyle = NSMutableParagraphStyle()
+        lineParagraphStyle.lineHeightMultiple = 1.3
         // Only trust the snapshot if it was computed for this exact diff text — a still-running
         // (or superseded) highlight task must never paint stale colors onto newly-selected text.
         let validSnapshot = highlightSnapshot?.diffText == diffText ? highlightSnapshot : nil
@@ -348,13 +361,15 @@ struct DiffCodeScrollView: NSViewRepresentable {
             if line.kind == .hunkHeader {
                 result.append(NSAttributedString(string: line.text, attributes: [
                     .font: headerFont,
-                    .foregroundColor: NSColor.secondaryLabelColor
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .paragraphStyle: lineParagraphStyle
                 ]))
                 metadata.append(DiffLineMetadata(
                     oldLineNumber: nil,
                     newLineNumber: nil,
                     backgroundColor: DiffView.hunkHeaderBackgroundNSColor,
-                    isHunkHeader: true
+                    isHunkHeader: true,
+                    kind: .hunkHeader
                 ))
                 continue
             }
@@ -363,6 +378,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
             let fullRange = NSRange(location: 0, length: piece.length)
             piece.addAttribute(.font, value: bodyFont, range: fullRange)
             piece.addAttribute(.foregroundColor, value: DiffView.foregroundNSColor(for: line.kind), range: fullRange)
+            piece.addAttribute(.paragraphStyle, value: lineParagraphStyle, range: fullRange)
 
             // hljs only assigns explicit colors to tokens it recognizes; overlay just those runs
             // on top of the kind-based default so unclassified characters keep the fallback color.
@@ -386,7 +402,8 @@ struct DiffCodeScrollView: NSViewRepresentable {
                 oldLineNumber: line.oldLineNumber,
                 newLineNumber: line.newLineNumber,
                 backgroundColor: DiffView.backgroundNSColor(for: line.kind),
-                isHunkHeader: false
+                isHunkHeader: false,
+                kind: line.kind
             ))
         }
 

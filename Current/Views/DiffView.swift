@@ -42,21 +42,60 @@ struct DiffView: View {
 
     static let addedTextNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 0.75, green: 1.0, blue: 0.8, alpha: 1)
-            : NSColor(red: 0.0, green: 0.35, blue: 0.05, alpha: 1)
+            ? NSColor(srgbRed: 0.7490, green: 1.0000, blue: 0.8000, alpha: 0.70)
+            : NSColor(srgbRed: 0.0000, green: 0.3490, blue: 0.0510, alpha: 0.70)
     }
     static let removedTextNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 1.0, green: 0.8, blue: 0.8, alpha: 1)
-            : NSColor(red: 0.55, green: 0.02, blue: 0.02, alpha: 1)
+            ? NSColor(srgbRed: 1.0000, green: 0.8000, blue: 0.8000, alpha: 0.70)
+            : NSColor(srgbRed: 0.5490, green: 0.0196, blue: 0.0196, alpha: 0.70)
     }
     private static let addedTextColor = Color(addedTextNSColor)
     private static let removedTextColor = Color(removedTextNSColor)
-    static let addedBackgroundNSColor = NSColor.systemGreen.withAlphaComponent(0.12)
-    static let removedBackgroundNSColor = NSColor.systemRed.withAlphaComponent(0.12)
-    static let strongAddedBackgroundNSColor = NSColor.systemGreen.withAlphaComponent(0.4)
-    static let strongRemovedBackgroundNSColor = NSColor.systemRed.withAlphaComponent(0.4)
-    static let hunkHeaderBackgroundNSColor = NSColor.secondaryLabelColor.withAlphaComponent(0.08)
+    static let addedBackgroundNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.1882, green: 0.8196, blue: 0.3451, alpha: 0.10)
+            : NSColor(srgbRed: 0.2039, green: 0.7804, blue: 0.3490, alpha: 0.10)
+    }
+    static let removedBackgroundNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 1.0000, green: 0.2706, blue: 0.2275, alpha: 0.10)
+            : NSColor(srgbRed: 1.0000, green: 0.2314, blue: 0.1882, alpha: 0.10)
+    }
+    static let strongAddedBackgroundNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.1882, green: 0.8196, blue: 0.3451, alpha: 0.20)
+            : NSColor(srgbRed: 0.2039, green: 0.7804, blue: 0.3490, alpha: 0.20)
+    }
+    static let strongRemovedBackgroundNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 1.0000, green: 0.2706, blue: 0.2275, alpha: 0.20)
+            : NSColor(srgbRed: 1.0000, green: 0.2314, blue: 0.1882, alpha: 0.20)
+    }
+    static let hunkHeaderBackgroundNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.5961, green: 0.5961, blue: 0.6157, alpha: 0.10)
+            : NSColor(srgbRed: 0.5569, green: 0.5569, blue: 0.5765, alpha: 0.10)
+    }
+    /// Same dark green/red in both appearances for the gutter's added/removed border lines.
+    static let addedBorderNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.0000, green: 0.3490, blue: 0.0510, alpha: 0.30)
+            : NSColor(srgbRed: 0.0000, green: 0.3490, blue: 0.0510, alpha: 0.30)
+    }
+    static let removedBorderNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.5490, green: 0.0196, blue: 0.0196, alpha: 0.30)
+            : NSColor(srgbRed: 0.5490, green: 0.0196, blue: 0.0196, alpha: 0.30)
+    }
+
+    static func borderNSColor(for kind: DiffLine.Kind) -> NSColor {
+        switch kind {
+        case .added: return addedBorderNSColor
+        case .removed: return removedBorderNSColor
+        case .context, .hunkHeader, .meta: return .separatorColor
+        }
+    }
 
     /// Code text always uses the default label color — added/removed lines are conveyed by the
     /// row/word background tinting, not by tinting the text itself, so syntax highlighting colors

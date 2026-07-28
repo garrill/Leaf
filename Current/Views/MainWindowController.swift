@@ -15,7 +15,7 @@ final class MainWindowController: NSWindowController {
         toolbarDelegate = delegate
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 1520, height: 900),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -55,6 +55,7 @@ final class MainWindowController: NSWindowController {
     private func observeTitle() {
         withObservationTracking {
             _ = appState.selectedRepoURL
+            _ = appState.repoOwner
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 self?.updateTitle()
@@ -66,8 +67,10 @@ final class MainWindowController: NSWindowController {
     private func updateTitle() {
         guard let url = appState.selectedRepoURL else {
             window?.title = "Current"
+            window?.subtitle = ""
             return
         }
         window?.title = appState.sidebarStore.repos.first(where: { $0.url == url })?.displayName ?? url.lastPathComponent
+        window?.subtitle = appState.repoOwner ?? ""
     }
 }

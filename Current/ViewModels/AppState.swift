@@ -38,6 +38,10 @@ final class AppState {
     var isCloning = false
     var cloneErrorMessage: String?
 
+    /// GitHub owner (user/org) of the selected repo's `origin` remote, shown as the window
+    /// subtitle. `nil` for non-GitHub remotes or repos with no `origin`.
+    var repoOwner: String?
+
     private var currentRepository: GitRepository? {
         selectedRepoURL.map { GitRepository(rootURL: $0) }
     }
@@ -384,8 +388,10 @@ final class AppState {
             behindCount = 0
             isMergeInProgress = false
             mergeMessage = nil
+            repoOwner = nil
             return
         }
+        repoOwner = repo.githubOwner()
         isMergeInProgress = repo.isMergeInProgress()
         mergeMessage = repo.mergeMessage()
         if isMergeInProgress, commitMessage.isEmpty {

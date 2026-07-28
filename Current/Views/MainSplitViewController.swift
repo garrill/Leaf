@@ -8,13 +8,20 @@ import SwiftUI
 /// its own `NSHostingController` now, so that'll need its own follow-up step.
 final class MainSplitViewController: NSSplitViewController {
     private let appState: AppState
-    /// The branches column's target default width — applied once, in `viewDidAppear()`. A hosting
-    /// controller's initial `view.frame` isn't used by `NSSplitViewController` as a sizing hint,
-    /// so the only reliable way to set an initial width (as opposed to `minimumThickness`, which
-    /// is just a floor) is to explicitly position the divider — and it has to happen after the
-    /// window is actually on screen: doing this in `viewDidLayout()` fires too early, while the
-    /// split view still has stale/zero geometry, so the computed position was wrong.
+    /// The sidebar and branches columns' target default widths — applied once, in
+    /// `viewDidAppear()`. A hosting controller's initial `view.frame` isn't used by
+    /// `NSSplitViewController` as a sizing hint, so the only reliable way to set an initial width
+    /// (as opposed to `minimumThickness`, which is just a floor) is to explicitly position the
+    /// divider — and it has to happen after the window is actually on screen: doing this in
+    /// `viewDidLayout()` fires too early, while the split view still has stale/zero geometry, so
+    /// the computed position was wrong. Both dividers are pinned from fixed constants rather than
+    /// one being derived from the other's *current* frame — reading `arrangedSubviews[0].frame`
+    /// at this point isn't reliably settled yet (SwiftUI/AppKit layout timing), so a branches
+    /// width computed as "sidebar's current width + 320" would silently drift whenever the
+    /// sidebar's own default width came out different than expected.
     private var hasAppliedInitialLayout = false
+    private let defaultSidebarWidth: CGFloat = 220
+    private let defaultBranchesWidth: CGFloat = 320
 
     init(appState: AppState) {
         self.appState = appState
@@ -64,8 +71,8 @@ final class MainSplitViewController: NSSplitViewController {
         super.viewDidAppear()
         guard !hasAppliedInitialLayout else { return }
         hasAppliedInitialLayout = true
-        let sidebarWidth = splitView.arrangedSubviews[0].frame.width
-        splitView.setPosition(sidebarWidth + 320, ofDividerAt: 1)
+        splitView.setPosition(defaultSidebarWidth, ofDividerAt: 0)
+        splitView.setPosition(defaultSidebarWidth + defaultBranchesWidth, ofDividerAt: 1)
     }
 }
 

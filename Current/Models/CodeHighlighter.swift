@@ -27,7 +27,7 @@ enum CodeHighlighter {
         if let cached = cache[key] {
             return cached
         }
-        let colors: HighlightColors = isDark ? .dark(.xcode) : .light(.xcode)
+        let colors = DiffSyntaxColors.colors(isDark: isDark)
         guard let attributed = try? await request(text, language: language, colors: colors) else {
             return nil
         }

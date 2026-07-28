@@ -118,6 +118,24 @@ struct GitRepository {
         return (output, errorOutput, process.terminationStatus)
     }
 
+    /// The GitHub "owner" (user or org) for this repo's `origin` remote, parsed locally from the
+    /// remote URL — no network call, so it works offline and for private repos without needing a
+    /// GitHub token. Returns `nil` if there's no `origin` or it isn't a github.com URL.
+    func githubOwner() -> String? {
+        guard let url = try? run(["remote", "get-url", "origin"]) else { return nil }
+        return Self.githubOwner(fromRemoteURL: url.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// "git@github.com:owner/repo.git" or "https://github.com/owner/repo.git" -> "owner".
+    static func githubOwner(fromRemoteURL url: String) -> String? {
+        guard let range = url.range(of: "github.com[:/]", options: .regularExpression) else {
+            return nil
+        }
+        let rest = url[range.upperBound...]
+        guard let owner = rest.split(separator: "/").first, !owner.isEmpty else { return nil }
+        return String(owner)
+    }
+
     /// Derives the folder name git itself would use for a clone destination, e.g.
     /// "https://github.com/user/repo.git" -> "repo".
     static func repoName(fromURLString urlString: String) -> String {
