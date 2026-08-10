@@ -158,15 +158,8 @@ struct DiffView: View {
             ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else if appState.selectedFile == nil {
-            if appState.selectedSource != nil && appState.changedFiles.isEmpty {
-                // A selected commit/source with no changed files at all (e.g. an empty commit) —
-                // there's nothing wrong here, so no "No File Selected" message either.
-                Color.clear
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            } else {
-                ContentUnavailableView("No File Selected", systemImage: "doc.text")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            }
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else if appState.selectedFile?.isLikelyImage == true {
             ImageDiffView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

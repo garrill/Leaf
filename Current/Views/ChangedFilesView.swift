@@ -14,9 +14,6 @@ struct ChangedFilesView: View {
                             .labelsHidden()
                     }
                     pathAndFileName(for: file)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                        .truncationTooltip(file.path)
                     Spacer()
                     if file.status == .conflicted {
                         Button("Mark Resolved") {
@@ -206,9 +203,39 @@ struct ChangedFilesView: View {
     /// Directory in secondary/grey, file name in primary color, on one line — matching
     /// `DiffView`'s header treatment, with `.truncationMode(.head)` so a long path truncates
     /// from the front and the file name (the most useful part) always stays visible.
-    private func pathAndFileName(for file: ChangedFile) -> Text {
-        let name = Text((file.path as NSString).lastPathComponent).foregroundColor(.primary)
-        let directory = (file.path as NSString).deletingLastPathComponent
+    ///
+    /// Renamed files show "oldPath → path" as two independent `Text` views (each with its own
+    /// `.truncationMode(.head)`/tooltip) rather than one concatenated `Text` — a single `Text`
+    /// can only truncate as one continuous run, which would swallow the arrow and destination
+    /// path entirely once the combined string overflows, instead of eliding each side on its own.
+    @ViewBuilder
+    private func pathAndFileName(for file: ChangedFile) -> some View {
+        if let oldPath = file.oldPath {
+            HStack(spacing: 4) {
+                pathText(for: oldPath)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .truncationTooltip(oldPath)
+                Image(systemName: "arrow.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                pathText(for: file.path)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .truncationTooltip(file.path)
+            }
+        } else {
+            pathText(for: file.path)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .truncationTooltip(file.path)
+        }
+    }
+
+    private func pathText(for path: String) -> Text {
+        let name = Text((path as NSString).lastPathComponent).foregroundColor(.primary)
+        let directory = (path as NSString).deletingLastPathComponent
         guard !directory.isEmpty else { return name }
         return Text("\(Text(directory + "/").foregroundColor(.secondary))\(name)")
     }

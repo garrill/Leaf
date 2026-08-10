@@ -1,0 +1,52 @@
+{
+  "fill" : {
+    "automatic-gradient" : "srgb:0.14308,0.67444,0.37283,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "solid" : "extended-gray:1.00000,1.00000"
+          },
+          "glass" : true,
+          "image-name" : "Frame 8.svg",
+          "name" : "Frame 8",
+          "position" : {
+            "scale" : 8,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "image-name" : "Frame 7.svg",
+          "name" : "Frame 7",
+          "position" : {
+            "scale" : 8,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

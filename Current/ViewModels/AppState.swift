@@ -15,6 +15,8 @@ final class AppState {
     var selectedSource: ChangeSource?
 
     var changedFiles: [ChangedFile] = []
+    var uncommittedChangeCount: Int = 0
+    var uncommittedLastModifiedDate: Date?
     var selectedFile: ChangedFile?
     /// All files selected in the changed-files list, for shift/cmd multi-select and batch
     /// actions. Always a superset containing `selectedFile` when non-empty.
@@ -37,6 +39,10 @@ final class AppState {
 
     var isCloning = false
     var cloneErrorMessage: String?
+
+    var renamingFolderID: UUID?
+    var renamingRepoID: UUID?
+    var isCloneSheetPresented = false
 
     /// GitHub owner (user/org) of the selected repo's `origin` remote, shown as the window
     /// subtitle. `nil` for non-GitHub remotes or repos with no `origin`.
@@ -478,6 +484,11 @@ final class AppState {
         }
     }
 
+    private func updateUncommittedSummary(repo: GitRepository, statusEntries: [ChangedFile]) {
+        uncommittedChangeCount = statusEntries.count
+        uncommittedLastModifiedDate = repo.lastModifiedDate(for: statusEntries.map(\.path))
+    }
+
     private func loadChangedFiles(preserveChecks: Bool = false) {
         guard let repo = currentRepository, let source = selectedSource else {
             changedFiles = []
@@ -488,6 +499,7 @@ final class AppState {
             switch source {
             case .workingChanges:
                 changedFiles = try repo.statusEntries()
+                updateUncommittedSummary(repo: repo, statusEntries: changedFiles)
                 let currentPaths = Set(changedFiles.map(\.path))
                 if preserveChecks {
                     // Keep the user's check state for files that are still around, and default
@@ -500,6 +512,7 @@ final class AppState {
             case .commit(let commit):
                 changedFiles = try repo.filesChanged(in: commit)
                 checkedFilePaths = []
+                updateUncommittedSummary(repo: repo, statusEntries: (try? repo.statusEntries()) ?? [])
             }
             errorMessage = nil
         } catch {

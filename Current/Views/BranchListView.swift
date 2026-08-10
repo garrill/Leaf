@@ -7,11 +7,32 @@ struct BranchListView: View {
     var body: some View {
         ZStack {
             List(selection: sourceSelection) {
-                Label("Uncommitted Changes", systemImage: "pencil.circle")
+                Section {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(appState.uncommittedChangeCount == 0 ? "No Uncommitted Changes" : "Uncommitted Changes")
+                            Spacer()
+                            if appState.uncommittedChangeCount > 0 {
+                                Text("\(appState.uncommittedChangeCount)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let lastModifiedDate = appState.uncommittedLastModifiedDate {
+                            Text("Last modified \(GitCommit.relativeDate(for: lastModifiedDate).lowercased())")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 6)
                     .tag(ChangeSource.workingChanges)
+                    .selectionDisabled(appState.uncommittedChangeCount == 0)
                     .listRowSeparator(.visible)
+                } header: {
+                    sectionHeader("Local changes", systemImage: "doc")
+                }
 
-                Section("History") {
+                Section {
                     ForEach(appState.commits) { commit in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(commit.summary)
@@ -31,6 +52,8 @@ struct BranchListView: View {
                             }
                         }
                     }
+                } header: {
+                    sectionHeader("History", systemImage: "clock")
                 }
             }
             .listStyle(.sidebar)
@@ -46,6 +69,16 @@ struct BranchListView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func sectionHeader(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(Color.primary.opacity(0.55))
     }
 
     private var sourceSelection: Binding<ChangeSource?> {

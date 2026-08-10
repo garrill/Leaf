@@ -85,10 +85,30 @@ private struct TooltipHoverProbe: NSViewRepresentable {
         }
         private var trackingArea: NSTrackingArea?
         private var showWorkItem: DispatchWorkItem?
+        private var isHitTestingForOcclusionCheck = false
 
         override var isFlipped: Bool { true }
 
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            // Normally click-through (returns nil) so this probe never intercepts real clicks.
+            // `isTopmostAtCurrentMouseLocation()` flips this briefly to use it as an occlusion
+            // probe instead — see its doc comment.
+            isHitTestingForOcclusionCheck ? super.hitTest(point) : nil
+        }
+
+        /// `NSTrackingArea` fires `mouseEntered`/`mouseExited` purely from the view's own frame,
+        /// with no regard for whether another view (e.g. a `.safeAreaBar`-docked panel) is
+        /// actually drawn on top of it on screen — a list row scrolled underneath such a panel
+        /// still reports hover. Before presenting, re-verify via a real `hitTest` from the
+        /// window's content view that this probe (not some occluding sibling) is what's actually
+        /// under the cursor.
+        private func isTopmostAtCurrentMouseLocation() -> Bool {
+            guard let window else { return false }
+            let mouseInWindow = window.mouseLocationOutsideOfEventStream
+            isHitTestingForOcclusionCheck = true
+            defer { isHitTestingForOcclusionCheck = false }
+            return window.contentView?.hitTest(mouseInWindow) === self
+        }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -127,7 +147,7 @@ private struct TooltipHoverProbe: NSViewRepresentable {
         }
 
         private func presentTooltip() {
-            guard let window, isTruncated else { return }
+            guard let window, isTruncated, isTopmostAtCurrentMouseLocation() else { return }
             // Top-left corner of this view, in screen coordinates — the tooltip is positioned
             // to start exactly there, over the start of the truncated text it's replacing.
             let topLeftInWindow = convert(NSPoint(x: 0, y: 0), to: nil)

@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 private extension NSToolbarItem.Identifier {
+    static let addItem = NSToolbarItem.Identifier("addItem")
     static let sidebarTrackingSeparator = NSToolbarItem.Identifier("sidebarTrackingSeparator")
     static let branchMenu = NSToolbarItem.Identifier("branchMenu")
     static let branchTrackingSeparator = NSToolbarItem.Identifier("branchTrackingSeparator")
@@ -32,6 +33,12 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
         guard let splitView = splitViewController?.splitView else { return nil }
 
         switch itemIdentifier {
+        case .addItem:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Add"
+            item.view = hostingView(AddToolbarView(appState: appState))
+            return item
+
         case .toggleSidebar:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Toggle Sidebar"
@@ -79,6 +86,7 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
+            .addItem,
             .toggleSidebar,
             .sidebarTrackingSeparator,
             .flexibleSpace,
@@ -144,6 +152,36 @@ private struct BranchMenuToolbarView: View {
             return "Detached (\(appState.detachedHeadShortSHA ?? "HEAD"))"
         }
         return appState.selectedBranch?.name ?? "Branch"
+    }
+}
+
+/// The "add repository/folder/feed" menu, pinned to the leading edge of the toolbar just left of
+/// the sidebar toggle. Styled as a plain toolbar button (no filled background) with an explicit
+/// chevron so it reads as a dropdown rather than a plain action button.
+private struct AddToolbarView: View {
+    @Bindable var appState: AppState
+
+    var body: some View {
+        Menu {
+            Button("Add Repository") { appState.addRepoViaPicker() }
+            Button("Clone Repository…") { appState.isCloneSheetPresented = true }
+            Button("Add Group") {
+                let id = appState.sidebarStore.addFolder()
+                appState.renamingFolderID = id
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus")
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.hidden)
+        .help("Add…")
+        .frame(width: 36, height: 36)
     }
 }
 

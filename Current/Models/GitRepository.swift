@@ -32,6 +32,8 @@ enum FileChangeStatus: String {
 struct ChangedFile: Identifiable, Hashable {
     let path: String
     let status: FileChangeStatus
+    /// The pre-rename path, set only when `status == .renamed`.
+    var oldPath: String? = nil
 
     var id: String { path }
 
@@ -60,10 +62,14 @@ struct GitCommit: Identifiable, Hashable {
     }()
 
     var relativeDate: String {
+        Self.relativeDate(for: date)
+    }
+
+    static func relativeDate(for date: Date) -> String {
         if abs(date.timeIntervalSinceNow) < 60 {
             return "Just now"
         }
-        return Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
 
@@ -206,12 +212,24 @@ struct GitRepository {
                 }
                 // Renamed entries are formatted as "old -> new" — only the destination path is
                 // the file's current path.
+                var oldPath: String?
                 if status == .renamed, let arrowRange = rawPath.range(of: " -> ") {
+                    oldPath = Self.unquoteGitPath(String(rawPath[..<arrowRange.lowerBound]))
                     rawPath = String(rawPath[arrowRange.upperBound...])
                 }
                 let path = Self.unquoteGitPath(rawPath)
-                return ChangedFile(path: path, status: status)
+                return ChangedFile(path: path, status: status, oldPath: oldPath)
             }
+    }
+
+    /// Latest filesystem modification date across the given working-tree-relative paths.
+    /// Deleted files have nothing on disk to stat, so they're skipped rather than counted.
+    func lastModifiedDate(for paths: [String]) -> Date? {
+        let fileManager = FileManager.default
+        return paths.compactMap { path -> Date? in
+            let attributes = try? fileManager.attributesOfItem(atPath: rootURL.appendingPathComponent(path).path)
+            return attributes?[.modificationDate] as? Date
+        }.max()
     }
 
     /// Git quotes a pathname as a C-style double-quoted string (escaping spaces-adjacent
@@ -388,7 +406,9 @@ struct GitRepository {
                 guard let first = parts.first, let last = parts.last, parts.count >= 2 else { return nil }
                 let statusChar = first.first.map(String.init) ?? "?"
                 let status = FileChangeStatus(rawValue: statusChar) ?? .unknown
-                return ChangedFile(path: Self.unquoteGitPath(String(last)), status: status)
+                // Rename lines are "R100\told\tnew" — the middle field is the pre-rename path.
+                let oldPath = (status == .renamed && parts.count >= 3) ? Self.unquoteGitPath(String(parts[1])) : nil
+                return ChangedFile(path: Self.unquoteGitPath(String(last)), status: status, oldPath: oldPath)
             }
     }
 
