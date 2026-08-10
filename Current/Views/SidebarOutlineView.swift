@@ -127,7 +127,20 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     func reloadPreservingState() {
         guard let outlineView else { return }
+        // `reloadData()` recreates every row's underlying item object, and can itself
+        // synchronously fire `outlineViewSelectionDidChange` for the row that's already
+        // selected purely because of that — not because the user (or `appState`) actually
+        // changed anything. Left unguarded, that spurious notification reached
+        // `AppState.selectRepo(_:)` and ran its fully-synchronous `refreshRepositoryState()`
+        // (branches, commits, status, a `git remote get-url origin` call) on the main thread —
+        // confirmed via Instruments as a real source of hangs, and one that fired on *every*
+        // re-render of this view (including ones triggered by unrelated state elsewhere in the
+        // app, like a commit-history selection settling), not just actual repo switches.
+        // `applySelectionFromAppState()` below is what authoritatively reconciles the selection
+        // afterward, so nothing is lost by ignoring whatever `reloadData()` does on its own.
+        isApplyingSelection = true
         outlineView.reloadData()
+        isApplyingSelection = false
         for folder in sidebarStore.folders {
             let item = item(forFolder: folder.id)
             if folder.isExpanded {

@@ -29,6 +29,15 @@ struct ChangedFilesView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Every row's content is single-line regardless of which conditional branch
+                // above applies (toggle vs. not, "Mark Resolved" button vs. status glyph) — an
+                // explicit fixed height lets List treat every row as uniform instead of having
+                // to measure each one individually. Without it, a commit touching hundreds of
+                // files spent a large chunk of selection time (confirmed via Instruments' Time
+                // Profiler) inside this row's `.contextMenu` closure, which only makes sense if
+                // the full row (including its context menu) was being built for every item up
+                // front rather than lazily for on-screen rows only.
+                .frame(height: 22)
                 .tag(file.path)
                 .listRowSeparator(.visible)
                 .contextMenu {
@@ -67,6 +76,14 @@ struct ChangedFilesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Keyed on the selection itself, not triggered imperatively from `AppState` — SwiftUI
+        // cancels and restarts this automatically the moment `selectedSource` changes again, so
+        // a superseded selection's git call never lingers to overwrite a newer one. This is what
+        // actually keeps the commit-list row highlight (a plain, instant property write) fully
+        // decoupled from however long this load takes.
+        .task(id: appState.selectedSource) {
+            await appState.loadChangedFilesForCurrentSelection()
+        }
     }
 
     private var header: some View {

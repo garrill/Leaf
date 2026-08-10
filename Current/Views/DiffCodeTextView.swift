@@ -253,6 +253,13 @@ final class DiffGutterView: NSView {
 final class DiffCodeContainerView: NSView {
     let textView = DiffCodeTextView.makeLegacyTextKit1()
     let gutterView = DiffGutterView()
+    /// What `setContent` last actually applied — `DiffCodeScrollView.updateNSView` runs on
+    /// *every* SwiftUI update of this view (scroll position changes, hover state, unrelated
+    /// parent re-renders, etc.), not just ones where the diff itself changed. Without this,
+    /// every such call rebuilt the full attributed string and re-ran text layout from scratch
+    /// (confirmed via Instruments: ~200ms combined for `buildContent`/`setContent`/
+    /// `fittingHeight` on a single unrelated re-render) even when nothing about the diff had.
+    private var lastContentKey: DiffContentKey?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -279,11 +286,30 @@ final class DiffCodeContainerView: NSView {
         textView.fittingHeight(forWidth: max(width - DiffGutterView.totalWidth, 0))
     }
 
-    func setContent(attributedString: NSAttributedString, metadata: [DiffLineMetadata]) {
+    /// True when `key` differs from what's already applied — callers should skip building the
+    /// (expensive) attributed string at all when this is false, not just skip `setContent`.
+    func needsContentUpdate(for key: DiffContentKey) -> Bool {
+        key != lastContentKey
+    }
+
+    func setContent(attributedString: NSAttributedString, metadata: [DiffLineMetadata], key: DiffContentKey) {
+        lastContentKey = key
         textView.setContent(attributedString: attributedString, metadata: metadata)
         needsLayout = true
         gutterView.needsDisplay = true
     }
+}
+
+/// Identifies what's currently painted in a `DiffCodeContainerView` well enough to know when a
+/// rebuild can be skipped, without needing `HighlightSnapshot`'s `[Int: AttributedString]` (not
+/// cheaply equatable) to be `Equatable` itself. Uses the snapshot's own identity rather than its
+/// line count — `DiffView.refreshHighlighting()` always produces a brand-new `HighlightSnapshot`
+/// (a new `id`) each time it runs, including when only the color scheme changed and the diff text
+/// and line count are otherwise identical, so an identity-based key repaints in that case where a
+/// line-count-based one would not.
+struct DiffContentKey: Equatable {
+    let diffText: String
+    let highlightSnapshotID: UUID?
 }
 
 /// SwiftUI bridge for the gutter/text-view pair above. Builds the per-line `NSAttributedString`
@@ -328,8 +354,10 @@ struct DiffCodeScrollView: NSViewRepresentable {
     }
 
     private func updateContent(container: DiffCodeContainerView) {
+        let key = DiffContentKey(diffText: diffText, highlightSnapshotID: highlightSnapshot?.id)
+        guard container.needsContentUpdate(for: key) else { return }
         let (attributed, metadata) = Self.buildContent(lines: lines, highlightSnapshot: highlightSnapshot, diffText: diffText)
-        container.setContent(attributedString: attributed, metadata: metadata)
+        container.setContent(attributedString: attributed, metadata: metadata, key: key)
     }
 
     private static func buildContent(

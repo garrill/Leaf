@@ -33,6 +33,11 @@ struct DiffView: View {
     /// straight from `diffLines`, computed synchronously, so switching files never waits on
     /// highlighting to show anything.
     @State private var highlightSnapshot: HighlightSnapshot?
+    /// Parsing the diff text is re-run only when it (or the conflicted-vs-not branch) actually
+    /// changes, via `.onChange` below — `diffLines` used to be a plain computed property, so
+    /// `header`'s `addedCount`/`removedCount` and `content`'s `DiffCodeScrollView` construction
+    /// each independently re-parsed the same text on every single render.
+    @State private var diffLines: [DiffLine] = []
     /// Scroll state for the diff pane so the up/down arrow keys can drive it once focus has
     /// moved here (right arrow from the files list) — synced from real scroll events via
     /// `onScrollGeometryChange` and driven programmatically via `scrollPosition`.
@@ -145,6 +150,26 @@ struct DiffView: View {
                 scrollBy(Self.arrowScrollStep)
                 return .handled
             }
+            // Keyed on both the file and the source (the same file can be selected across
+            // different commits) — SwiftUI cancels/restarts this automatically on change, same
+            // as `ChangedFilesView`'s load, so the file-list selection is never waiting on this.
+            .task(id: DiffLoadKey(filePath: appState.selectedFile?.path, source: appState.selectedSource, reloadToken: appState.diffReloadToken)) {
+                await appState.loadDiffForCurrentSelection()
+            }
+            .onChange(of: DiffParseKey(diffText: appState.diffText, isConflicted: appState.selectedFile?.status == .conflicted), initial: true) { _, key in
+                diffLines = key.isConflicted ? Self.parsePlainText(key.diffText) : Self.parse(key.diffText)
+            }
+    }
+
+    private struct DiffLoadKey: Hashable {
+        let filePath: String?
+        let source: ChangeSource?
+        let reloadToken: Int
+    }
+
+    private struct DiffParseKey: Equatable {
+        let diffText: String
+        let isConflicted: Bool
     }
 
     private func scrollBy(_ delta: CGFloat) {
@@ -243,13 +268,6 @@ struct DiffView: View {
     }
 
     // MARK: - Parsing
-
-    private var diffLines: [DiffLine] {
-        if appState.selectedFile?.status == .conflicted {
-            return Self.parsePlainText(appState.diffText)
-        }
-        return Self.parse(appState.diffText)
-    }
 
     private var addedCount: Int {
         diffLines.count { $0.kind == .added }
@@ -424,6 +442,10 @@ struct DiffView: View {
 }
 
 struct HighlightSnapshot {
+    /// Fresh on every `refreshHighlighting()` run, so `DiffContentKey` (which uses this as its
+    /// change proxy) always invalidates for a new snapshot even when the diff text and line count
+    /// are unchanged — e.g. a color-scheme toggle re-highlighting the same lines in new colors.
+    let id = UUID()
     let diffText: String
     let lines: [Int: AttributedString]
 }

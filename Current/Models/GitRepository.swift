@@ -88,7 +88,12 @@ enum GitError: Error, LocalizedError {
     }
 }
 
-struct GitRepository {
+/// Explicitly `nonisolated` — the project's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` setting
+/// would otherwise make every method here MainActor-isolated, which is exactly wrong for a type
+/// whose whole job is shelling out to `/usr/bin/git` synchronously and getting called from
+/// `Task.detached` closures all over `AppState` to keep that off the main thread. `rootURL: URL`
+/// is the only stored state and is `Sendable`, so there's no actor-isolated state to protect.
+nonisolated struct GitRepository {
     let rootURL: URL
 
     @discardableResult
@@ -529,5 +534,42 @@ struct GitRepository {
         }
         existing += files.map(\.path).joined(separator: "\n") + "\n"
         try existing.write(to: gitignoreURL, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: - Convenience wrappers for selection-driven loads
+
+    /// Plain synchronous throwing calls — the caller (`AppState`) is responsible for running
+    /// these via `Task.detached` to get off the main thread. Marking these `async`+`nonisolated`
+    /// does **not** achieve that on its own: this project's build enables Swift's
+    /// `NonisolatedNonsendingByDefault` upcoming feature, under which a `nonisolated async`
+    /// function runs on the *caller's* actor by default rather than hopping to a background
+    /// executor — so an `await` from `@MainActor`-isolated `AppState` would still block the main
+    /// thread here, which is exactly what caused a `SIGSEGV` crashing inside
+    /// `-[NSConcreteTask waitUntilExit]` reentered from the main run loop.
+    func changedFilesWithStatus(for source: ChangeSource) throws -> (files: [ChangedFile], statusEntries: [ChangedFile]) {
+        switch source {
+        case .workingChanges:
+            let entries = try statusEntries()
+            return (entries, entries)
+        case .commit(let commit):
+            let files = try filesChanged(in: commit)
+            let statusEntries = (try? self.statusEntries()) ?? []
+            return (files, statusEntries)
+        }
+    }
+
+    /// See `changedFilesWithStatus(for:)`.
+    func diffText(for file: ChangedFile, in source: ChangeSource) throws -> String {
+        if file.status == .conflicted {
+            // Raw working-tree contents (with git's own conflict markers), not a real diff —
+            // `git diff` of a conflicted path isn't the useful thing to show here.
+            return try conflictedFileContents(file)
+        }
+        switch source {
+        case .workingChanges:
+            return try diff(for: file)
+        case .commit(let commit):
+            return try diff(for: file, in: commit)
+        }
     }
 }

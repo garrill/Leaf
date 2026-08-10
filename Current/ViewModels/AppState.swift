@@ -28,6 +28,12 @@ final class AppState {
     var imageDiffOld: Data?
     var imageDiffNew: Data?
     var errorMessage: String?
+    /// Bumped whenever the currently-selected file's on-disk content may have changed out from
+    /// under it (see `handleExternalChange`), without the file/source *selection* itself
+    /// changing. `DiffView`'s `.task(id:)` includes this in its key so it re-fires — keeping diff
+    /// loading triggered from exactly one place instead of also being called directly here,
+    /// which could otherwise race a concurrent load already in flight for the same file.
+    var diffReloadToken = 0
 
     var isSyncing = false
     var hasUpstream = false
@@ -106,7 +112,27 @@ final class AppState {
     }
 
     func selectRepo(_ url: URL) {
+        // `SidebarOutlineView.updateNSView` unconditionally calls `reloadPreservingState()` on
+        // every re-render (including ones triggered by unrelated state, like a commit-history
+        // selection settling), and `NSOutlineView.reloadData()` can itself fire a spurious
+        // `outlineViewSelectionDidChange` for the row that's already selected, since its
+        // underlying item objects get recreated. Without this guard, that redundant reselect ran
+        // the fully-synchronous `refreshRepositoryState()` (branches, commits, status, a
+        // `git remote get-url origin` call) on the main thread on every such reload — a real,
+        // confirmed-via-Instruments source of main-thread hangs completely unrelated to whatever
+        // was actually being navigated at the time.
+        guard url != selectedRepoURL else { return }
         selectedRepoURL = url
+        // Clear the previous repo's file list/diff immediately rather than leaving them on
+        // screen until the new repo's debounced/detached loads complete — otherwise columns 3
+        // and 4 briefly show one repo's files/diff next to column 2's already-updated branches.
+        changedFiles = []
+        selectedFile = nil
+        selectedFilePaths = []
+        checkedFilePaths = []
+        diffText = ""
+        imageDiffOld = nil
+        imageDiffNew = nil
         refreshRepositoryState()
         repoWatcher = RepoWatcher(url: url) { [weak self] in
             self?.handleExternalChange()
@@ -132,20 +158,28 @@ final class AppState {
         refreshRepositoryState()
     }
 
+    /// Records the selection and clears the previous source's file selection/diff — `ChangedFilesView`'s
+    /// `.task(id: appState.selectedSource)` is what actually reloads the changed-files list, off the
+    /// main thread and automatically cancelled/replaced by SwiftUI itself if the selection changes
+    /// again before it finishes. Clearing `selectedFile`/`diffText` here is still just plain
+    /// assignment (never coupled to, or delayed by, that load) but keeps `DiffView`'s own
+    /// `.task(id:)` from ever pairing the *previous* source's file with the *new* source — without
+    /// it, e.g. switching commits could fire a diff load for a file that doesn't exist in the newly
+    /// selected commit, flashing blank/wrong content until the changed-files reload catches up.
     func selectSource(_ source: ChangeSource?) {
         selectedSource = source
-        // Go straight to the new file, without ever writing `selectedFile = nil` as an
-        // intermediate step — that observable nil is what showed up in the diff view as a
-        // flash of "No File Selected" between commits, even though this whole function runs
-        // synchronously to completion before SwiftUI's next render.
-        loadChangedFiles()
-        selectFile(changedFiles.first)
+        selectedFile = nil
+        selectedFilePaths = []
+        diffText = ""
+        imageDiffOld = nil
+        imageDiffNew = nil
     }
 
+    /// Just records the selection — `DiffView`'s `.task(id:)` loads the diff text; see
+    /// `selectSource`.
     func selectFile(_ file: ChangedFile?) {
         selectedFile = file
         selectedFilePaths = file.map { [$0.path] } ?? []
-        loadDiff()
     }
 
     /// Updates the multi-selection from the list's native shift/cmd-click selection. The diff
@@ -156,14 +190,12 @@ final class AppState {
         selectedFilePaths = paths
         guard !paths.isEmpty else {
             selectedFile = nil
-            loadDiff()
             return
         }
         let added = paths.subtracting(previousPaths)
         let primaryPath = added.first ?? (paths.count == 1 ? paths.first : selectedFile?.path)
         let primaryFile = changedFiles.first(where: { $0.path == primaryPath }) ?? changedFiles.first(where: { paths.contains($0.path) })
         selectedFile = primaryFile
-        loadDiff()
     }
 
     func discardChanges(for file: ChangedFile) {
@@ -175,8 +207,7 @@ final class AppState {
         do {
             try repo.discardChanges(for: files)
             errorMessage = nil
-            loadChangedFiles()
-            selectFile(changedFiles.first)
+            Task { await loadChangedFilesForCurrentSelection(immediate: true) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -191,8 +222,7 @@ final class AppState {
         do {
             try repo.ignoreFiles(files)
             errorMessage = nil
-            loadChangedFiles()
-            selectFile(changedFiles.first)
+            Task { await loadChangedFilesForCurrentSelection(immediate: true) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -260,9 +290,11 @@ final class AppState {
         do {
             try repo.markResolved(file)
             errorMessage = nil
-            loadChangedFiles(preserveChecks: true)
-            if selectedFile?.path == file.path {
-                loadDiff()
+            Task {
+                await loadChangedFilesForCurrentSelection(preserveChecks: true, immediate: true, resetSelection: false)
+                if selectedFile?.path == file.path {
+                    await loadDiffForCurrentSelection(immediate: true)
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -449,38 +481,135 @@ final class AppState {
         }
     }
 
+    /// Incremented at the start of every `handleExternalChange()` call; a snapshot is only
+    /// applied if this still matches by the time its (unstructured, uncancellable) `Task`
+    /// finishes. FSEvents can fire `handleExternalChange()` multiple times in quick succession
+    /// (e.g. several `.git/index` writes during one `git pull`), each starting its own
+    /// `Task.detached` snapshot fetch of unpredictable duration — without this guard, an older
+    /// call's slower fetch finishing after a newer one's would overwrite fresher state with stale
+    /// branches/commits/changed-files.
+    private var externalChangeGeneration = 0
+
+    private struct ExternalChangeSnapshot {
+        var isMergeInProgress: Bool
+        var mergeMessage: String?
+        var branches: [GitBranch]
+        var selectedBranch: GitBranch?
+        var isDetachedHead: Bool
+        var detachedHeadShortSHA: String?
+        var errorMessage: String?
+        var commits: [GitCommit]
+        var aheadBehind: (ahead: Int, behind: Int)?
+        var changedFiles: [ChangedFile]
+        var statusEntries: [ChangedFile]
+    }
+
     /// Re-syncs branches/commits/files/diff after an FSEvents notification, without disturbing
     /// the user's current selection the way `refreshRepositoryState()`'s initial-selection
-    /// heuristic would.
+    /// heuristic would. `RepoWatcher` watches `.git` itself, and our own git calls (even ones
+    /// already off the main thread) can touch `.git/index` and retrigger it — so this used to be
+    /// a real, confirmed-via-Instruments source of main-thread hangs on every such retrigger,
+    /// same class of bug as the sidebar's redundant reselect but via a different path. All the
+    /// git work now happens in `Task.detached`, same pattern as the selection loads.
     private func handleExternalChange() {
         guard let repo = currentRepository else { return }
-        isMergeInProgress = repo.isMergeInProgress()
-        mergeMessage = repo.mergeMessage()
-        if isMergeInProgress, commitMessage.isEmpty {
-            commitMessage = mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        }
-        do {
-            branches = try repo.branches()
-            if let current = branches.first(where: { $0.isCurrent }) {
-                selectedBranch = current
-                isDetachedHead = false
-                detachedHeadShortSHA = nil
-            } else {
-                selectedBranch = nil
-                isDetachedHead = true
-                detachedHeadShortSHA = repo.currentHEADShortSHA()
+        let source = selectedSource
+        let previousSelectedFile = selectedFile
+        let previousCheckedFilePaths = checkedFilePaths
+        let previousChangedFilePaths = Set(changedFiles.map(\.path))
+        externalChangeGeneration += 1
+        let generation = externalChangeGeneration
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let snapshot = await Task.detached(priority: .userInitiated) { () -> ExternalChangeSnapshot in
+                let isMergeInProgress = repo.isMergeInProgress()
+                let mergeMessage = repo.mergeMessage()
+
+                var branches: [GitBranch] = []
+                var selectedBranch: GitBranch?
+                var isDetachedHead = false
+                var detachedHeadShortSHA: String?
+                var errorMessage: String?
+                do {
+                    branches = try repo.branches()
+                    if let current = branches.first(where: { $0.isCurrent }) {
+                        selectedBranch = current
+                    } else {
+                        isDetachedHead = true
+                        detachedHeadShortSHA = repo.currentHEADShortSHA()
+                    }
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+
+                let commits = selectedBranch.flatMap { try? repo.commitLog(branch: $0.name) } ?? []
+                let aheadBehind = repo.aheadBehind()
+
+                var changedFiles: [ChangedFile] = []
+                var statusEntries: [ChangedFile] = []
+                if let source, let result = try? repo.changedFilesWithStatus(for: source) {
+                    changedFiles = result.files
+                    statusEntries = result.statusEntries
+                }
+
+                return ExternalChangeSnapshot(
+                    isMergeInProgress: isMergeInProgress,
+                    mergeMessage: mergeMessage,
+                    branches: branches,
+                    selectedBranch: selectedBranch,
+                    isDetachedHead: isDetachedHead,
+                    detachedHeadShortSHA: detachedHeadShortSHA,
+                    errorMessage: errorMessage,
+                    commits: commits,
+                    aheadBehind: aheadBehind,
+                    changedFiles: changedFiles,
+                    statusEntries: statusEntries
+                )
+            }.value
+
+            // A newer `handleExternalChange()` call started (and possibly already applied its
+            // own snapshot) while this one's detached fetch was still in flight — drop this
+            // stale result instead of overwriting fresher state with it.
+            guard generation == self.externalChangeGeneration else { return }
+
+            self.isMergeInProgress = snapshot.isMergeInProgress
+            self.mergeMessage = snapshot.mergeMessage
+            if self.isMergeInProgress, self.commitMessage.isEmpty {
+                self.commitMessage = snapshot.mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             }
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        loadCommitLog()
-        refreshSyncStatus()
-        loadChangedFiles(preserveChecks: true)
-        if let selectedFile, changedFiles.contains(selectedFile) {
-            loadDiff()
-        } else {
-            selectFile(changedFiles.first)
+            self.branches = snapshot.branches
+            self.selectedBranch = snapshot.selectedBranch
+            self.isDetachedHead = snapshot.isDetachedHead
+            self.detachedHeadShortSHA = snapshot.detachedHeadShortSHA
+            self.errorMessage = snapshot.errorMessage
+            self.commits = snapshot.commits
+            if let aheadBehind = snapshot.aheadBehind {
+                self.hasUpstream = true
+                self.aheadCount = aheadBehind.ahead
+                self.behindCount = aheadBehind.behind
+            } else {
+                self.hasUpstream = false
+                self.aheadCount = 0
+                self.behindCount = 0
+            }
+            if source != nil {
+                self.changedFiles = snapshot.changedFiles
+                self.updateUncommittedSummary(repo: repo, statusEntries: snapshot.statusEntries)
+                let currentPaths = Set(snapshot.changedFiles.map(\.path))
+                self.checkedFilePaths = previousCheckedFilePaths.intersection(currentPaths)
+                    .union(currentPaths.subtracting(previousChangedFilePaths))
+            }
+            if let previousSelectedFile, self.changedFiles.contains(previousSelectedFile) {
+                // Same file still selected, but its on-disk content may have changed — the
+                // `.task(id:)` that normally loads the diff only reacts to the *selection*
+                // changing, so bump this token to make it re-fire instead of calling the loader
+                // directly here (which could otherwise race a load `DiffView`'s own `.task(id:)`
+                // starts concurrently for the same file).
+                self.diffReloadToken += 1
+            } else {
+                self.selectFile(self.changedFiles.first)
+            }
         }
     }
 
@@ -489,18 +618,74 @@ final class AppState {
         uncommittedLastModifiedDate = repo.lastModifiedDate(for: statusEntries.map(\.path))
     }
 
-    private func loadChangedFiles(preserveChecks: Bool = false) {
+    /// macOS's key-repeat interval, even at a middling (non-"Fast") setting, is often close to
+    /// what an 80ms window allows through — each repeat can "win" its own debounce window before
+    /// the next one arrives, so almost nothing actually gets coalesced. A wider margin makes
+    /// suppression reliable across repeat-rate settings without being perceptible as added
+    /// latency for a deliberate, single selection.
+    private static let selectionDebounceNanoseconds: UInt64 = 180_000_000
+
+    /// Sleeps out the debounce window and reports whether the caller should proceed (`false`
+    /// means a newer selection superseded this one while sleeping, so no real work should start
+    /// at all — as opposed to starting it and discarding the result).
+    private func debounceSelection() async -> Bool {
+        try? await Task.sleep(nanoseconds: Self.selectionDebounceNanoseconds)
+        return !Task.isCancelled
+    }
+
+    /// Loads the changed-files list for the current selection. Called from `ChangedFilesView`'s
+    /// `.task(id: appState.selectedSource)`, so SwiftUI cancels this `Task` the moment the
+    /// selection changes again — that cancellation does *not* propagate into `Task.detached` on
+    /// its own, which is why `debounceSelection()` checks `Task.isCancelled` itself before
+    /// starting any real work. The git subprocess work runs via `Task.detached` because that's
+    /// what actually gets it off the main thread — a `nonisolated async` function alone does not,
+    /// under this project's `NonisolatedNonsendingByDefault` build setting (it runs on the
+    /// caller's actor instead of hopping to a background executor). `GitRepository` shells out to
+    /// `/usr/bin/git` synchronously (`Process` + `waitUntilExit()`) — for a commit touching
+    /// thousands of files that alone can block a thread for over a second (confirmed via
+    /// Instruments' Hangs instrument), so it must never run inline on the main thread.
+    ///
+    /// `immediate` skips both the debounce and the `Task.detached` hop, for callers
+    /// (`discardChanges`/`ignoreFiles`/`markResolved`) that already know exactly what changed and
+    /// want their own action reflected right away rather than waiting out a debounce meant for
+    /// coalescing rapid *selection* changes. `resetSelection` is `false` for `markResolved`, which
+    /// wants to keep the same file selected (just refresh its status) rather than jumping to the
+    /// first file in the reloaded list.
+    func loadChangedFilesForCurrentSelection(preserveChecks: Bool = false, immediate: Bool = false, resetSelection: Bool = true) async {
         guard let repo = currentRepository, let source = selectedSource else {
             changedFiles = []
+            if resetSelection { selectFile(nil) }
             return
         }
-        let previousPaths = Set(changedFiles.map(\.path))
-        do {
+        // Skip the debounce on the very first load into an empty list (e.g. right after
+        // `selectRepo` clears it) — there's nothing on screen yet for a debounce to protect
+        // against flashing, only added latency before the first paint.
+        let isInitialLoad = changedFiles.isEmpty
+        if !immediate && !isInitialLoad {
+            guard await debounceSelection() else { return }
+        }
+
+        let outcome: Result<(files: [ChangedFile], statusEntries: [ChangedFile]), Error>
+        if immediate {
+            outcome = Result { try repo.changedFilesWithStatus(for: source) }
+        } else {
+            outcome = await Task.detached(priority: .userInitiated) {
+                Result { try repo.changedFilesWithStatus(for: source) }
+            }.value
+            // The `.task(id:)` driving this was cancelled by a newer selection while the git call
+            // was in flight — drop this now-stale result instead of flashing it onto the wrong
+            // selection before the newer load's own result arrives.
+            guard !Task.isCancelled else { return }
+        }
+
+        switch outcome {
+        case .success(let result):
+            let previousPaths = Set(changedFiles.map(\.path))
+            changedFiles = result.files
+            updateUncommittedSummary(repo: repo, statusEntries: result.statusEntries)
             switch source {
             case .workingChanges:
-                changedFiles = try repo.statusEntries()
-                updateUncommittedSummary(repo: repo, statusEntries: changedFiles)
-                let currentPaths = Set(changedFiles.map(\.path))
+                let currentPaths = Set(result.files.map(\.path))
                 if preserveChecks {
                     // Keep the user's check state for files that are still around, and default
                     // newly-appeared files to checked, rather than resetting everything.
@@ -509,19 +694,23 @@ final class AppState {
                 } else {
                     checkedFilePaths = currentPaths
                 }
-            case .commit(let commit):
-                changedFiles = try repo.filesChanged(in: commit)
+            case .commit:
                 checkedFilePaths = []
-                updateUncommittedSummary(repo: repo, statusEntries: (try? repo.statusEntries()) ?? [])
             }
             errorMessage = nil
-        } catch {
+        case .failure(let error):
             errorMessage = error.localizedDescription
             changedFiles = []
         }
+        if resetSelection {
+            selectFile(changedFiles.first)
+        }
     }
 
-    private func loadDiff() {
+    /// Loads the diff for the current file selection — see `loadChangedFilesForCurrentSelection`,
+    /// including what `immediate` means. Called from `DiffView`'s `.task(id:)`, keyed on the
+    /// selected file, source, and `diffReloadToken`.
+    func loadDiffForCurrentSelection(immediate: Bool = false) async {
         guard let repo = currentRepository, let file = selectedFile, let source = selectedSource else {
             diffText = ""
             imageDiffOld = nil
@@ -529,33 +718,39 @@ final class AppState {
             return
         }
         if file.isLikelyImage {
+            // Just Data(contentsOf:) on disk — cheap enough to stay synchronous.
             let contents = repo.imageContents(for: file, in: source)
             diffText = ""
             errorMessage = nil
             // Only touch these if the bytes actually changed — an unconditional nil-then-set
-            // makes the image view flash to its empty state on every FSEvents-triggered
-            // refresh, even when this file didn't change.
+            // makes the image view flash to its empty state on every FSEvents-triggered refresh,
+            // even when this file didn't change.
             if contents.old != imageDiffOld { imageDiffOld = contents.old }
             if contents.new != imageDiffNew { imageDiffNew = contents.new }
             return
         }
         imageDiffOld = nil
         imageDiffNew = nil
-        do {
-            if file.status == .conflicted {
-                // Raw working-tree contents (with git's own conflict markers), not a real diff —
-                // `git diff` of a conflicted path isn't the useful thing to show here.
-                diffText = try repo.conflictedFileContents(file)
-            } else {
-                switch source {
-                case .workingChanges:
-                    diffText = try repo.diff(for: file)
-                case .commit(let commit):
-                    diffText = try repo.diff(for: file, in: commit)
-                }
-            }
+        // Skip the debounce on the very first diff load (nothing on screen yet to protect).
+        let isInitialLoad = diffText.isEmpty
+        if !immediate && !isInitialLoad {
+            guard await debounceSelection() else { return }
+        }
+
+        let outcome: Result<String, Error>
+        if immediate {
+            outcome = Result { try repo.diffText(for: file, in: source) }
+        } else {
+            outcome = await Task.detached(priority: .userInitiated) {
+                Result { try repo.diffText(for: file, in: source) }
+            }.value
+            guard !Task.isCancelled else { return }
+        }
+        switch outcome {
+        case .success(let text):
+            diffText = text
             errorMessage = nil
-        } catch {
+        case .failure(let error):
             errorMessage = error.localizedDescription
             diffText = ""
         }
