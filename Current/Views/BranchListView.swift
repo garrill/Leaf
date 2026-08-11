@@ -28,6 +28,12 @@ struct BranchListView: View {
                         }
                     }
                     .listRowSeparator(.visible)
+
+                    if appState.stashCount > 0 {
+                        stashedChangesRow
+                            .tag(ChangeSource.stash)
+                            .listRowSeparator(.visible)
+                    }
                 } header: {
                     sectionHeader("Local changes", systemImage: "doc")
                 }
@@ -111,6 +117,17 @@ struct BranchListView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var stashedChangesRow: some View {
+        HStack {
+            Text("Stashed Changes")
+            Spacer()
+            Text("\(appState.stashCount)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 6)
     }

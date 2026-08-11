@@ -60,6 +60,8 @@ struct ChangedFilesView: View {
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 if isWorkingChanges && !appState.changedFiles.isEmpty {
                     CommitFooterView(appState: appState)
+                } else if isStash && !appState.changedFiles.isEmpty {
+                    StashFooterView(appState: appState)
                 }
             }
 
@@ -101,6 +103,7 @@ struct ChangedFilesView: View {
         switch appState.selectedSource {
         case .none: return ""
         case .workingChanges: return "Uncommitted Changes"
+        case .stash: return "Stashed Changes"
         case .commit(let commit): return commit.summary
         }
     }
@@ -156,6 +159,9 @@ struct ChangedFilesView: View {
             }
             if isWorkingChanges, file.status != .conflicted {
                 Divider()
+                Button("Stash Changes") {
+                    appState.stashChanges(for: [file])
+                }
                 Button("Discard Changes", role: .destructive) {
                     appState.discardChanges(for: file)
                 }
@@ -175,6 +181,9 @@ struct ChangedFilesView: View {
                 let discardableFiles = files.filter { $0.status != .conflicted }
                 if !discardableFiles.isEmpty {
                     Divider()
+                    Button("Stash \(discardableFiles.count) Files") {
+                        appState.stashChanges(for: discardableFiles)
+                    }
                     Button("Discard Changes in \(discardableFiles.count) Files", role: .destructive) {
                         appState.discardChanges(for: discardableFiles)
                     }
@@ -200,6 +209,10 @@ struct ChangedFilesView: View {
 
     private var isWorkingChanges: Bool {
         appState.selectedSource == .workingChanges
+    }
+
+    private var isStash: Bool {
+        appState.selectedSource == .stash
     }
 
     private var showsList: Bool {
@@ -316,5 +329,30 @@ private struct CommitFooterView: View {
         }
         let branchName = appState.selectedBranch?.name ?? "…"
         return "Commit \(checkedCount) file\(checkedCount == 1 ? "" : "s") to \(branchName)"
+    }
+}
+
+/// Footer shown when the top-of-stack stash is selected — no commit message, just the two
+/// actions that make sense for a stash: apply-and-drop it back into the working tree, or drop it
+/// unapplied.
+private struct StashFooterView: View {
+    @Bindable var appState: AppState
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Divider()
+            HStack(spacing: 8) {
+                Button("Discard", role: .destructive) {
+                    appState.discardStash()
+                }
+                .buttonStyle(.bordered)
+                Button("Restore") {
+                    appState.restoreStash()
+                }
+                .buttonStyle(.glassProminent)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(10)
     }
 }

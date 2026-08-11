@@ -17,6 +17,7 @@ final class AppState {
     var changedFiles: [ChangedFile] = []
     var uncommittedChangeCount: Int = 0
     var uncommittedLastModifiedDate: Date?
+    var stashCount: Int = 0
     var selectedFile: ChangedFile?
     /// All files selected in the changed-files list, for shift/cmd multi-select and batch
     /// actions. Always a superset containing `selectedFile` when non-empty.
@@ -151,11 +152,30 @@ final class AppState {
             do {
                 try repo.checkout(branch: branch.name)
                 errorMessage = nil
+            } catch let GitError.commandFailed(message) where Self.isLocalChangesCheckoutFailure(message) {
+                // Checkout is blocked by a dirty working tree — auto-stash (silently, including
+                // untracked files) and retry rather than surfacing an error the user would just
+                // have to work around manually. The stash is left in the list for manual restore.
+                do {
+                    try repo.stashChanges(paths: [], includeUntracked: true)
+                    try repo.checkout(branch: branch.name)
+                    errorMessage = nil
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
         refreshRepositoryState()
+    }
+
+    /// Matches git's checkout-blocked-by-local-changes wording (both the tracked- and
+    /// untracked-file variants) so an auto-stash-and-retry only kicks in for that specific
+    /// failure, not any other reason `checkout` might fail (bad ref, detached HEAD oddities, etc).
+    private static func isLocalChangesCheckoutFailure(_ message: String) -> Bool {
+        message.contains("Please commit your changes or stash them before you switch branches")
+            || message.contains("The following untracked working tree files would be overwritten")
     }
 
     /// Records the selection and clears the previous source's file selection/diff — `ChangedFilesView`'s
@@ -208,6 +228,52 @@ final class AppState {
             try repo.discardChanges(for: files)
             errorMessage = nil
             Task { await loadChangedFilesForCurrentSelection(immediate: true) }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Stashes the given files (`git stash push`), including untracked ones if any target file
+    /// is untracked. Uses `refreshRepositoryState()` rather than the lighter
+    /// `loadChangedFilesForCurrentSelection` — stashing can empty out `.workingChanges` entirely,
+    /// and the selection needs to re-derive through `refreshRepositoryState()`'s fallback chain
+    /// (which now checks the stash before falling through to history).
+    func stashChanges(for files: [ChangedFile]) {
+        guard let repo = currentRepository, !files.isEmpty else { return }
+        let includeUntracked = files.contains { $0.status == .untracked }
+        do {
+            try repo.stashChanges(paths: files.map(\.path), includeUntracked: includeUntracked)
+            errorMessage = nil
+            refreshRepositoryState()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Applies and drops the top-of-stack stash. On a conflicting pop, the stash is left in
+    /// place by git and the working tree gets conflict markers with no `MERGE_HEAD` — landing on
+    /// Uncommitted Changes lets the existing per-row "Mark Resolved" flow handle it like any
+    /// other on-disk conflict, rather than needing a separate stash-conflict UI.
+    func restoreStash() {
+        guard let repo = currentRepository else { return }
+        do {
+            let result = try repo.restoreStash()
+            errorMessage = nil
+            refreshRepositoryState()
+            if result == .conflicts {
+                selectSource(.workingChanges)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func discardStash() {
+        guard let repo = currentRepository else { return }
+        do {
+            try repo.discardStash()
+            errorMessage = nil
+            refreshRepositoryState()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -410,6 +476,7 @@ final class AppState {
             branches = []
             commits = []
             changedFiles = []
+            stashCount = 0
             selectedBranch = nil
             selectedSource = nil
             selectedFile = nil
@@ -456,10 +523,13 @@ final class AppState {
         }
         loadCommitLog()
         refreshSyncStatus()
+        stashCount = repo.stashCount()
 
         let hasUncommittedChanges = (try? repo.statusEntries().isEmpty == false) ?? false
         if hasUncommittedChanges {
             selectSource(.workingChanges)
+        } else if stashCount > 0 {
+            selectSource(.stash)
         } else if let firstCommit = commits.first {
             selectSource(.commit(firstCommit))
         } else {
@@ -502,6 +572,7 @@ final class AppState {
         var aheadBehind: (ahead: Int, behind: Int)?
         var changedFiles: [ChangedFile]
         var statusEntries: [ChangedFile]
+        var stashCount: Int
     }
 
     /// Re-syncs branches/commits/files/diff after an FSEvents notification, without disturbing
@@ -552,6 +623,7 @@ final class AppState {
                     changedFiles = result.files
                     statusEntries = result.statusEntries
                 }
+                let stashCount = repo.stashCount()
 
                 return ExternalChangeSnapshot(
                     isMergeInProgress: isMergeInProgress,
@@ -564,7 +636,8 @@ final class AppState {
                     commits: commits,
                     aheadBehind: aheadBehind,
                     changedFiles: changedFiles,
-                    statusEntries: statusEntries
+                    statusEntries: statusEntries,
+                    stashCount: stashCount
                 )
             }.value
 
@@ -584,6 +657,7 @@ final class AppState {
             self.detachedHeadShortSHA = snapshot.detachedHeadShortSHA
             self.errorMessage = snapshot.errorMessage
             self.commits = snapshot.commits
+            self.stashCount = snapshot.stashCount
             if let aheadBehind = snapshot.aheadBehind {
                 self.hasUpstream = true
                 self.aheadCount = aheadBehind.ahead
@@ -694,7 +768,7 @@ final class AppState {
                 } else {
                     checkedFilePaths = currentPaths
                 }
-            case .commit:
+            case .stash, .commit:
                 checkedFilePaths = []
             }
             errorMessage = nil

@@ -75,6 +75,9 @@ struct GitCommit: Identifiable, Hashable {
 
 enum ChangeSource: Hashable {
     case workingChanges
+    /// Only ever addresses the top of the stack (`stash@{0}`) — the app shows a single
+    /// aggregate "Stashed Changes" entry rather than browsing individual stash entries.
+    case stash
     case commit(GitCommit)
 }
 
@@ -341,6 +344,17 @@ nonisolated struct GitRepository {
                 ? nil
                 : blobData("HEAD:\(file.path)")
             return (oldData, newData)
+        case .stash:
+            // An untracked file's blob lives under `stash@{0}^3` (the separate untracked-files
+            // commit `-u` creates), not the main stash tree — `stash@{0}:path` fails outright for
+            // it (confirmed empirically), so this needs its own branch rather than reusing the
+            // tracked-file logic below.
+            if file.status == .untracked {
+                return (nil, blobData("stash@{0}^3:\(file.path)"))
+            }
+            let newData = file.status == .deleted ? nil : blobData("stash@{0}:\(file.path)")
+            let oldData = file.status == .added ? nil : blobData("stash@{0}^1:\(file.path)")
+            return (oldData, newData)
         case .commit(let commit):
             let newData = file.status == .deleted ? nil : blobData("\(commit.sha):\(file.path)")
             let oldData = file.status == .added ? nil : blobData("\(commit.sha)^:\(file.path)")
@@ -402,9 +416,9 @@ nonisolated struct GitRepository {
             }
     }
 
-    func filesChanged(in commit: GitCommit) throws -> [ChangedFile] {
-        let output = try run(["show", "--format=", "--name-status", commit.sha])
-        return output
+    /// Parses `--name-status` output shared by both the commit and stash paths.
+    private static func parseNameStatus(_ output: String) -> [ChangedFile] {
+        output
             .split(separator: "\n")
             .compactMap { line -> ChangedFile? in
                 let parts = line.split(separator: "\t")
@@ -417,8 +431,49 @@ nonisolated struct GitRepository {
             }
     }
 
+    func filesChanged(in commit: GitCommit) throws -> [ChangedFile] {
+        Self.parseNameStatus(try run(["show", "--format=", "--name-status", commit.sha]))
+    }
+
+    /// True if `ref` (a commit-ish) has a parent at the given index — used to detect whether a
+    /// stash entry has an untracked-files commit (`^3`), which only exists when the stash was
+    /// created with `-u`/`--include-untracked`.
+    private func hasParent(_ ref: String) -> Bool {
+        (try? run(["rev-parse", "--verify", "--quiet", ref])) != nil
+    }
+
+    /// Files touched by a stash entry. `git show <ref>` can't be used here the way it is for
+    /// ordinary commits — a stash entry created with `-u` is a 3-parent commit, and `git show`'s
+    /// default combined-diff format for merge commits only lists paths that differ from *every*
+    /// parent, which silently drops untracked-only files (confirmed empirically: a stash holding
+    /// only a new untracked file shows an empty `--name-status`, and `stash@{0}:path` fails
+    /// outright for it since the untracked file lives in a separate `^3` tree, not the main one).
+    /// Tracked changes are found via a plain 2-way diff against the base commit (`^1`) instead,
+    /// which avoids the combined-diff format entirely; untracked files (if a `^3` parent exists)
+    /// are enumerated directly from that parent's tree, since every path in it is untracked by
+    /// definition — no diffing needed.
+    func filesChanged(inStash ref: String = "stash@{0}") throws -> [ChangedFile] {
+        var files = Self.parseNameStatus(try run(["diff", "--name-status", "\(ref)^1", ref]))
+        if hasParent("\(ref)^3") {
+            let untrackedOutput = try run(["ls-tree", "-r", "--name-only", "\(ref)^3"])
+            files += untrackedOutput
+                .split(separator: "\n")
+                .map { ChangedFile(path: Self.unquoteGitPath(String($0)), status: .untracked) }
+        }
+        return files
+    }
+
     func diff(for file: ChangedFile, in commit: GitCommit) throws -> String {
         try run(["show", commit.sha, "--", file.path])
+    }
+
+    /// See `filesChanged(inStash:)` for why a stash's tracked/untracked files need different
+    /// bases: tracked changes diff against the base commit (`^1`); untracked files only exist
+    /// under the separate `^3` parent, so they diff against that instead (base commit vs. `^3`
+    /// reads as "file newly added," matching how untracked files show up everywhere else).
+    func diff(for file: ChangedFile, inStash ref: String = "stash@{0}") throws -> String {
+        let target = file.status == .untracked ? "\(ref)^3" : ref
+        return try run(["diff", "\(ref)^1", target, "--", file.path])
     }
 
     func commit(message: String, paths: [String], unstagePaths: [String]) throws {
@@ -499,6 +554,55 @@ nonisolated struct GitRepository {
         try String(contentsOf: rootURL.appendingPathComponent(file.path), encoding: .utf8)
     }
 
+    func stashList() -> [String] {
+        (try? run(["stash", "list"]))?
+            .split(separator: "\n")
+            .map(String.init) ?? []
+    }
+
+    func stashCount() -> Int {
+        stashList().count
+    }
+
+    /// Stashes dirty paths. Empty `paths` stashes everything dirty (used for the
+    /// auto-stash-on-checkout-failure path in `AppState.selectBranch`); non-empty `paths`
+    /// stashes only those files, matching the per-file precedent set by `discardChanges`/`ignoreFiles`.
+    func stashChanges(paths: [String], includeUntracked: Bool) throws {
+        var arguments = ["stash", "push"]
+        if includeUntracked {
+            arguments.append("-u")
+        }
+        if !paths.isEmpty {
+            arguments.append("--")
+            arguments.append(contentsOf: paths)
+        }
+        try run(arguments)
+    }
+
+    enum StashRestoreResult {
+        case success
+        case conflicts
+    }
+
+    /// Applies and drops the top-of-stack stash (`git stash pop`). A conflicting pop exits
+    /// nonzero but, unlike a conflicting merge, leaves no `.git/MERGE_HEAD` marker — the only
+    /// ground truth available afterward is `git status` itself reporting conflicted paths, which
+    /// is what distinguishes a real conflict (stash left in place, working tree gets conflict
+    /// markers) from a plain pre-check failure (stash left in place, nothing on disk changed).
+    func restoreStash() throws -> StashRestoreResult {
+        let (_, stderr, exitCode) = try runRaw(["stash", "pop"])
+        if exitCode == 0 { return .success }
+        if let entries = try? statusEntries(), entries.contains(where: { $0.status == .conflicted }) {
+            return .conflicts
+        }
+        throw GitError.commandFailed(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Drops the top-of-stack stash without applying it.
+    func discardStash() throws {
+        try run(["stash", "drop"])
+    }
+
     func discardChanges(for file: ChangedFile) throws {
         if file.status == .untracked {
             try run(["clean", "-f", "--", file.path])
@@ -551,6 +655,10 @@ nonisolated struct GitRepository {
         case .workingChanges:
             let entries = try statusEntries()
             return (entries, entries)
+        case .stash:
+            let files = try filesChanged(inStash: "stash@{0}")
+            let statusEntries = (try? self.statusEntries()) ?? []
+            return (files, statusEntries)
         case .commit(let commit):
             let files = try filesChanged(in: commit)
             let statusEntries = (try? self.statusEntries()) ?? []
@@ -568,6 +676,8 @@ nonisolated struct GitRepository {
         switch source {
         case .workingChanges:
             return try diff(for: file)
+        case .stash:
+            return try diff(for: file, inStash: "stash@{0}")
         case .commit(let commit):
             return try diff(for: file, in: commit)
         }
