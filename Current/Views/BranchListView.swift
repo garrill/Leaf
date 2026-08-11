@@ -75,6 +75,9 @@ struct BranchListView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $appState.isNewBranchSheetPresented) {
+            NewBranchSheet(appState: appState, isPresented: $appState.isNewBranchSheetPresented)
+        }
         .task {
             localSelection = appState.selectedSource
         }

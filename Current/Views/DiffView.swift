@@ -203,7 +203,7 @@ struct DiffView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else if appState.diffText.isEmpty {
-            ContentUnavailableView("No Changes To Show", systemImage: "doc.text")
+            Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ScrollView {
@@ -236,7 +236,11 @@ struct DiffView: View {
                     .lineLimit(1)
                     .truncationMode(.head)
                     .truncationTooltip(appState.selectedFile?.path ?? "")
+            }
 
+            Spacer(minLength: 8)
+
+            if appState.selectedFile != nil {
                 if addedCount > 0 {
                     Text("+\(addedCount)")
                         .font(.system(.body, design: .monospaced))
@@ -248,8 +252,6 @@ struct DiffView: View {
                         .foregroundStyle(Self.removedTextColor)
                 }
             }
-
-            Spacer(minLength: 8)
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)

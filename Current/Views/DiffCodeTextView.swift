@@ -151,7 +151,20 @@ final class DiffCodeTextView: NSTextView {
     /// instead of spanning the full row the way the old SwiftUI `Text` rows did.
     override func draw(_ dirtyRect: NSRect) {
         if let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 {
-            let glyphRange = layoutManager.glyphRange(forBoundingRect: dirtyRect, in: textContainer)
+            // Padded past the dirty rect's own edges for the same reason as `DiffGutterView.draw`
+            // and `HunkSeparatorOverlayView.draw` — a hunk-start line's raw fragment rect extends
+            // above its visible row by the hunk-gap height, so a tight search rect can
+            // inconsistently miss that fragment depending on rounding, leaving its background
+            // unpainted on a partial (scroll-driven) redraw even though a full-bounds redraw
+            // (e.g. from resizing the window) always finds it.
+            let padding = HunkSeparatorOverlayView.gapHeight
+            let searchRect = NSRect(
+                x: 0,
+                y: dirtyRect.minY - padding,
+                width: bounds.width,
+                height: dirtyRect.height + padding * 2
+            )
+            let glyphRange = layoutManager.glyphRange(forBoundingRect: searchRect, in: textContainer)
             layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { fragRect, _, _, fragGlyphRange, _ in
                 guard fragGlyphRange.location < layoutManager.numberOfGlyphs else { return }
                 let charIndex = layoutManager.characterIndexForGlyph(at: fragGlyphRange.location)

@@ -366,6 +366,11 @@ nonisolated struct GitRepository {
         try run(["checkout", branch])
     }
 
+    /// Creates a new branch off HEAD and switches to it in one step (`git checkout -b`).
+    func createBranch(named name: String) throws {
+        try run(["checkout", "-b", name])
+    }
+
     /// Short SHA of HEAD, used to label a detached-HEAD state since there's no branch name to show.
     func currentHEADShortSHA() -> String? {
         (try? run(["rev-parse", "--short", "HEAD"]))?.trimmingCharacters(in: .whitespacesAndNewlines)

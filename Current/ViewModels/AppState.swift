@@ -54,6 +54,8 @@ final class AppState {
     var renamingFolderID: UUID?
     var renamingRepoID: UUID?
     var isCloneSheetPresented = false
+    var isNewBranchSheetPresented = false
+    var newBranchErrorMessage: String?
 
     /// GitHub owner (user/org) of the selected repo's `origin` remote, shown as the window
     /// subtitle. `nil` for non-GitHub remotes or repos with no `origin`.
@@ -157,15 +159,31 @@ final class AppState {
                 try repo.checkout(branch: branch.name)
                 errorMessage = nil
             } catch let GitError.commandFailed(message) where Self.isLocalChangesCheckoutFailure(message) {
-                // Checkout is blocked by a dirty working tree — auto-stash (silently, including
-                // untracked files) and retry rather than surfacing an error the user would just
-                // have to work around manually. The stash is left in the list for manual restore.
-                do {
-                    try repo.stashChanges(paths: [], includeUntracked: true)
-                    try repo.checkout(branch: branch.name)
-                    errorMessage = nil
-                } catch {
-                    errorMessage = error.localizedDescription
+                // Checkout is blocked by a dirty working tree — ask the user whether to bring
+                // those changes along to the new branch, stash them behind on the current one,
+                // or cancel the switch entirely, rather than silently guessing.
+                switch Self.promptForDirtyCheckout(to: branch.name) {
+                case .bringChanges:
+                    do {
+                        try repo.stashChanges(paths: [], includeUntracked: true)
+                        try repo.checkout(branch: branch.name)
+                        let result = try repo.restoreStash()
+                        errorMessage = result == .conflicts
+                            ? "Bringing your changes to \(branch.name) caused conflicts. Resolve them in Working Changes."
+                            : nil
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
+                case .stashChanges:
+                    do {
+                        try repo.stashChanges(paths: [], includeUntracked: true)
+                        try repo.checkout(branch: branch.name)
+                        errorMessage = nil
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
+                case .cancel:
+                    break
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -175,11 +193,48 @@ final class AppState {
     }
 
     /// Matches git's checkout-blocked-by-local-changes wording (both the tracked- and
-    /// untracked-file variants) so an auto-stash-and-retry only kicks in for that specific
+    /// untracked-file variants) so the dirty-checkout prompt only fires for that specific
     /// failure, not any other reason `checkout` might fail (bad ref, detached HEAD oddities, etc).
     private static func isLocalChangesCheckoutFailure(_ message: String) -> Bool {
         message.contains("Please commit your changes or stash them before you switch branches")
             || message.contains("The following untracked working tree files would be overwritten")
+    }
+
+    private enum DirtyCheckoutChoice {
+        case bringChanges
+        case stashChanges
+        case cancel
+    }
+
+    private static func promptForDirtyCheckout(to branchName: String) -> DirtyCheckoutChoice {
+        let alert = NSAlert()
+        alert.messageText = "You have uncommitted changes"
+        alert.informativeText = "Bring your changes to \"\(branchName)\", leave them stashed on the current branch, or cancel switching branches."
+        alert.addButton(withTitle: "Bring Changes")
+        alert.addButton(withTitle: "Stash Changes")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .bringChanges
+        case .alertSecondButtonReturn: return .stashChanges
+        default: return .cancel
+        }
+    }
+
+    /// Creates a new branch off HEAD and switches to it. `completion` reports success so the
+    /// sheet knows whether to dismiss itself, mirroring `cloneRepo`'s callback shape.
+    func createBranch(named name: String, completion: @escaping (Bool) -> Void) {
+        guard let repo = currentRepository else { completion(false); return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { completion(false); return }
+        do {
+            try repo.createBranch(named: trimmed)
+            newBranchErrorMessage = nil
+            refreshRepositoryState()
+            completion(true)
+        } catch {
+            newBranchErrorMessage = error.localizedDescription
+            completion(false)
+        }
     }
 
     /// Records the selection and clears the previous source's file selection/diff — `ChangedFilesView`'s

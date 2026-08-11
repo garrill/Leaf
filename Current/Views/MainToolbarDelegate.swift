@@ -150,6 +150,11 @@ private struct BranchMenuToolbarView: View {
 
     var body: some View {
         Menu {
+            Button("New Branch…") { appState.isNewBranchSheetPresented = true }
+                .disabled(appState.selectedRepoURL == nil)
+
+            Divider()
+
             ForEach(appState.branches) { branch in
                 if branch.isCurrent {
                     Label(branch.name, systemImage: "checkmark")
