@@ -18,6 +18,10 @@ final class AppState {
     var uncommittedChangeCount: Int = 0
     var uncommittedLastModifiedDate: Date?
     var stashCount: Int = 0
+    /// Files touched by the top-of-stack stash entry — what the "Stashed Changes" row's count
+    /// badge shows, as opposed to `stashCount` (number of stash *entries*, used only to decide
+    /// whether the row appears at all).
+    var stashFileCount: Int = 0
     var selectedFile: ChangedFile?
     /// All files selected in the changed-files list, for shift/cmd multi-select and batch
     /// actions. Always a superset containing `selectedFile` when non-empty.
@@ -477,6 +481,7 @@ final class AppState {
             commits = []
             changedFiles = []
             stashCount = 0
+            stashFileCount = 0
             selectedBranch = nil
             selectedSource = nil
             selectedFile = nil
@@ -524,6 +529,7 @@ final class AppState {
         loadCommitLog()
         refreshSyncStatus()
         stashCount = repo.stashCount()
+        stashFileCount = stashCount > 0 ? ((try? repo.filesChanged(inStash: "stash@{0}").count) ?? 0) : 0
 
         let hasUncommittedChanges = (try? repo.statusEntries().isEmpty == false) ?? false
         if hasUncommittedChanges {
@@ -573,6 +579,7 @@ final class AppState {
         var changedFiles: [ChangedFile]
         var statusEntries: [ChangedFile]
         var stashCount: Int
+        var stashFileCount: Int
     }
 
     /// Re-syncs branches/commits/files/diff after an FSEvents notification, without disturbing
@@ -624,6 +631,7 @@ final class AppState {
                     statusEntries = result.statusEntries
                 }
                 let stashCount = repo.stashCount()
+                let stashFileCount = stashCount > 0 ? ((try? repo.filesChanged(inStash: "stash@{0}").count) ?? 0) : 0
 
                 return ExternalChangeSnapshot(
                     isMergeInProgress: isMergeInProgress,
@@ -637,7 +645,8 @@ final class AppState {
                     aheadBehind: aheadBehind,
                     changedFiles: changedFiles,
                     statusEntries: statusEntries,
-                    stashCount: stashCount
+                    stashCount: stashCount,
+                    stashFileCount: stashFileCount
                 )
             }.value
 
@@ -658,6 +667,7 @@ final class AppState {
             self.errorMessage = snapshot.errorMessage
             self.commits = snapshot.commits
             self.stashCount = snapshot.stashCount
+            self.stashFileCount = snapshot.stashFileCount
             if let aheadBehind = snapshot.aheadBehind {
                 self.hasUpstream = true
                 self.aheadCount = aheadBehind.ahead

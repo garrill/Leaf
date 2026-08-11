@@ -125,7 +125,7 @@ struct BranchListView: View {
         HStack {
             Text("Stashed Changes")
             Spacer()
-            Text("\(appState.stashCount)")
+            Text("\(appState.stashFileCount)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
