@@ -4,6 +4,7 @@ struct FolderRowView: View {
     let folder: SidebarFolder
     let repoCount: Int
     let isRenaming: Bool
+    let isHovering: Bool
     let onToggle: () -> Void
     let onStartRename: () -> Void
     let onCommitRename: (String) -> Void
@@ -14,6 +15,13 @@ struct FolderRowView: View {
 
     var body: some View {
         HStack(spacing: 4) {
+            Image(systemName: folder.isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: isHovering ? 10 : 0)
+                .opacity(isHovering ? 1 : 0)
+                .clipped()
+
             if isRenaming {
                 TextField(folder.name, text: $draftName)
                     .textFieldStyle(.plain)
@@ -43,8 +51,8 @@ struct FolderRowView: View {
             }
         }
         .padding(.vertical, 4)
-        .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .animation(.easeOut(duration: 0.12), value: isHovering)
         .overlay {
             // Only exists (and only intercepts clicks) while NOT renaming — otherwise a plain
             // `.onTapGesture` on the whole row would swallow clicks meant to focus the TextField.
@@ -57,7 +65,7 @@ struct FolderRowView: View {
         .contextMenu {
             Button("Rename") { onStartRename() }
             Divider()
-            Button("Delete", role: .destructive) { onDelete() }
+            Button("Delete…", role: .destructive) { onDelete() }
         }
         .onAppear { beginRenamingIfNeeded() }
         .onChange(of: isRenaming) { _, renaming in
@@ -107,6 +115,7 @@ private struct FolderRowPreviewRepo: View {
             folder: SidebarFolder(id: UUID(), name: "Websites", isExpanded: true),
             repoCount: 3,
             isRenaming: false,
+            isHovering: false,
             onToggle: {},
             onStartRename: {},
             onCommitRename: { _ in },
@@ -120,6 +129,7 @@ private struct FolderRowPreviewRepo: View {
             folder: SidebarFolder(id: UUID(), name: "Apps", isExpanded: true),
             repoCount: 2,
             isRenaming: false,
+            isHovering: true,
             onToggle: {},
             onStartRename: {},
             onCommitRename: { _ in },
@@ -132,6 +142,7 @@ private struct FolderRowPreviewRepo: View {
             folder: SidebarFolder(id: UUID(), name: "Renaming Me", isExpanded: true),
             repoCount: 0,
             isRenaming: true,
+            isHovering: false,
             onToggle: {},
             onStartRename: {},
             onCommitRename: { _ in },

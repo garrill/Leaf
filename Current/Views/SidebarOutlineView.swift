@@ -25,6 +25,7 @@ struct SidebarOutlineView: NSViewRepresentable {
         outlineView.headerView = nil
         outlineView.style = .sourceList
         outlineView.rowHeight = 36
+        outlineView.indentationPerLevel = 0
         outlineView.backgroundColor = .clear
         outlineView.allowsMultipleSelection = false
         outlineView.dataSource = context.coordinator
@@ -47,29 +48,80 @@ struct SidebarOutlineView: NSViewRepresentable {
         context.coordinator.appState = appState
         context.coordinator.renamingFolderIDBinding = $renamingFolderID
         context.coordinator.renamingRepoIDBinding = $renamingRepoID
+
         // Reading these establishes the @Observable dependency that re-invokes updateNSView.
         _ = appState.sidebarStore.topLevelOrder
         _ = appState.sidebarStore.repos
         _ = appState.sidebarStore.folders
         _ = appState.selectedRepoURL
+
         context.coordinator.reloadPreservingState()
     }
 }
 
-/// Draws the selection highlight inset from the leading edge for rows nested inside a folder,
-/// so the selection pill starts at the item's own indentation rather than the outline view's edge.
+/// Draws the selection pill inset from the row's edges, matching the rounded highlight used by
+/// Finder/Mail-style sidebars.
+///
+/// The native NSOutlineView disclosure button is hidden while leaving the outline hierarchy
+/// intact, so NSOutlineView continues to handle expansion/collapse normally.
 final class SidebarTableRowView: NSTableRowView {
-    var leadingInset: CGFloat = 0
-
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
-        let color: NSColor = isEmphasized ? .selectedContentBackgroundColor : .unemphasizedSelectedContentBackgroundColor
-        var rect = bounds.insetBy(dx: 4, dy: 2)
-        rect.origin.x += leadingInset
-        rect.size.width -= leadingInset
+
+        let color: NSColor = isEmphasized
+            ? .selectedContentBackgroundColor
+            : .unemphasizedSelectedContentBackgroundColor
+
+        let rect = bounds.insetBy(dx: 4, dy: 2)
         let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+
         color.setFill()
         path.fill()
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+
+        // NSOutlineView adds its disclosure button to the row hierarchy.
+        // Hide it without disabling the outline view's normal expansion behaviour.
+        if let button = subview as? NSButton {
+            button.isHidden = true
+        }
+    }
+}
+
+/// A hosting view for `FolderRowView` that tracks real mouse hover via `NSTrackingArea` — SwiftUI's
+/// `.onHover` is unreliable this deep inside a reused `NSOutlineView` row cell, so hover is driven
+/// natively instead and pushed into the (otherwise value-type, stateless-for-this) `FolderRowView`
+/// by rebuilding `rootView` with the new value.
+final class FolderHoverHostingView: NSHostingView<FolderRowView> {
+    var onHoverChange: ((Bool) -> Void)?
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverChange?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHoverChange?(false)
     }
 }
 
@@ -83,10 +135,17 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     private var itemCache: [SidebarOutlineItem.Kind: SidebarOutlineItem] = [:]
     private var isApplyingSelection = false
+    private var hoveredFolderIDs: Set<UUID> = []
 
-    private var sidebarStore: SidebarStore { appState.sidebarStore }
+    private var sidebarStore: SidebarStore {
+        appState.sidebarStore
+    }
 
-    init(appState: AppState, renamingFolderID: Binding<UUID?>, renamingRepoID: Binding<UUID?>) {
+    init(
+        appState: AppState,
+        renamingFolderID: Binding<UUID?>,
+        renamingRepoID: Binding<UUID?>
+    ) {
         self.appState = appState
         self.renamingFolderIDBinding = renamingFolderID
         self.renamingRepoIDBinding = renamingRepoID
@@ -96,7 +155,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     private func item(forFolder id: UUID) -> SidebarOutlineItem {
         let key = SidebarOutlineItem.Kind.folder(id)
-        if let existing = itemCache[key] { return existing }
+
+        if let existing = itemCache[key] {
+            return existing
+        }
+
         let item = SidebarOutlineItem(kind: key)
         itemCache[key] = item
         return item
@@ -104,7 +167,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     private func item(forRepo id: UUID) -> SidebarOutlineItem {
         let key = SidebarOutlineItem.Kind.repo(id)
-        if let existing = itemCache[key] { return existing }
+
+        if let existing = itemCache[key] {
+            return existing
+        }
+
         let item = SidebarOutlineItem(kind: key)
         itemCache[key] = item
         return item
@@ -112,8 +179,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     private func item(for entry: TopLevelEntry) -> SidebarOutlineItem {
         switch entry {
-        case .folder(let id): return item(forFolder: id)
-        case .repo(let id): return item(forRepo: id)
+        case .folder(let id):
+            return item(forFolder: id)
+        case .repo(let id):
+            return item(forRepo: id)
         }
     }
 
@@ -127,6 +196,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     func reloadPreservingState() {
         guard let outlineView else { return }
+
         // `reloadData()` recreates every row's underlying item object, and can itself
         // synchronously fire `outlineViewSelectionDidChange` for the row that's already
         // selected purely because of that — not because the user (or `appState`) actually
@@ -138,22 +208,27 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         // app, like a commit-history selection settling), not just actual repo switches.
         // `applySelectionFromAppState()` below is what authoritatively reconciles the selection
         // afterward, so nothing is lost by ignoring whatever `reloadData()` does on its own.
+
         isApplyingSelection = true
         outlineView.reloadData()
         isApplyingSelection = false
+
         for folder in sidebarStore.folders {
             let item = item(forFolder: folder.id)
+
             if folder.isExpanded {
                 outlineView.expandItem(item)
             } else {
                 outlineView.collapseItem(item)
             }
         }
+
         applySelectionFromAppState()
     }
 
     private func applySelectionFromAppState() {
         guard let outlineView else { return }
+
         guard let url = appState.selectedRepoURL,
               let repo = sidebarStore.repos.first(where: { $0.url == url }) else {
             if outlineView.selectedRow >= 0 {
@@ -163,99 +238,186 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             }
             return
         }
+
         let item = item(forRepo: repo.id)
         let row = outlineView.row(forItem: item)
-        guard row >= 0, outlineView.selectedRow != row else { return }
+
+        guard row >= 0, outlineView.selectedRow != row else {
+            return
+        }
+
         isApplyingSelection = true
-        outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        outlineView.selectRowIndexes(
+            IndexSet(integer: row),
+            byExtendingSelection: false
+        )
         isApplyingSelection = false
     }
 
     // MARK: NSOutlineViewDataSource
 
-    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        guard let item else { return sidebarStore.topLevelOrder.count }
-        guard let boxed = item as? SidebarOutlineItem, case .folder(let id) = boxed.kind else { return 0 }
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        numberOfChildrenOfItem item: Any?
+    ) -> Int {
+        guard let item else {
+            return sidebarStore.topLevelOrder.count
+        }
+
+        guard let boxed = item as? SidebarOutlineItem,
+              case .folder(let id) = boxed.kind else {
+            return 0
+        }
+
         return children(ofFolder: id).count
     }
 
-    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        guard let item else { return self.item(for: sidebarStore.topLevelOrder[index]) }
-        guard let boxed = item as? SidebarOutlineItem, case .folder(let id) = boxed.kind else {
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        child index: Int,
+        ofItem item: Any?
+    ) -> Any {
+        guard let item else {
+            return self.item(for: sidebarStore.topLevelOrder[index])
+        }
+
+        guard let boxed = item as? SidebarOutlineItem,
+              case .folder(let id) = boxed.kind else {
             fatalError("Requested a child of a non-folder sidebar item")
         }
+
         return self.item(forRepo: children(ofFolder: id)[index].id)
     }
 
-    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        guard let boxed = item as? SidebarOutlineItem else { return false }
-        if case .folder = boxed.kind { return true }
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        isItemExpandable item: Any
+    ) -> Bool {
+        guard let boxed = item as? SidebarOutlineItem else {
+            return false
+        }
+
+        if case .folder = boxed.kind {
+            return true
+        }
+
         return false
     }
 
     // MARK: NSOutlineViewDelegate
 
-    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-        guard let boxed = item as? SidebarOutlineItem else { return nil }
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        viewFor tableColumn: NSTableColumn?,
+        item: Any
+    ) -> NSView? {
+        guard let boxed = item as? SidebarOutlineItem else {
+            return nil
+        }
+
         switch boxed.kind {
         case .folder(let id):
-            guard let folder = sidebarStore.folders.first(where: { $0.id == id }) else { return nil }
-            return makeFolderCell(folder: folder, outlineView: outlineView)
+            guard let folder = sidebarStore.folders.first(where: { $0.id == id }) else {
+                return nil
+            }
+
+            return makeFolderCell(
+                folder: folder,
+                outlineView: outlineView
+            )
+
         case .repo(let id):
-            guard let repo = sidebarStore.repos.first(where: { $0.id == id }) else { return nil }
-            return makeRepoCell(repo: repo, outlineView: outlineView)
+            guard let repo = sidebarStore.repos.first(where: { $0.id == id }) else {
+                return nil
+            }
+
+            return makeRepoCell(
+                repo: repo,
+                outlineView: outlineView
+            )
         }
     }
 
-    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        guard let boxed = item as? SidebarOutlineItem else { return false }
-        if case .repo = boxed.kind { return true }
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        shouldSelectItem item: Any
+    ) -> Bool {
+        guard let boxed = item as? SidebarOutlineItem else {
+            return false
+        }
+
+        if case .repo = boxed.kind {
+            return true
+        }
+
         return false
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
-        guard !isApplyingSelection, let outlineView else { return }
+        guard !isApplyingSelection, let outlineView else {
+            return
+        }
+
         let row = outlineView.selectedRow
+
         guard row >= 0,
               let boxed = outlineView.item(atRow: row) as? SidebarOutlineItem,
               case .repo(let id) = boxed.kind,
-              let repo = sidebarStore.repos.first(where: { $0.id == id }) else { return }
+              let repo = sidebarStore.repos.first(where: { $0.id == id }) else {
+            return
+        }
+
         appState.selectRepo(repo.url)
     }
 
     func outlineViewItemDidExpand(_ notification: Notification) {
         guard let boxed = notification.userInfo?["NSObject"] as? SidebarOutlineItem,
-              case .folder(let id) = boxed.kind else { return }
+              case .folder(let id) = boxed.kind else {
+            return
+        }
+
         sidebarStore.setFolderExpanded(id: id, true)
     }
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
         guard let boxed = notification.userInfo?["NSObject"] as? SidebarOutlineItem,
-              case .folder(let id) = boxed.kind else { return }
+              case .folder(let id) = boxed.kind else {
+            return
+        }
+
         sidebarStore.setFolderExpanded(id: id, false)
     }
 
-    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
-        let rowView = SidebarTableRowView()
-        if let boxed = item as? SidebarOutlineItem,
-           case .repo(let id) = boxed.kind,
-           let repo = sidebarStore.repos.first(where: { $0.id == id }),
-           repo.folderID != nil {
-            rowView.leadingInset = 20
-        }
-        return rowView
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        rowViewForItem item: Any
+    ) -> NSTableRowView? {
+        SidebarTableRowView()
     }
 
     // MARK: Drag and drop
 
-    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
-        guard let boxed = item as? SidebarOutlineItem else { return nil }
-        let payload: SidebarDragItem
-        switch boxed.kind {
-        case .folder(let id): payload = SidebarDragItem(kind: .folder, id: id)
-        case .repo(let id): payload = SidebarDragItem(kind: .repo, id: id)
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        pasteboardWriterForItem item: Any
+    ) -> NSPasteboardWriting? {
+        guard let boxed = item as? SidebarOutlineItem else {
+            return nil
         }
-        guard let data = try? JSONEncoder().encode(payload) else { return nil }
+
+        let payload: SidebarDragItem
+
+        switch boxed.kind {
+        case .folder(let id):
+            payload = SidebarDragItem(kind: .folder, id: id)
+        case .repo(let id):
+            payload = SidebarDragItem(kind: .repo, id: id)
+        }
+
+        guard let data = try? JSONEncoder().encode(payload) else {
+            return nil
+        }
+
         let pbItem = NSPasteboardItem()
         pbItem.setData(data, forType: Self.pasteboardType)
         return pbItem
@@ -267,129 +429,331 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         proposedItem item: Any?,
         proposedChildIndex index: Int
     ) -> NSDragOperation {
-        guard let payload = draggedPayload(from: info) else { return [] }
+        guard let payload = draggedPayload(from: info) else {
+            return []
+        }
 
-        guard let item else { return .move } // top level: both repos and folders are valid there
+        guard let item else {
+            return .move
+        }
 
-        guard let boxed = item as? SidebarOutlineItem else { return [] }
+        guard let boxed = item as? SidebarOutlineItem else {
+            return []
+        }
+
         switch boxed.kind {
         case .repo(let repoID):
             // Repos aren't containers; redirect an ambiguous/"on" drop to a sibling position.
-            redirectToSiblingPosition(after: repoID, outlineView: outlineView)
+            redirectToSiblingPosition(
+                after: repoID,
+                outlineView: outlineView
+            )
             return .move
+
         case .folder:
-            return payload.kind == .repo ? .move : [] // folders can't nest inside folders
+            return payload.kind == .repo ? .move : []
         }
     }
 
-    private func redirectToSiblingPosition(after repoID: UUID, outlineView: NSOutlineView) {
-        guard let repo = sidebarStore.repos.first(where: { $0.id == repoID }) else { return }
+    private func redirectToSiblingPosition(
+        after repoID: UUID,
+        outlineView: NSOutlineView
+    ) {
+        guard let repo = sidebarStore.repos.first(where: { $0.id == repoID }) else {
+            return
+        }
+
         if let folderID = repo.folderID {
             let kids = children(ofFolder: folderID)
-            guard let idx = kids.firstIndex(where: { $0.id == repoID }) else { return }
-            outlineView.setDropItem(item(forFolder: folderID), dropChildIndex: idx + 1)
-        } else {
-            let entries = sidebarStore.topLevelOrder
-            guard let idx = entries.firstIndex(of: .repo(repoID)) else { return }
-            outlineView.setDropItem(nil, dropChildIndex: idx + 1)
-        }
-    }
 
-    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
-        guard let payload = draggedPayload(from: info) else { return false }
-        let dragItem = SidebarDragItem(kind: payload.kind, id: payload.id)
-
-        if let item, let boxed = item as? SidebarOutlineItem, case .folder(let folderID) = boxed.kind {
-            guard payload.kind == .repo else { return false }
-            if index == NSOutlineViewDropOnItemIndex {
-                return sidebarStore.applyDrop(dragItem, target: .folderAppend(folderID))
+            guard let idx = kids.firstIndex(where: { $0.id == repoID }) else {
+                return
             }
-            let kids = children(ofFolder: folderID)
-            let beforeID = index >= 0 && index < kids.count ? kids[index].id : nil
-            return sidebarStore.applyDrop(dragItem, target: .folderChild(folderID: folderID, before: beforeID))
+
+            outlineView.setDropItem(
+                item(forFolder: folderID),
+                dropChildIndex: idx + 1
+            )
         } else {
             let entries = sidebarStore.topLevelOrder
-            let beforeEntry: TopLevelEntry? = index >= 0 && index < entries.count ? entries[index] : nil
-            return sidebarStore.applyDrop(dragItem, target: .topLevel(before: beforeEntry))
+
+            guard let idx = entries.firstIndex(of: .repo(repoID)) else {
+                return
+            }
+
+            outlineView.setDropItem(
+                nil,
+                dropChildIndex: idx + 1
+            )
         }
     }
 
-    private func draggedPayload(from info: NSDraggingInfo) -> SidebarDragItem? {
-        guard let items = info.draggingPasteboard.pasteboardItems else { return nil }
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        acceptDrop info: NSDraggingInfo,
+        item: Any?,
+        childIndex index: Int
+    ) -> Bool {
+        guard let payload = draggedPayload(from: info) else {
+            return false
+        }
+
+        let dragItem = SidebarDragItem(
+            kind: payload.kind,
+            id: payload.id
+        )
+
+        if let item,
+           let boxed = item as? SidebarOutlineItem,
+           case .folder(let folderID) = boxed.kind {
+            guard payload.kind == .repo else {
+                return false
+            }
+
+            if index == NSOutlineViewDropOnItemIndex {
+                return sidebarStore.applyDrop(
+                    dragItem,
+                    target: .folderAppend(folderID)
+                )
+            }
+
+            let kids = children(ofFolder: folderID)
+            let beforeID = index >= 0 && index < kids.count
+                ? kids[index].id
+                : nil
+
+            return sidebarStore.applyDrop(
+                dragItem,
+                target: .folderChild(
+                    folderID: folderID,
+                    before: beforeID
+                )
+            )
+        } else {
+            let entries = sidebarStore.topLevelOrder
+            let beforeEntry: TopLevelEntry? =
+                index >= 0 && index < entries.count
+                    ? entries[index]
+                    : nil
+
+            return sidebarStore.applyDrop(
+                dragItem,
+                target: .topLevel(before: beforeEntry)
+            )
+        }
+    }
+
+    private func draggedPayload(
+        from info: NSDraggingInfo
+    ) -> SidebarDragItem? {
+        guard let items = info.draggingPasteboard.pasteboardItems else {
+            return nil
+        }
+
         for item in items {
             if let data = item.data(forType: Self.pasteboardType),
-               let payload = try? JSONDecoder().decode(SidebarDragItem.self, from: data) {
+               let payload = try? JSONDecoder().decode(
+                SidebarDragItem.self,
+                from: data
+               ) {
                 return payload
             }
         }
+
         return nil
     }
 
     // MARK: Cell building
 
-    private func makeRepoCell(repo: SidebarRepo, outlineView: NSOutlineView) -> NSView {
+    private func makeRepoCell(
+        repo: SidebarRepo,
+        outlineView: NSOutlineView
+    ) -> NSView {
         // Identifier is unique per repo (not shared across all repo rows) so AppKit's view-reuse
         // pool never hands this repo's cell a different repo's stale SwiftUI @State (rename
         // draft text, focus) left over from a previous reload.
-        let identifier = NSUserInterfaceItemIdentifier("RepoCell-\(repo.id.uuidString)")
+        let identifier = NSUserInterfaceItemIdentifier(
+            "RepoCell-\(repo.id.uuidString)"
+        )
+
         let content = RepoRowView(
             repo: repo,
             appState: appState,
             sidebarStore: sidebarStore,
             isRenaming: renamingRepoIDBinding.wrappedValue == repo.id,
-            onStartRename: { [self] in renamingRepoIDBinding.wrappedValue = repo.id },
+            onStartRename: { [self] in
+                renamingRepoIDBinding.wrappedValue = repo.id
+            },
             onCommitRename: { [self] newName in
-                let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-                let override = (trimmed.isEmpty || trimmed == repo.url.lastPathComponent) ? nil : trimmed
-                sidebarStore.updateRepo(id: repo.id, displayName: override, iconPath: repo.iconPath)
+                let trimmed = newName.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+
+                let override =
+                    (trimmed.isEmpty || trimmed == repo.url.lastPathComponent)
+                    ? nil
+                    : trimmed
+
+                sidebarStore.updateRepo(
+                    id: repo.id,
+                    displayName: override,
+                    iconPath: repo.iconPath
+                )
+
                 renamingRepoIDBinding.wrappedValue = nil
             }
         )
-        if let reused = outlineView.makeView(withIdentifier: identifier, owner: self) as? NSHostingView<RepoRowView> {
+
+        if let reused = outlineView.makeView(
+            withIdentifier: identifier,
+            owner: self
+        ) as? NSHostingView<RepoRowView> {
             reused.rootView = content
             return reused
         }
+
         let hosting = NSHostingView(rootView: content)
         hosting.identifier = identifier
         hosting.autoresizingMask = [.width, .height]
         return hosting
     }
 
-    private func makeFolderCell(folder: SidebarFolder, outlineView: NSOutlineView) -> NSView {
-        let identifier = NSUserInterfaceItemIdentifier("FolderCell-\(folder.id.uuidString)")
-        let content = FolderRowView(
+    private func makeFolderRowView(
+        folder: SidebarFolder,
+        isHovering: Bool
+    ) -> FolderRowView {
+        FolderRowView(
             folder: folder,
-            repoCount: sidebarStore.repos.count { $0.folderID == folder.id },
+            repoCount: sidebarStore.repos.count {
+                $0.folderID == folder.id
+            },
             isRenaming: renamingFolderIDBinding.wrappedValue == folder.id,
+            isHovering: isHovering,
+
             onToggle: { [self] in
                 let item = self.item(forFolder: folder.id)
-                guard let outlineView = self.outlineView else { return }
+
+                guard let outlineView = self.outlineView else {
+                    return
+                }
+
                 if outlineView.isItemExpanded(item) {
                     outlineView.collapseItem(item)
                 } else {
                     outlineView.expandItem(item)
                 }
             },
-            onStartRename: { [self] in renamingFolderIDBinding.wrappedValue = folder.id },
+
+            onStartRename: { [self] in
+                renamingFolderIDBinding.wrappedValue = folder.id
+            },
+
             onCommitRename: { [self] newName in
-                sidebarStore.renameFolder(id: folder.id, to: newName)
+                sidebarStore.renameFolder(
+                    id: folder.id,
+                    to: newName
+                )
+
                 renamingFolderIDBinding.wrappedValue = nil
             },
+
             onDelete: { [self] in
-                if let selectedURL = appState.selectedRepoURL,
-                   sidebarStore.repos.contains(where: { $0.folderID == folder.id && $0.url == selectedURL }) {
-                    appState.selectedRepoURL = nil
-                }
-                sidebarStore.deleteFolder(id: folder.id)
+                requestDeleteFolder(folder)
             }
         )
-        if let reused = outlineView.makeView(withIdentifier: identifier, owner: self) as? NSHostingView<FolderRowView> {
-            reused.rootView = content
-            return reused
+    }
+
+    private func requestDeleteFolder(_ folder: SidebarFolder) {
+        let repoCount = sidebarStore.repos.count {
+            $0.folderID == folder.id
         }
-        let hosting = NSHostingView(rootView: content)
-        hosting.identifier = identifier
-        hosting.autoresizingMask = [.width, .height]
+
+        guard repoCount > 0 else {
+            sidebarStore.deleteFolder(id: folder.id)
+            return
+        }
+
+        guard let window = outlineView?.window else {
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete \u{201C}\(folder.name)\u{201D}?"
+        alert.informativeText =
+            "This group contains \(repoCount) \(repoCount == 1 ? "repository" : "repositories"). You can delete them along with the group, or move them out to the top level first."
+
+        alert.addButton(
+            withTitle: "Delete \(repoCount == 1 ? "Repository" : "Repositories")"
+        )
+        alert.addButton(
+            withTitle: "Move \(repoCount == 1 ? "It" : "Them") Out of Group"
+        )
+        alert.addButton(withTitle: "Cancel")
+
+        alert.buttons[0].hasDestructiveAction = true
+
+        alert.beginSheetModal(for: window) { [self] response in
+            switch response {
+            case .alertFirstButtonReturn:
+                if let selectedURL = appState.selectedRepoURL,
+                   sidebarStore.repos.contains(where: {
+                       $0.folderID == folder.id && $0.url == selectedURL
+                   }) {
+                    appState.selectedRepoURL = nil
+                }
+
+                sidebarStore.deleteFolder(id: folder.id)
+
+            case .alertSecondButtonReturn:
+                sidebarStore.deleteFolderKeepingRepos(id: folder.id)
+
+            default:
+                break
+            }
+        }
+    }
+
+    private func makeFolderCell(
+        folder: SidebarFolder,
+        outlineView: NSOutlineView
+    ) -> NSView {
+        let identifier = NSUserInterfaceItemIdentifier(
+            "FolderCell-\(folder.id.uuidString)"
+        )
+
+        let isHovering = hoveredFolderIDs.contains(folder.id)
+        let content = makeFolderRowView(
+            folder: folder,
+            isHovering: isHovering
+        )
+
+        let hosting: FolderHoverHostingView
+
+        if let reused = outlineView.makeView(
+            withIdentifier: identifier,
+            owner: self
+        ) as? FolderHoverHostingView {
+            reused.rootView = content
+            hosting = reused
+        } else {
+            hosting = FolderHoverHostingView(rootView: content)
+            hosting.identifier = identifier
+            hosting.autoresizingMask = [.width, .height]
+        }
+
+        hosting.onHoverChange = { [self] hovering in
+            if hovering {
+                hoveredFolderIDs.insert(folder.id)
+            } else {
+                hoveredFolderIDs.remove(folder.id)
+            }
+
+            hosting.rootView = makeFolderRowView(
+                folder: folder,
+                isHovering: hovering
+            )
+        }
+
         return hosting
     }
 }

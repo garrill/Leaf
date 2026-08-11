@@ -34,9 +34,11 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
 
         switch itemIdentifier {
         case .addItem:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Add"
-            item.view = hostingView(AddToolbarView(appState: appState))
+            item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Add")
+            item.showsIndicator = true
+            item.menu = makeAddMenu()
             return item
 
         case .toggleSidebar:
@@ -86,6 +88,7 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
+            .flexibleSpace,
             .addItem,
             .toggleSidebar,
             .sidebarTrackingSeparator,
@@ -105,6 +108,34 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
     /// to a near-zero default frame — leaving the default `sizingOptions` in place does that.
     private func hostingView<V: View>(_ view: V) -> NSHostingView<V> {
         NSHostingView(rootView: view)
+    }
+
+    /// Native `NSMenu` for the Add toolbar item — using `NSMenuToolbarItem` (rather than a
+    /// SwiftUI `Menu` hosted in a custom view) gets us the system's native button chrome for free:
+    /// correct dimming when the window is inactive, native hover highlight, and a built-in chevron
+    /// indicator, none of which a hosted SwiftUI `Menu`/`Button` reproduces exactly.
+    private func makeAddMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Add Repository", action: #selector(addRepository), keyEquivalent: "")
+            .target = self
+        menu.addItem(withTitle: "Clone Repository…", action: #selector(cloneRepository), keyEquivalent: "")
+            .target = self
+        menu.addItem(withTitle: "Add Group", action: #selector(addGroup), keyEquivalent: "")
+            .target = self
+        return menu
+    }
+
+    @objc private func addRepository() {
+        appState.addRepoViaPicker()
+    }
+
+    @objc private func cloneRepository() {
+        appState.isCloneSheetPresented = true
+    }
+
+    @objc private func addGroup() {
+        let id = appState.sidebarStore.addFolder()
+        appState.renamingFolderID = id
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -152,36 +183,6 @@ private struct BranchMenuToolbarView: View {
             return "Detached (\(appState.detachedHeadShortSHA ?? "HEAD"))"
         }
         return appState.selectedBranch?.name ?? "Branch"
-    }
-}
-
-/// The "add repository/folder/feed" menu, pinned to the leading edge of the toolbar just left of
-/// the sidebar toggle. Styled as a plain toolbar button (no filled background) with an explicit
-/// chevron so it reads as a dropdown rather than a plain action button.
-private struct AddToolbarView: View {
-    @Bindable var appState: AppState
-
-    var body: some View {
-        Menu {
-            Button("Add Repository") { appState.addRepoViaPicker() }
-            Button("Clone Repository…") { appState.isCloneSheetPresented = true }
-            Button("Add Group") {
-                let id = appState.sidebarStore.addFolder()
-                appState.renamingFolderID = id
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "plus")
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-            }
-        }
-        .menuStyle(.button)
-        .buttonStyle(.borderless)
-        .menuIndicator(.hidden)
-        .help("Add…")
-        .frame(width: 36, height: 36)
     }
 }
 

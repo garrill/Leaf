@@ -102,11 +102,36 @@ final class SidebarStore {
         persist()
     }
 
+    /// Deletes the folder and every repo inside it.
     func deleteFolder(id: UUID) {
         folders.removeAll { $0.id == id }
         repos.removeAll { $0.folderID == id }
         topLevelOrder.removeAll { if case .folder(let fid) = $0 { return fid == id }; return false }
         persist()
+    }
+
+    /// Deletes the folder but keeps its repos, promoting them to the top level in place of the folder.
+    func deleteFolderKeepingRepos(id: UUID) {
+        guard let folderIdx = topLevelOrder.firstIndex(of: .folder(id)) else {
+            deleteFolder(id: id)
+            return
+        }
+        let childIDs = children(ofFolder: id).map(\.id)
+        for repoID in childIDs {
+            if let idx = repos.firstIndex(where: { $0.id == repoID }) {
+                repos[idx].folderID = nil
+            }
+        }
+        topLevelOrder.remove(at: folderIdx)
+        topLevelOrder.insert(contentsOf: childIDs.map { .repo($0) }, at: folderIdx)
+        folders.removeAll { $0.id == id }
+        persist()
+    }
+
+    private func children(ofFolder folderID: UUID) -> [SidebarRepo] {
+        repos
+            .filter { $0.folderID == folderID }
+            .sorted { $0.sortIndex < $1.sortIndex }
     }
 
     func setFolderExpanded(id: UUID, _ expanded: Bool) {
