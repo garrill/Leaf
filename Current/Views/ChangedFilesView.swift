@@ -287,21 +287,29 @@ private struct CommitFooterView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Divider()
-
             TextField("Commit message", text: $appState.commitMessage, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(.white.opacity(0.25), lineWidth: 0.5)
+                )
 
             Button {
                 appState.commitOrCompleteMerge()
             } label: {
-                Text(commitButtonTitle)
+                commitButtonLabel
                     .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
             }
             .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
             .disabled(!canCommit)
         }
         .padding(10)
@@ -323,12 +331,13 @@ private struct CommitFooterView: View {
         return checkedCount > 0 && hasMessage
     }
 
-    private var commitButtonTitle: String {
+    private var commitButtonLabel: Text {
         if appState.isMergeInProgress {
-            return "Complete Merge"
+            return Text("Complete Merge")
         }
         let branchName = appState.selectedBranch?.name ?? "…"
-        return "Commit \(checkedCount) file\(checkedCount == 1 ? "" : "s") to \(branchName)"
+        return Text("Commit \(checkedCount) file\(checkedCount == 1 ? "" : "s") to ")
+            + Text(branchName).bold()
     }
 }
 
