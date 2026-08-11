@@ -45,6 +45,12 @@ struct DiffView: View {
     @State private var scrollOffsetY: CGFloat = 0
     private static let arrowScrollStep: CGFloat = 40
 
+    static let paneBackgroundNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0x20 / 255, green: 0x22 / 255, blue: 0x2F / 255, alpha: 1.0)
+            : NSColor(srgbRed: 0xFA / 255, green: 0xFA / 255, blue: 0xFA / 255, alpha: 1.0)
+    }
+    private static let paneBackgroundColor = Color(paneBackgroundNSColor)
     static let addedTextNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(srgbRed: 0.7490, green: 1.0000, blue: 0.8000, alpha: 0.70)
@@ -135,6 +141,7 @@ struct DiffView: View {
             .scrollEdgeEffectStyle(.soft, for: .top)
             .safeAreaBar(edge: .top, spacing: 0) { header }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Self.paneBackgroundColor)
             .focusable()
             .focusEffectDisabled()
             .focused(focusedColumn, equals: .diff)
