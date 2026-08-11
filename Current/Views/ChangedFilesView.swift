@@ -22,10 +22,8 @@ struct ChangedFilesView: View {
                         .controlSize(.mini)
                         .buttonStyle(.bordered)
                     } else {
-                        Text(statusSymbol(for: file.status))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(statusColor(for: file.status))
-                            .frame(width: 16)
+                        StatusIconView(status: file.status)
+                            .frame(width: 14, height: 14)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -264,28 +262,6 @@ struct ChangedFilesView: View {
         )
     }
 
-    private func statusSymbol(for status: FileChangeStatus) -> String {
-        switch status {
-        case .modified: return "M"
-        case .added: return "A"
-        case .deleted: return "D"
-        case .renamed: return "R"
-        case .untracked: return "U"
-        case .conflicted: return "!"
-        case .unknown: return "?"
-        }
-    }
-
-    private func statusColor(for status: FileChangeStatus) -> Color {
-        switch status {
-        case .modified: return .yellow
-        case .added, .untracked: return .green
-        case .deleted: return .red
-        case .renamed: return .blue
-        case .conflicted: return .orange
-        case .unknown: return .secondary
-        }
-    }
 }
 
 /// Split out from `ChangedFilesView` so typing in the commit message field only invalidates

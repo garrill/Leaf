@@ -94,6 +94,7 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
             .branchTrackingSeparator,
             .flexibleSpace,
             .fetchButton,
+            .space,
             .pullPushGroup
         ]
     }
@@ -144,7 +145,6 @@ private struct BranchMenuToolbarView: View {
         .menuStyle(.button)
         .buttonStyle(.glass)
         .disabled(appState.branches.isEmpty)
-        .opacity(appState.selectedRepoURL == nil ? 0 : 1)
     }
 
     private var branchLabelText: String {
@@ -199,6 +199,7 @@ private struct FetchToolbarView: View {
                 } label: {
                     Label("Fetch", systemImage: "arrow.triangle.2.circlepath")
                 }
+                .buttonStyle(.glass)
                 .help("Fetch")
                 .disabled(appState.selectedRepoURL == nil)
             }
@@ -208,8 +209,11 @@ private struct FetchToolbarView: View {
 }
 
 /// `ControlGroup`'s merged-pill look was an artifact of SwiftUI's own toolbar-building pipeline —
-/// hosted standalone in an `NSHostingView`, it renders as two separate round buttons instead. The
-/// capsule is built by hand here, matching `BranchMenuToolbarView`'s explicit-background approach.
+/// hosted standalone in an `NSHostingView`, it renders as two separate round buttons instead.
+/// `.buttonStyle(.glass)` has the same problem: applied to the `HStack` it still propagates down
+/// to each `Button` individually, so each draws its own capsule rather than the pair sharing one.
+/// The single shared pill is built by hand instead: plain (chromeless) buttons inside, with one
+/// capsule background behind the whole `HStack`.
 private struct PullPushToolbarView: View {
     @Bindable var appState: AppState
 
@@ -219,6 +223,7 @@ private struct PullPushToolbarView: View {
                 appState.pullCurrentBranch()
             } label: {
                 Image(systemName: "arrow.down")
+                    .frame(width: 28, height: 28)
                     .overlay(alignment: .topTrailing) {
                         syncBadge(isVisible: appState.behindCount > 0)
                     }
@@ -228,11 +233,11 @@ private struct PullPushToolbarView: View {
                       !appState.hasUpstream ||
                       appState.isSyncing)
 
-
             Button {
                 appState.pushCurrentBranch()
             } label: {
                 Image(systemName: "arrow.up")
+                    .frame(width: 28, height: 28)
                     .overlay(alignment: .topTrailing) {
                         syncBadge(isVisible: appState.aheadCount > 0)
                     }
@@ -242,7 +247,6 @@ private struct PullPushToolbarView: View {
                       appState.selectedBranch == nil ||
                       appState.isSyncing)
         }
-        .buttonStyle(.glass)
     }
 
     private func syncBadge(isVisible: Bool) -> some View {
