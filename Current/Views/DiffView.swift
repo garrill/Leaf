@@ -4,7 +4,6 @@ import SwiftUI
 
 struct DiffLine: Identifiable {
     enum Kind {
-        case hunkHeader
         case context
         case added
         case removed
@@ -16,10 +15,16 @@ struct DiffLine: Identifiable {
     let oldLineNumber: Int?
     let newLineNumber: Int?
     let text: String
+    /// True for a hunk's first content line — `DiffCodeScrollView` uses this to add the ~20pt gap
+    /// before a new hunk (skipped for the very first hunk in the file) and to know where to paint
+    /// the top boundary rule.
+    var isHunkStart: Bool = false
+    /// True for a hunk's last content line — where the bottom boundary rule is painted.
+    var isHunkEnd: Bool = false
 
     /// The line with its leading +/-/space marker stripped, since that's conveyed by color/gutter instead.
     var displayText: String {
-        kind == .hunkHeader || kind == .meta ? text : String(text.dropFirst())
+        kind == .meta ? text : String(text.dropFirst())
     }
 }
 
@@ -83,11 +88,6 @@ struct DiffView: View {
             ? NSColor(srgbRed: 1.0000, green: 0.2706, blue: 0.2275, alpha: 0.20)
             : NSColor(srgbRed: 1.0000, green: 0.2314, blue: 0.1882, alpha: 0.20)
     }
-    static let hunkHeaderBackgroundNSColor = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.5961, green: 0.5961, blue: 0.6157, alpha: 0.10)
-            : NSColor(srgbRed: 0.5569, green: 0.5569, blue: 0.5765, alpha: 0.10)
-    }
     /// Same dark green/red in both appearances for the gutter's added/removed border lines.
     static let addedBorderNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -104,7 +104,7 @@ struct DiffView: View {
         switch kind {
         case .added: return addedBorderNSColor
         case .removed: return removedBorderNSColor
-        case .context, .hunkHeader, .meta: return .separatorColor
+        case .context, .meta: return .separatorColor
         }
     }
 
@@ -114,7 +114,7 @@ struct DiffView: View {
     static func foregroundNSColor(for kind: DiffLine.Kind) -> NSColor {
         switch kind {
         case .meta: return .secondaryLabelColor
-        case .added, .removed, .context, .hunkHeader: return .labelColor
+        case .added, .removed, .context: return .labelColor
         }
     }
 
@@ -122,7 +122,7 @@ struct DiffView: View {
         switch kind {
         case .added: return addedBackgroundNSColor
         case .removed: return removedBackgroundNSColor
-        case .context, .hunkHeader, .meta: return nil
+        case .context, .meta: return nil
         }
     }
 
@@ -132,7 +132,7 @@ struct DiffView: View {
         switch kind {
         case .added: return strongAddedBackgroundNSColor
         case .removed: return strongRemovedBackgroundNSColor
-        case .context, .hunkHeader, .meta: return nil
+        case .context, .meta: return nil
         }
     }
 
@@ -287,7 +287,11 @@ struct DiffView: View {
     private static let hunkHeaderRegex = try? NSRegularExpression(pattern: #"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@"#)
 
     /// Parses unified diff text into per-line data with old/new line numbers, skipping the
-    /// `diff --git` / `index` / `---` / `+++` preamble before the first hunk.
+    /// `diff --git` / `index` / `---` / `+++` preamble before the first hunk. Rather than keeping
+    /// `@@ ... @@` hunk headers as their own rendered row (raw diff syntax that means nothing to
+    /// someone who hasn't seen unified diff format before), they're consumed here purely to update
+    /// the running old/new line counters, and each hunk's first/last content line is flagged via
+    /// `isHunkStart`/`isHunkEnd` so the code view can paint plain boundary rules instead.
     private static func parse(_ diffText: String) -> [DiffLine] {
         var result: [DiffLine] = []
         var oldLine = 0
@@ -299,6 +303,9 @@ struct DiffView: View {
             let line = String(substring)
 
             if line.hasPrefix("@@") {
+                if !result.isEmpty {
+                    result[result.count - 1].isHunkEnd = true
+                }
                 sawHunk = true
                 if let regex = hunkHeaderRegex,
                    let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
@@ -307,8 +314,6 @@ struct DiffView: View {
                     oldLine = Int(line[oldRange]) ?? 0
                     newLine = Int(line[newRange]) ?? 0
                 }
-                result.append(DiffLine(id: nextID, kind: .hunkHeader, oldLineNumber: nil, newLineNumber: nil, text: line))
-                nextID += 1
                 continue
             }
 
@@ -316,20 +321,28 @@ struct DiffView: View {
 
             if line.isEmpty {
                 continue
-            } else if line.hasPrefix("\\") {
-                result.append(DiffLine(id: nextID, kind: .meta, oldLineNumber: nil, newLineNumber: nil, text: line))
+            }
+
+            let isHunkStart = result.isEmpty || result[result.count - 1].isHunkEnd
+
+            if line.hasPrefix("\\") {
+                result.append(DiffLine(id: nextID, kind: .meta, oldLineNumber: nil, newLineNumber: nil, text: line, isHunkStart: isHunkStart))
             } else if line.hasPrefix("+") {
-                result.append(DiffLine(id: nextID, kind: .added, oldLineNumber: nil, newLineNumber: newLine, text: line))
+                result.append(DiffLine(id: nextID, kind: .added, oldLineNumber: nil, newLineNumber: newLine, text: line, isHunkStart: isHunkStart))
                 newLine += 1
             } else if line.hasPrefix("-") {
-                result.append(DiffLine(id: nextID, kind: .removed, oldLineNumber: oldLine, newLineNumber: nil, text: line))
+                result.append(DiffLine(id: nextID, kind: .removed, oldLineNumber: oldLine, newLineNumber: nil, text: line, isHunkStart: isHunkStart))
                 oldLine += 1
             } else {
-                result.append(DiffLine(id: nextID, kind: .context, oldLineNumber: oldLine, newLineNumber: newLine, text: line))
+                result.append(DiffLine(id: nextID, kind: .context, oldLineNumber: oldLine, newLineNumber: newLine, text: line, isHunkStart: isHunkStart))
                 oldLine += 1
                 newLine += 1
             }
             nextID += 1
+        }
+
+        if !result.isEmpty {
+            result[result.count - 1].isHunkEnd = true
         }
 
         return result
@@ -386,8 +399,14 @@ struct DiffView: View {
         }
 
         for line in lines {
+            // Hunks are no longer separated by their own header row (see `parse`), so a hunk
+            // boundary is detected via `isHunkStart` instead — still needed to keep each hunk's
+            // old/new runs from merging into one across a boundary hljs was never meant to span.
+            if line.isHunkStart {
+                flush()
+            }
             switch line.kind {
-            case .hunkHeader, .meta:
+            case .meta:
                 flush()
             case .context:
                 oldSideRun.append(line)

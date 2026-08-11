@@ -8,7 +8,12 @@ struct DiffLineMetadata {
     let oldLineNumber: Int?
     let newLineNumber: Int?
     let backgroundColor: NSColor?
-    let isHunkHeader: Bool
+    /// This line is a hunk's first content line — `HunkSeparatorOverlayView` paints the top
+    /// boundary rule at its top edge.
+    let isHunkStart: Bool
+    /// This line is a hunk's last content line — `HunkSeparatorOverlayView` paints the bottom
+    /// boundary rule at its bottom edge.
+    let isHunkEnd: Bool
     let kind: DiffLine.Kind
 }
 
@@ -105,6 +110,41 @@ final class DiffCodeTextView: NSTextView {
         return low
     }
 
+    /// Character index (exclusive) at the end of the paragraph at `paragraphIndex` — right before
+    /// its trailing newline, or the end of the document for the last paragraph. Lets
+    /// `HunkSeparatorOverlayView` tell whether a given wrapped line fragment is the true last
+    /// fragment of a paragraph, so a hunk-end boundary rule lands at the real bottom edge even
+    /// when that last line wraps onto multiple rows.
+    func paragraphEndCharacterIndex(for paragraphIndex: Int) -> Int {
+        if paragraphIndex + 1 < paragraphStartOffsets.count {
+            return paragraphStartOffsets[paragraphIndex + 1] - 1
+        }
+        return (string as NSString).length
+    }
+
+    /// True when the fragment starting at `charIndex` is the first wrapped fragment of its
+    /// paragraph (as opposed to a continuation row of a long, wrapped line).
+    func isFirstFragmentOfParagraph(charIndex: Int) -> Bool {
+        charIndex == 0 || (string as NSString).character(at: charIndex - 1) == 10
+    }
+
+    /// `NSLayoutManager` bakes a paragraph's `paragraphSpacingBefore` into the *top* of its first
+    /// line fragment's rect — see `HunkSeparatorOverlayView` — so the raw fragment rect for a
+    /// hunk's first line spans the blank gap above it as well as the line itself. Every caller that
+    /// fills or measures "this row" (row backgrounds, the gutter's number centering, its vertical
+    /// border lines) needs the gap excluded, or their fill/centering bleeds upward into it — this
+    /// is the one place that correction is made.
+    func rowRect(for fragRect: NSRect, paragraphIndex: Int, isFirstFragmentOfParagraph: Bool) -> NSRect {
+        guard isFirstFragmentOfParagraph,
+              paragraphIndex > 0,
+              paragraphIndex < lineMetadata.count,
+              lineMetadata[paragraphIndex].isHunkStart else { return fragRect }
+        var rect = fragRect
+        rect.origin.y += HunkSeparatorOverlayView.gapHeight
+        rect.size.height -= HunkSeparatorOverlayView.gapHeight
+        return rect
+    }
+
     /// Paints each line's background edge-to-edge before the glyphs draw. `NSAttributedString`'s
     /// `.backgroundColor` attribute alone only fills the glyph run's own advance width, which would
     /// leave short added/removed lines with a background that stops short of the trailing edge
@@ -119,9 +159,12 @@ final class DiffCodeTextView: NSTextView {
                 guard paragraphIndex < self.lineMetadata.count,
                       let color = self.lineMetadata[paragraphIndex].backgroundColor else { return }
 
-                var fillRect = fragRect
+                let isFirstFragment = self.isFirstFragmentOfParagraph(charIndex: charIndex)
+                let rowRect = self.rowRect(for: fragRect, paragraphIndex: paragraphIndex, isFirstFragmentOfParagraph: isFirstFragment)
+
+                var fillRect = rowRect
                 fillRect.origin.x = 0
-                fillRect.size.width = max(self.bounds.width, fragRect.maxX)
+                fillRect.size.width = max(self.bounds.width, rowRect.maxX)
                 fillRect.origin.y += self.textContainerOrigin.y
 
                 color.setFill()
@@ -167,12 +210,30 @@ final class DiffGutterView: NSView {
               let container = textView.textContainer,
               layoutManager.numberOfGlyphs > 0 else { return }
 
+        // This view only ever positively paints a background for added/removed rows — a context
+        // row's background is just whatever was already there. Without an explicit clear, a number
+        // (or added/removed tint) drawn at one position can leave ghost pixels behind if a later
+        // partial redraw repaints that row slightly differently (e.g. AppKit invalidating only part
+        // of a row that shifted after a content update) without also touching the old pixels.
+        DiffView.paneBackgroundNSColor.setFill()
+        dirtyRect.fill()
+
         // The gutter and text view share the same y-origin and flip (both are non-scrolling
         // siblings inside `DiffCodeContainerView`), so the dirty rect's y-range maps directly onto
-        // the text view's own coordinate space without any scroll-offset translation.
-        let searchRect = NSRect(x: 0, y: dirtyRect.minY, width: textView.bounds.width, height: dirtyRect.height)
+        // the text view's own coordinate space without any scroll-offset translation. Padded well
+        // past the dirty rect's own edges: a hunk-start line's raw fragment rect extends above its
+        // visible row by the hunk-gap height (see `DiffCodeTextView.rowRect`), so a search rect that
+        // stops exactly at the dirty rect's edge can inconsistently include/exclude that fragment
+        // depending on rounding — occasionally dropping that row's numbers or border segment on a
+        // partial (scroll-driven) redraw, even though a full-bounds redraw always finds it.
+        let padding = HunkSeparatorOverlayView.gapHeight
+        let searchRect = NSRect(
+            x: 0,
+            y: dirtyRect.minY - padding,
+            width: textView.bounds.width,
+            height: dirtyRect.height + padding * 2
+        )
         let glyphRange = layoutManager.glyphRange(forBoundingRect: searchRect, in: container)
-        let text = textView.string as NSString
 
         layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { fragRect, _, _, fragGlyphRange, _ in
             guard fragGlyphRange.location < layoutManager.numberOfGlyphs else { return }
@@ -181,9 +242,12 @@ final class DiffGutterView: NSView {
             let paragraphIndex = textView.paragraphIndex(forCharacterIndex: charIndex)
             guard paragraphIndex < textView.lineMetadata.count else { return }
             let meta = textView.lineMetadata[paragraphIndex]
-            guard !meta.isHunkHeader else { return }
 
-            var lineRect = fragRect
+            // Excludes any hunk-gap spacing baked into the top of this fragment's rect (see
+            // `DiffCodeTextView.rowRect`), so the background tint, numbers, and border segment
+            // below all stay confined to the actual row and don't bleed into the blank gap.
+            let isFirstFragmentOfParagraph = textView.isFirstFragmentOfParagraph(charIndex: charIndex)
+            var lineRect = textView.rowRect(for: fragRect, paragraphIndex: paragraphIndex, isFirstFragmentOfParagraph: isFirstFragmentOfParagraph)
             lineRect.origin.y += textView.textContainerOrigin.y
 
             // Full-row background tint, matching the code side's own row background — added/
@@ -199,7 +263,6 @@ final class DiffGutterView: NSView {
             }
 
             // Only the first wrapped fragment of a paragraph carries its line numbers.
-            let isFirstFragmentOfParagraph = charIndex == 0 || text.character(at: charIndex - 1) == 10
             guard isFirstFragmentOfParagraph else { return }
 
             self.drawNumber(meta.oldLineNumber, x: Self.oldColumnX, width: Self.columnWidth, rowRect: lineRect)
@@ -217,10 +280,13 @@ final class DiffGutterView: NSView {
             guard paragraphIndex < textView.lineMetadata.count else { return }
             let meta = textView.lineMetadata[paragraphIndex]
 
-            var lineRect = fragRect
+            // Same gap exclusion as above — otherwise these border segments run straight through
+            // the blank space between hunks, crossing the horizontal boundary rules drawn there.
+            let isFirstFragmentOfParagraph = textView.isFirstFragmentOfParagraph(charIndex: charIndex)
+            var lineRect = textView.rowRect(for: fragRect, paragraphIndex: paragraphIndex, isFirstFragmentOfParagraph: isFirstFragmentOfParagraph)
             lineRect.origin.y += textView.textContainerOrigin.y
 
-            let borderColor = meta.isHunkHeader ? NSColor.separatorColor : DiffView.borderNSColor(for: meta.kind)
+            let borderColor = DiffView.borderNSColor(for: meta.kind)
             borderColor.setFill()
             NSRect(x: Self.middleBorderX, y: lineRect.minY, width: 1, height: lineRect.height).fill()
             NSRect(x: Self.rightBorderX, y: lineRect.minY, width: 1, height: lineRect.height).fill()
@@ -247,12 +313,87 @@ final class DiffGutterView: NSView {
     }
 }
 
+/// Draws the plain top/bottom boundary rules around each hunk, replacing the old `@@ ... @@`
+/// header row. Lives in its own overlay `NSView` stacked on top of both the gutter and the code
+/// text view — neither of those views' own bounds span the full panel width the rule needs to
+/// cross (from the gutter's far-left edge to the code side's far-right edge) — and never accepts
+/// hits, so it can't intercept clicks/selection meant for the text view underneath.
+final class HunkSeparatorOverlayView: NSView {
+    weak var codeTextView: DiffCodeTextView?
+
+    /// Must match `DiffCodeScrollView.hunkGapHeight` — the space between hunks. `NSLayoutManager`
+    /// bakes a paragraph's `paragraphSpacingBefore` into the *top* of its line fragment rect (in
+    /// this flipped view, its smaller-y edge), so the fragment's reported `minY` lands at the
+    /// start of the gap, not after it — the top rule has to be pushed down by this amount to land
+    /// at the actual glyph top, past the gap, instead of directly on top of the previous hunk's
+    /// bottom rule.
+    static let gapHeight: CGFloat = DiffCodeScrollView.hunkGapHeight
+
+    override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let textView = codeTextView,
+              let layoutManager = textView.layoutManager,
+              let container = textView.textContainer,
+              layoutManager.numberOfGlyphs > 0 else { return }
+
+        // Padded past the dirty rect's own edges for the same reason as `DiffGutterView.draw` — a
+        // hunk-start line's raw fragment rect extends above its visible row by the gap height, so a
+        // tight search rect can inconsistently miss a boundary rule depending on rounding, which
+        // otherwise only a full-bounds redraw (e.g. from resizing the window) reliably catches.
+        let padding = Self.gapHeight
+        let searchRect = NSRect(
+            x: 0,
+            y: dirtyRect.minY - padding,
+            width: textView.bounds.width,
+            height: dirtyRect.height + padding * 2
+        )
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: searchRect, in: container)
+        let text = textView.string as NSString
+
+        NSColor.separatorColor.setFill()
+
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { fragRect, _, _, fragGlyphRange, _ in
+            guard fragGlyphRange.location < layoutManager.numberOfGlyphs else { return }
+            let charRange = layoutManager.characterRange(forGlyphRange: fragGlyphRange, actualGlyphRange: nil)
+            let paragraphIndex = textView.paragraphIndex(forCharacterIndex: charRange.location)
+            guard paragraphIndex < textView.lineMetadata.count else { return }
+            let meta = textView.lineMetadata[paragraphIndex]
+            guard meta.isHunkStart || meta.isHunkEnd else { return }
+
+            var lineRect = fragRect
+            lineRect.origin.y += textView.textContainerOrigin.y
+
+            // Only the first wrapped fragment of a paragraph carries the top rule, and only the
+            // last carries the bottom rule, so a wrapped line doesn't get a rule through its middle.
+            if meta.isHunkStart {
+                let isFirstFragment = charRange.location == 0 || text.character(at: charRange.location - 1) == 10
+                if isFirstFragment {
+                    // The very first paragraph in the document has no gap before it (nothing to
+                    // separate from), so its fragment rect's top is the real glyph top already.
+                    let topY = paragraphIndex == 0 ? lineRect.minY : lineRect.minY + Self.gapHeight
+                    NSRect(x: 0, y: topY, width: self.bounds.width, height: 1).fill()
+                }
+            }
+            if meta.isHunkEnd {
+                let paragraphEnd = textView.paragraphEndCharacterIndex(for: paragraphIndex)
+                if charRange.location + charRange.length >= paragraphEnd {
+                    NSRect(x: 0, y: lineRect.maxY - 1, width: self.bounds.width, height: 1).fill()
+                }
+            }
+        }
+    }
+}
+
 /// Hosts the gutter and code text view as plain (non-scrolling) sibling subviews, laid out
 /// side-by-side and sized to fit their full content — the whole thing is scrolled by a real
 /// SwiftUI `ScrollView` one level up, not by an internal `NSScrollView`.
 final class DiffCodeContainerView: NSView {
     let textView = DiffCodeTextView.makeLegacyTextKit1()
     let gutterView = DiffGutterView()
+    let hunkSeparatorView = HunkSeparatorOverlayView()
     /// What `setContent` last actually applied — `DiffCodeScrollView.updateNSView` runs on
     /// *every* SwiftUI update of this view (scroll position changes, hover state, unrelated
     /// parent re-renders, etc.), not just ones where the diff itself changed. Without this,
@@ -264,8 +405,10 @@ final class DiffCodeContainerView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         gutterView.codeTextView = textView
+        hunkSeparatorView.codeTextView = textView
         addSubview(gutterView)
         addSubview(textView)
+        addSubview(hunkSeparatorView)
     }
 
     required init?(coder: NSCoder) {
@@ -280,6 +423,7 @@ final class DiffCodeContainerView: NSView {
         gutterView.frame = NSRect(x: 0, y: 0, width: gutterWidth, height: bounds.height)
         let textWidth = max(bounds.width - gutterWidth, 0)
         textView.frame = NSRect(x: gutterWidth, y: 0, width: textWidth, height: bounds.height)
+        hunkSeparatorView.frame = bounds
     }
 
     func fittingHeight(forWidth width: CGFloat) -> CGFloat {
@@ -297,6 +441,7 @@ final class DiffCodeContainerView: NSView {
         textView.setContent(attributedString: attributedString, metadata: metadata)
         needsLayout = true
         gutterView.needsDisplay = true
+        hunkSeparatorView.needsDisplay = true
     }
 }
 
@@ -321,6 +466,10 @@ struct DiffCodeScrollView: NSViewRepresentable {
     let lines: [DiffLine]
     let highlightSnapshot: HighlightSnapshot?
     let diffText: String
+
+    /// The gap painted between consecutive hunks — shared with `HunkSeparatorOverlayView`, which
+    /// has to correct for this same amount when locating a hunk's top boundary rule.
+    static let hunkGapHeight: CGFloat = 20
 
     func makeNSView(context: Context) -> DiffCodeContainerView {
         let container = DiffCodeContainerView(frame: .zero)
@@ -366,12 +515,17 @@ struct DiffCodeScrollView: NSViewRepresentable {
         diffText: String
     ) -> (NSAttributedString, [DiffLineMetadata]) {
         let bodyFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        let headerFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        // Applied to every line (header and body alike) so row height — which the gutter and its
-        // background/border fills read straight off the layout manager's line fragments — grows
-        // along with it everywhere, not just where the code font itself is used.
+        // Applied to every line so row height — which the gutter and its background/border fills
+        // read straight off the layout manager's line fragments — grows along with it everywhere.
         let lineParagraphStyle = NSMutableParagraphStyle()
         lineParagraphStyle.lineHeightMultiple = 1.3
+        // Same, but with extra space before the paragraph — applied only to a hunk's first line
+        // (other than the file's very first line) so consecutive hunks read as visually separate
+        // blocks instead of one continuous run, now that there's no `@@ ... @@` header row between
+        // them to do that job.
+        let hunkGapParagraphStyle = NSMutableParagraphStyle()
+        hunkGapParagraphStyle.lineHeightMultiple = 1.3
+        hunkGapParagraphStyle.paragraphSpacingBefore = hunkGapHeight
         // Only trust the snapshot if it was computed for this exact diff text — a still-running
         // (or superseded) highlight task must never paint stale colors onto newly-selected text.
         let validSnapshot = highlightSnapshot?.diffText == diffText ? highlightSnapshot : nil
@@ -386,27 +540,12 @@ struct DiffCodeScrollView: NSViewRepresentable {
                 result.append(NSAttributedString(string: "\n"))
             }
 
-            if line.kind == .hunkHeader {
-                result.append(NSAttributedString(string: line.text, attributes: [
-                    .font: headerFont,
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                    .paragraphStyle: lineParagraphStyle
-                ]))
-                metadata.append(DiffLineMetadata(
-                    oldLineNumber: nil,
-                    newLineNumber: nil,
-                    backgroundColor: DiffView.hunkHeaderBackgroundNSColor,
-                    isHunkHeader: true,
-                    kind: .hunkHeader
-                ))
-                continue
-            }
-
             let piece = NSMutableAttributedString(string: line.displayText)
             let fullRange = NSRange(location: 0, length: piece.length)
             piece.addAttribute(.font, value: bodyFont, range: fullRange)
             piece.addAttribute(.foregroundColor, value: DiffView.foregroundNSColor(for: line.kind), range: fullRange)
-            piece.addAttribute(.paragraphStyle, value: lineParagraphStyle, range: fullRange)
+            let paragraphStyle = (line.isHunkStart && index > 0) ? hunkGapParagraphStyle : lineParagraphStyle
+            piece.addAttribute(.paragraphStyle, value: paragraphStyle, range: fullRange)
 
             // hljs only assigns explicit colors to tokens it recognizes; overlay just those runs
             // on top of the kind-based default so unclassified characters keep the fallback color.
@@ -430,7 +569,8 @@ struct DiffCodeScrollView: NSViewRepresentable {
                 oldLineNumber: line.oldLineNumber,
                 newLineNumber: line.newLineNumber,
                 backgroundColor: DiffView.backgroundNSColor(for: line.kind),
-                isHunkHeader: false,
+                isHunkStart: line.isHunkStart,
+                isHunkEnd: line.isHunkEnd,
                 kind: line.kind
             ))
         }
