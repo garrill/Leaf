@@ -691,12 +691,15 @@ nonisolated struct GitRepository {
             return (entries, entries)
         case .stash:
             let files = try filesChanged(inStash: "stash@{0}")
-            let statusEntries = (try? self.statusEntries()) ?? []
-            return (files, statusEntries)
+            // The working-tree summary is independent of the stash selection. Fetching it here
+            // made every click on Stashed Changes launch a second git process for no benefit.
+            return (files, [])
         case .commit(let commit):
             let files = try filesChanged(in: commit)
-            let statusEntries = (try? self.statusEntries()) ?? []
-            return (files, statusEntries)
+            // Ditto for history navigation: a commit's file list needs `git show`, not a fresh
+            // working-tree status query. The summary is refreshed on repository snapshots and
+            // filesystem notifications instead.
+            return (files, [])
         }
     }
 

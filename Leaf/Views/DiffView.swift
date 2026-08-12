@@ -384,6 +384,11 @@ struct DiffView: View {
     private static let maxHighlightedLineCount = 2000
 
     private func refreshHighlighting() async {
+        // Let SwiftUI commit the plain attributed text first. Highlighting is deliberately a
+        // visual enhancement, but starting a JavaScriptCore pass in the same render turn can
+        // compete with AppKit's first layout/display of the newly-arrived diff.
+        try? await Task.sleep(nanoseconds: 80_000_000)
+        guard !Task.isCancelled else { return }
         let targetDiffText = appState.diffText
         let lines = Self.parse(targetDiffText)
         guard !lines.isEmpty, lines.count <= Self.maxHighlightedLineCount else { return }
