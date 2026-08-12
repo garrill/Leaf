@@ -68,6 +68,9 @@ enum IconComposerRenderer {
             if let linearGradient {
                 return linearGradient.compactMap(Self.color(fromExtendedSRGB:))
             }
+            if let automaticGradient, let color = Self.color(fromExtendedSRGB: automaticGradient) {
+                return [color]
+            }
             return [.systemGray]
         }
 
@@ -76,10 +79,10 @@ enum IconComposerRenderer {
             let parts = spec.split(separator: ":")
             guard parts.count == 2 else { return nil }
             let components = parts[1].split(separator: ",").compactMap { Double($0) }
-            if parts[0] == "extended-srgb", components.count >= 4 {
+            if (parts[0] == "extended-srgb" || parts[0] == "srgb"), components.count >= 4 {
                 return NSColor(srgbRed: components[0], green: components[1], blue: components[2], alpha: components[3])
             }
-            if parts[0] == "extended-gray", components.count >= 2 {
+            if (parts[0] == "extended-gray" || parts[0] == "gray"), components.count >= 2 {
                 return NSColor(white: components[0], alpha: components[1])
             }
             return nil

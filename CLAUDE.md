@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repo.
 
 ## What this is
 
-`Current`: native SwiftUI macOS git client, 4-column layout (repos → branches/history → changed files → diff). Early-stage, not feature-complete — see "Not yet implemented".
+`Current`: native SwiftUI macOS git client, 4-column layout (repos → branches/history → changed files → diff). Nearly ready for initial beta release — see "Not yet implemented".
 
 ## Build, run, test
 
@@ -45,7 +45,9 @@ open /path/to/DerivedData/.../Build/Products/Debug/Current.app
 - **`FileChangeStatus.conflicted` detection needs the full two-letter porcelain code** (`UU`/`AA`/`DD`/`AU`/`UA`/`DU`/`UD`), checked in `statusEntries()` *before* the normal single-char fallback — some conflict codes (`AA`, `DD`) contain no `U` at all, so they can't be derived from either status char alone.
 - **`completeMerge()`'s `git commit` must pass `--cleanup=strip` explicitly** — plain `-m` defaults to `--cleanup=whitespace`, which does *not* strip comment lines, so the `# Conflicts:\n#\tfile` lines from `MERGE_MSG` (prefilled into the commit box) would otherwise get baked verbatim into the real commit message.
 - **A conflicted file's raw contents (with `<<<<<<<`/`=======`/`>>>>>>>` markers) aren't unified-diff output** — `DiffView.parse(_:)` requires `@@` hunk headers and silently drops every line until it sees one, so feeding conflict-marker text through it renders as blank. `DiffView.parsePlainText(_:)` is the separate path used instead when `selectedFile?.status == .conflicted`.
+- **Stash is single-slot in the UI**: `GitRepository.stashChanges`/`stashList`/`stashCount` wrap plain `git stash push`, but `AppState`/`BranchListView`/`ChangedFilesView` only ever surface `stash@{0}` as a "Stashed Changes" row in the branch/history column — no list of multiple stash entries, no picking which one to view/apply. Switching branches with dirty changes offers stash-and-switch as one of the alert options (`AppState.BranchSwitchDecision`).
+- **Diff hunks have no header row anymore** — `ec7ba5b` removed the `@@ ... @@` header text in favor of drawing plain borders/gap spacing directly in `DiffCodeTextView` (`HunkSeparatorOverlayView`, gutter/code column vertical borders) to mark hunk boundaries.
 
 ## Not yet implemented
 
-stash. (Branch merging — including conflict detection/resolution — is implemented; see `GitRepository.merge`/`mergeAbort`/`completeMerge`/`markResolved`. Not yet done: a real 3-way ours/theirs diff view, and promoting `BranchListView` from a commit-history-only view into an actual branch list — the merge entry point currently lives in `MainWindowView`'s toolbar branch menu instead.)
+Multi-entry stash browsing (apply/drop/view a specific `stash@{n}`, not just the top of the stack). A real 3-way ours/theirs conflict diff view. Promoting `BranchListView` from a commit-history-only view into an actual branch list — branch creation has a dedicated sheet (`NewBranchSheet`) but merging still hangs off `MainWindowView`'s toolbar branch menu. (Branch merging itself — including conflict detection/resolution — is implemented; see `GitRepository.merge`/`mergeAbort`/`completeMerge`/`markResolved`.)

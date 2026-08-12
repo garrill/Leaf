@@ -88,6 +88,19 @@ final class SidebarTableRowView: NSTableRowView {
             button.isHidden = true
         }
     }
+
+    override func layout() {
+        super.layout()
+
+        // NSOutlineView's own layout pass can flip the disclosure button back to visible after
+        // it's first added (seen on the very first draw, before any row is selected/toggled) —
+        // re-hide it on every layout rather than relying solely on the one-shot didAddSubview hook.
+        for subview in subviews {
+            if let button = subview as? NSButton, !button.isHidden {
+                button.isHidden = true
+            }
+        }
+    }
 }
 
 /// A hosting view for `FolderRowView` that tracks real mouse hover via `NSTrackingArea` — SwiftUI's
