@@ -134,6 +134,20 @@ final class SidebarStore {
             .sorted { $0.sortIndex < $1.sortIndex }
     }
 
+    /// Reassigns `sortIndex` for every repo directly inside `folderID` so they land in
+    /// alphabetical order by `displayName` (case-insensitive, locale-aware).
+    func sortRepos(inFolder folderID: UUID) {
+        let sortedIDs = children(ofFolder: folderID)
+            .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+            .map(\.id)
+        for (i, id) in sortedIDs.enumerated() {
+            if let idx = repos.firstIndex(where: { $0.id == id }) {
+                repos[idx].sortIndex = i
+            }
+        }
+        persist()
+    }
+
     func setFolderExpanded(id: UUID, _ expanded: Bool) {
         guard let idx = folders.firstIndex(where: { $0.id == id }) else { return }
         folders[idx].isExpanded = expanded

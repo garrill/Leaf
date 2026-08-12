@@ -1,13 +1,13 @@
 //
-//  CurrentUITestsLaunchTests.swift
-//  CurrentUITests
+//  LeafUITestsLaunchTests.swift
+//  LeafUITests
 //
 //  Created by Jonny Garrill on 20/07/2026.
 //
 
 import XCTest
 
-final class CurrentUITestsLaunchTests: XCTestCase {
+final class LeafUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

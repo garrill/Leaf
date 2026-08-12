@@ -20,7 +20,7 @@ final class MainSplitViewController: NSSplitViewController {
     /// width computed as "sidebar's current width + 320" would silently drift whenever the
     /// sidebar's own default width came out different than expected.
     private var hasAppliedInitialLayout = false
-    private let defaultSidebarWidth: CGFloat = 220
+    private let defaultSidebarWidth: CGFloat = 280
     private let defaultBranchesWidth: CGFloat = 320
 
     init(appState: AppState) {

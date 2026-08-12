@@ -4,23 +4,23 @@ Guidance for Claude Code when working in this repo.
 
 ## What this is
 
-`Current`: native SwiftUI macOS git client, 4-column layout (repos → branches/history → changed files → diff). Nearly ready for initial beta release — see "Not yet implemented".
+`Leaf` (formerly `Current`): native SwiftUI macOS git client, 4-column layout (repos → branches/history → changed files → diff). Nearly ready for initial beta release — see "Not yet implemented".
 
 ## Build, run, test
 
-No Package.swift — plain Xcode project (`Current.xcodeproj`), scheme `Current`.
+No Package.swift — plain Xcode project (`Leaf.xcodeproj`), scheme `Leaf`.
 
 ```sh
-xcodebuild -project Current.xcodeproj -scheme Current -configuration Debug build
-xcodebuild -project Current.xcodeproj -scheme Current test
-open /path/to/DerivedData/.../Build/Products/Debug/Current.app
+xcodebuild -project Leaf.xcodeproj -scheme Leaf -configuration Debug build
+xcodebuild -project Leaf.xcodeproj -scheme Leaf test
+open /path/to/DerivedData/.../Build/Products/Debug/Leaf.app
 ```
 
-- Quit any running instance before relaunching (`osascript -e 'tell application "Current" to quit'`) — xcodebuild won't overwrite a running bundle.
+- Quit any running instance before relaunching (`osascript -e 'tell application "Leaf" to quit'`) — xcodebuild won't overwrite a running bundle.
 - Don't try to screenshot/screen-record the app (no permission in this terminal) — build, launch, let the user verify visually.
-- `CurrentTests`/`CurrentUITests` are still just Xcode placeholders — no real tests exist.
+- `LeafTests`/`LeafUITests` are still just Xcode placeholders — no real tests exist.
 - App Sandbox is disabled (`ENABLE_APP_SANDBOX = NO`) deliberately — app shells out inside arbitrary repo folders on disk.
-- `.swift` files under `Current/` are picked up automatically (file-system-synchronized groups) — never need adding to `project.pbxproj`.
+- `.swift` files under `Leaf/` are picked up automatically (file-system-synchronized groups) — never need adding to `project.pbxproj`.
 
 ## Architecture gotchas
 

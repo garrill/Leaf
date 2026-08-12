@@ -160,6 +160,35 @@ nonisolated struct GitRepository {
         return name.isEmpty ? "repository" : name
     }
 
+    /// Whether `/usr/bin/git` actually works. On a Mac without Xcode or the Command Line Tools
+    /// installed, `/usr/bin/git` still exists as a stub that pops up the system "install Command
+    /// Line Tools" dialog and exits non-zero rather than failing to launch — so a `try? Process()`
+    /// existence check isn't enough; this has to actually run it and check the result.
+    static func isGitAvailable() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["--version"]
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+
+        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+        _ = stderr.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else { return false }
+        let output = String(data: outData, encoding: .utf8) ?? ""
+        return output.hasPrefix("git version")
+    }
+
     /// Runs `git clone` directly (not via the instance `run`/`runRaw` helpers, which pin
     /// `currentDirectoryURL` to an already-existing `rootURL` — the clone destination doesn't
     /// exist yet).

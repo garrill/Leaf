@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Hosts the repo/folder sidebar in a real `NSOutlineView`, matching Finder/Mail/Xcode: native
 /// drag-reorder with a system-drawn insertion line between rows, and a native highlight when
@@ -30,7 +31,10 @@ struct SidebarOutlineView: NSViewRepresentable {
         outlineView.allowsMultipleSelection = false
         outlineView.dataSource = context.coordinator
         outlineView.delegate = context.coordinator
-        outlineView.registerForDraggedTypes([SidebarOutlineCoordinator.pasteboardType])
+        outlineView.registerForDraggedTypes([
+            SidebarOutlineCoordinator.pasteboardType,
+            .fileURL
+        ])
         outlineView.setDraggingSourceOperationMask(.move, forLocal: true)
 
         let scrollView = NSScrollView()
@@ -443,6 +447,13 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         proposedChildIndex index: Int
     ) -> NSDragOperation {
         guard let payload = draggedPayload(from: info) else {
+            if draggedFolderURLs(from: info) != nil {
+                // A drag from Finder always just adds top-level entries, regardless of which row
+                // it's hovering — draw the "drop on the whole list" highlight rather than trying
+                // to compute a specific insertion point.
+                outlineView.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex)
+                return .copy
+            }
             return []
         }
 
@@ -508,7 +519,16 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         childIndex index: Int
     ) -> Bool {
         guard let payload = draggedPayload(from: info) else {
-            return false
+            guard let urls = draggedFolderURLs(from: info) else {
+                return false
+            }
+            for url in urls {
+                sidebarStore.addRepo(at: url)
+            }
+            if let lastURL = urls.last {
+                appState.selectRepo(lastURL)
+            }
+            return true
         }
 
         let dragItem = SidebarDragItem(
@@ -574,6 +594,21 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         }
 
         return nil
+    }
+
+    /// Folder URLs from an external drag (e.g. Finder) — `nil` if the drag carries no
+    /// folder-conforming file URLs at all, so callers can fall through to "not a drag we handle".
+    private func draggedFolderURLs(from info: NSDraggingInfo) -> [URL]? {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingContentsConformToTypes: [UTType.folder.identifier]
+        ]
+        guard let urls = info.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: options
+        ) as? [URL], !urls.isEmpty else {
+            return nil
+        }
+        return urls
     }
 
     // MARK: Cell building
@@ -668,6 +703,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 )
 
                 renamingFolderIDBinding.wrappedValue = nil
+            },
+
+            onSort: { [self] in
+                sidebarStore.sortRepos(inFolder: folder.id)
             },
 
             onDelete: { [self] in

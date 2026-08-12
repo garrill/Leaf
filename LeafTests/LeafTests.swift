@@ -1,14 +1,14 @@
 //
-//  CurrentTests.swift
-//  CurrentTests
+//  LeafTests.swift
+//  LeafTests
 //
 //  Created by Jonny Garrill on 20/07/2026.
 //
 
 import Testing
-@testable import Current
+@testable import Leaf
 
-struct CurrentTests {
+struct LeafTests {
 
     @Test func example() async throws {
         // Write your test here and use APIs like `#expect(...)` to check expected conditions.

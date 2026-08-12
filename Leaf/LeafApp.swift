@@ -1,6 +1,6 @@
 //
-//  CurrentApp.swift
-//  Current
+//  LeafApp.swift
+//  Leaf
 //
 //  Created by Jonny Garrill on 20/07/2026.
 //
@@ -13,7 +13,7 @@ import SwiftUI
 /// `NavigationSplitView` can't provide. `Settings` with an empty body is the standard way to give
 /// an `App` a valid `Scene` without SwiftUI creating one of its own.
 @main
-struct CurrentApp: App {
+struct LeafApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {

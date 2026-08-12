@@ -19,24 +19,31 @@ possibly a libgit2/SwiftGit2 rewrite of `GitRepository`).
 Full rename — repo folder, project files, and all in-code references, not just the
 product-facing name.
 
-- [ ] Rename repo directory `Current` → `Leaf`
-- [ ] Rename `Current.xcodeproj` → `Leaf.xcodeproj`, scheme `Current` → `Leaf`
-- [ ] Rename `Current/` source group → `Leaf/`, `CurrentTests` → `LeafTests`,
+- [x] Rename repo directory `Current` → `Leaf`
+- [x] Rename `Current.xcodeproj` → `Leaf.xcodeproj`, scheme `Current` → `Leaf`
+- [x] Rename `Current/` source group → `Leaf/`, `CurrentTests` → `LeafTests`,
       `CurrentUITests` → `LeafUITests` (targets, folders, bundle ids
       `garrill.Current`/`garrill.CurrentTests`/`garrill.CurrentUITests` →
       `garrill.Leaf`/etc.)
-- [ ] `PRODUCT_NAME`/display name → Leaf; `MARKETING_VERSION` reset/confirmed for beta
-      (currently `1.0` for all targets — decide real starting version, e.g. `0.1.0`)
+- [x] `PRODUCT_NAME`/display name → Leaf (2026-08-12). `MARKETING_VERSION` still `1.0` for
+      all targets — still need to decide the real starting version for beta (e.g. `0.1.0`)
 - [ ] App icon: `IconComposerRenderer` already renders `.icon` bundles fine (fixed
-      2026-08-12) — a `Leaf.icon` already exists at `~/Leaf.icon`; wire it in as the actual
-      app icon asset, not just a sidebar repo glyph example
-- [ ] Sweep all `.swift` files for `Current`-named types/comments/strings (window title,
-      `CurrentApp.swift` → `LeafApp.swift`, any hardcoded "Current" in UI strings)
-- [ ] Update `CLAUDE.md` throughout (currently says "`Current`: native SwiftUI macOS git
-      client" and references `Current.xcodeproj`/scheme `Current` in Build/run/test)
-- [ ] Update `README.md`
-- [ ] `AppDelegate.swift`/`WindowAccessor.swift` — check for hardcoded "Current" in window
-      title/menu bar app name beyond `.navigationTitle`
+      2026-08-12) — the repo's own `Leaf/Leaf.icon` (renamed from `Current.icon`, content
+      untouched) is used as a sidebar glyph example, not yet wired in as the actual app
+      icon asset (`AppIcon.appiconset` is still empty; `ASSETCATALOG_COMPILER_APPICON_NAME`
+      points at a nonexistent "Leaf" iconset — pre-existing mismatch, carried through the
+      rename unchanged). A separately designed `~/Leaf.icon` also exists outside the repo
+      and hasn't been reviewed/imported.
+- [x] Sweep all `.swift` files for `Current`-named types/comments/strings (window title,
+      `CurrentApp.swift` → `LeafApp.swift`, any hardcoded "Current" in UI strings) — left
+      incidental identifiers like `isCurrent`/`loadChangedFilesForCurrentSelection`/
+      `pullCurrentBranch` alone, since those mean "current selection", not the product name
+- [x] Update `CLAUDE.md` throughout
+- [x] Update `README.md`
+- [x] `AppDelegate.swift` — window title strings in `MainWindowController.swift` updated;
+      `WindowAccessor.swift` no longer exists in the codebase (window is now fully
+      AppKit-owned via `MainWindowController`) — the CLAUDE.md line referencing it under
+      "Window chrome" looks stale from before that rewrite, worth a separate cleanup pass
 - [ ] Local git remote name / GitHub repo rename (if/when a remote exists) — separate,
       confirm with user before touching anything on GitHub
 
@@ -46,7 +53,7 @@ full clean build + launch afterward, not interleaved with feature work.
 
 ## 2. Test coverage
 
-`CurrentTests`/`CurrentUITests` are currently empty Xcode placeholders (per CLAUDE.md).
+`LeafTests`/`LeafUITests` are currently empty Xcode placeholders (per CLAUDE.md).
 Two different kinds of testing are needed:
 
 ### 2a. Automated unit tests against `GitRepository`
@@ -148,8 +155,8 @@ CI config, no LICENSE.
       currently no `.yml` workflow exists at all
 - [ ] `LICENSE` file (none currently present — decide terms before any public release)
 - [ ] `CHANGELOG.md` or release notes convention (feeds the Sparkle appcast description)
-- [ ] `README.md` refresh post-rename with real screenshots/description for outside
-      readers (currently exists but was written for `Current`)
+- [ ] `README.md` refresh with real screenshots for outside readers (text content is
+      renamed to Leaf already; still needs actual screenshots and outward-facing polish)
 
 ## 6. Beta-readiness polish
 

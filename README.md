@@ -1,8 +1,8 @@
-# Current
+# Leaf
 
 A native SwiftUI git client for macOS.
 
-Current is a 4-column git client (repos → branches/history → changed files → diff), built directly on `/usr/bin/git` rather than a bundled libgit2. It's early-stage and not feature-complete, but the core workflow — browsing history, staging/committing, diffing, branching, and merging — works end to end.
+Leaf is a 4-column git client (repos → branches/history → changed files → diff), built directly on `/usr/bin/git` rather than a bundled libgit2. It's early-stage and not feature-complete, but the core workflow — browsing history, staging/committing, diffing, branching, and merging — works end to end.
 
 ## Features
 
@@ -31,16 +31,16 @@ Current is a 4-column git client (repos → branches/history → changed files �
 There's no `Package.swift`; this is a plain Xcode project.
 
 ```sh
-xcodebuild -project Current.xcodeproj -scheme Current -configuration Debug build
-open /path/to/DerivedData/.../Build/Products/Debug/Current.app
+xcodebuild -project Leaf.xcodeproj -scheme Leaf -configuration Debug build
+open /path/to/DerivedData/.../Build/Products/Debug/Leaf.app
 ```
 
-Or just open `Current.xcodeproj` in Xcode and run the `Current` scheme.
+Or just open `Leaf.xcodeproj` in Xcode and run the `Leaf` scheme.
 
 Quit any running instance before rebuilding — `xcodebuild` won't overwrite a running app bundle:
 
 ```sh
-osascript -e 'tell application "Current" to quit'
+osascript -e 'tell application "Leaf" to quit'
 ```
 
 ## Architecture
@@ -56,8 +56,8 @@ See `CLAUDE.md` for detailed implementation notes, gotchas, and rationale behind
 
 ## Testing
 
-`CurrentTests`/`CurrentUITests` are currently just Xcode placeholders — no real tests exist yet.
+`LeafTests`/`LeafUITests` are currently just Xcode placeholders — no real tests exist yet.
 
 ```sh
-xcodebuild -project Current.xcodeproj -scheme Current test
+xcodebuild -project Leaf.xcodeproj -scheme Leaf test
 ```

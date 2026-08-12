@@ -1,6 +1,6 @@
 import AppKit
 
-/// Creates and owns the app's single AppKit-managed window. `CurrentApp`'s `Scene` is an empty
+/// Creates and owns the app's single AppKit-managed window. `LeafApp`'s `Scene` is an empty
 /// `Settings` scene (no `WindowGroup`) — see its comment for why.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
