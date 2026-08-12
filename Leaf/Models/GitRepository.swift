@@ -101,9 +101,13 @@ nonisolated struct GitRepository {
 
     @discardableResult
     private func run(_ arguments: [String]) throws -> String {
-        let (output, _, exitCode) = try runRaw(arguments)
+        let (output, errorOutput, exitCode) = try runRaw(arguments)
         if exitCode != 0 {
-            throw GitError.commandFailed(output.trimmingCharacters(in: .whitespacesAndNewlines))
+            // git writes its actual fatal/error text to stderr, not stdout — stdout is usually
+            // empty on failure, which previously made every `GitError.commandFailed` message
+            // blank and broke callers (like `push`) that pattern-match on the message text.
+            let message = errorOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw GitError.commandFailed(message.isEmpty ? output.trimmingCharacters(in: .whitespacesAndNewlines) : message)
         }
         return output
     }

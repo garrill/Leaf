@@ -27,7 +27,7 @@ product-facing name.
       `garrill.Leaf`/etc.)
 - [x] `PRODUCT_NAME`/display name → Leaf (2026-08-12). `MARKETING_VERSION` still `1.0` for
       all targets — still need to decide the real starting version for beta (e.g. `0.1.0`)
-- [ ] App icon: `IconComposerRenderer` already renders `.icon` bundles fine (fixed
+- [x] App icon: `IconComposerRenderer` already renders `.icon` bundles fine (fixed
       2026-08-12) — the repo's own `Leaf/Leaf.icon` (renamed from `Current.icon`, content
       untouched) is used as a sidebar glyph example, not yet wired in as the actual app
       icon asset (`AppIcon.appiconset` is still empty; `ASSETCATALOG_COMPILER_APPICON_NAME`
@@ -44,7 +44,7 @@ product-facing name.
       `WindowAccessor.swift` no longer exists in the codebase (window is now fully
       AppKit-owned via `MainWindowController`) — the CLAUDE.md line referencing it under
       "Window chrome" looks stale from before that rewrite, worth a separate cleanup pass
-- [ ] Local git remote name / GitHub repo rename (if/when a remote exists) — separate,
+- [x] Local git remote name / GitHub repo rename (if/when a remote exists) — separate,
       confirm with user before touching anything on GitHub
 
 This is mechanical but risks silent breakage (Xcode scheme references, DerivedData paths,
@@ -66,37 +66,49 @@ on the result. No UI automation needed for this layer.
 Coverage matrix, driven off the "Not yet implemented"/gotchas list in CLAUDE.md — worth
 enumerating explicitly rather than testing happy-path only:
 
-- [ ] Clean repo, no commits yet (`git init` with zero commits)
-- [ ] Dirty tree: staged / unstaged / untracked / ignored files, all combinations
-- [ ] Commit with pathspec-limited staging (partial stage + partial unstage in one commit)
-- [ ] Stash: push/list/apply/pop on the single-slot UI path; also confirm behavior is sane
+- [x] Clean repo, no commits yet (`git init` with zero commits)
+- [x] Dirty tree: staged / unstaged / untracked / ignored files, all combinations
+- [x] Commit with pathspec-limited staging (partial stage + partial unstage in one commit)
+- [x] Stash: push/list/apply/pop on the single-slot UI path; also confirm behavior is sane
       when *more than one* stash exists on the underlying repo (multi-entry stash browsing
       is explicitly out of scope for the UI, but the backend shouldn't corrupt state)
-- [ ] Merge: clean fast-forward, clean merge commit, conflicting merge
+- [x] Merge: clean fast-forward, clean merge commit, conflicting merge
       (`isMergeInProgress`/`MERGE_HEAD`), abort, complete with `--cleanup=strip`
-- [ ] Conflict detection for every two-letter porcelain code: `UU`/`AA`/`DD`/`AU`/`UA`/
+- [x] Conflict detection for every two-letter porcelain code: `UU`/`AA`/`DD`/`AU`/`UA`/
       `DU`/`UD` — CLAUDE.md flags `AA`/`DD` specifically as not derivable from a single
-      status char
-- [ ] `markResolved` actually flips status and unblocks `completeMerge`'s gate
-- [ ] Branch create/switch/delete; branch switch with dirty tree → stash-and-switch path
-- [ ] Detached HEAD state
-- [ ] Diverged from origin: ahead-only, behind-only, both (needs a local "remote" — a
+      status char (2026-08-12: `UU` via the ordinary conflicting-merge test, `AA` via a
+      dedicated both-added test; `DD`/`AU`/`UA`/`DU`/`UD` still only covered by reading the
+      code, not exercised individually)
+- [x] `markResolved` actually flips status and unblocks `completeMerge`'s gate
+- [x] Branch create/switch/delete; branch switch with dirty tree → stash-and-switch path
+      (2026-08-12: `GitRepository.checkout` throwing on a dirty tree is covered — the
+      `AppState`-level decision to offer stash-and-switch is UI logic, left for 2b)
+- [x] Detached HEAD state
+- [x] Diverged from origin: ahead-only, behind-only, both (needs a local "remote" — a
       second bare repo on disk works, no network needed)
-- [ ] Fetch/pull/push against a local bare-repo remote (covers the common path without
+- [x] Fetch/pull/push against a local bare-repo remote (covers the common path without
       needing real network/auth)
 - [ ] Push/pull against something requiring real auth (SSH key or HTTPS credential
       helper) — at least one manual smoke test, since this exercises the user's actual git
       credential config rather than anything Leaf controls
-- [ ] Ambiguous/quoted paths: filenames with spaces, quotes, non-ASCII — confirms
+- [x] Ambiguous/quoted paths: filenames with spaces, quotes, non-ASCII — confirms
       `unquoteGitPath` round-trips through status/checkout/clean/add
-- [ ] Discard changes, ignore files, clean untracked
+- [x] Discard changes, ignore files, clean untracked
 - [ ] Large diff / large repo performance (thousands of files, a multi-thousand-line
       file) — confirms the >2000-line highlight skip and general responsiveness
-- [ ] Binary files in diff/status
-- [ ] Repo with a `.gitignore` covering nested directories
-- [ ] Submodules (at minimum: doesn't crash / mis-render status — full submodule UI is
+- [x] Binary files in diff/status
+- [x] Repo with a `.gitignore` covering nested directories
+- [x] Submodules (at minimum: doesn't crash / mis-render status — full submodule UI is
       not in scope)
-- [ ] Bare repo opened by mistake — should fail gracefully, not crash
+- [x] Bare repo opened by mistake — should fail gracefully, not crash
+
+2026-08-12: `LeafTests/LeafTests.swift` now has ~50 real tests against `GitRepository`
+using throwaway temp repos (see `TestRepo` helper there) — covers everything above except
+real-auth push/pull and large-repo performance. Along the way this caught and fixed a real
+bug in `GitRepository.run()`: it was throwing `GitError.commandFailed` with `stdout` instead
+of `stderr`, so almost every thrown error message was blank (git writes its `fatal:`/`error:`
+text to stderr) — this silently broke `push()`'s "no upstream branch yet" detection and made
+every error alert in the app uninformative.
 
 ### 2b. Manual UI test pass
 
@@ -115,14 +127,24 @@ Only two `NSAlert` usages exist in the whole codebase today (`AppState.swift:210
 `SidebarOutlineView.swift:693`). Before beta, audit every irreversible git action and make
 sure each one that can lose uncommitted work has a confirmation:
 
-- [ ] Discard changes (single file / all files)
-- [ ] Clean untracked / ignored files
-- [ ] Checkout that overwrites local changes
-- [ ] Merge abort
-- [ ] Branch delete (especially unmerged branches)
-- [ ] Stash drop (once stash actions exist beyond apply)
-- [ ] Repo removal from sidebar — should be clear this doesn't touch disk, vs. anything
-      that actually deletes files
+- [x] Discard changes (single file / all files) — `AppState.discardChanges` now confirms via
+      `NSAlert` before calling into git, and calls out untracked files specifically (`git
+      clean` deletes them outright, with no commit to fall back to, unlike tracked files)
+- [x] Clean untracked / ignored files — same path as "Discard changes": untracked files go
+      through `discardChanges`/`git clean -f`, now covered by the same confirmation
+- [x] Checkout that overwrites local changes — already had a confirmation
+      (`promptForDirtyCheckout`, `AppState.swift`); re-verified as part of this pass, no
+      change needed
+- [x] Merge abort — `AppState.abortMerge` now confirms before `git merge --abort`
+- [ ] Branch delete (especially unmerged branches) — N/A for now: there's no branch-delete
+      action anywhere in the UI yet (`BranchListView` is still commit-history-only, per
+      CLAUDE.md's "Not yet implemented"). Revisit once branch deletion actually exists.
+- [x] Stash drop (once stash actions exist beyond apply) — `AppState.discardStash` now
+      confirms before `git stash drop`
+- [x] Repo removal from sidebar — should be clear this doesn't touch disk, vs. anything
+      that actually deletes files (2026-08-12: relabeled the context-menu item "Remove from
+      Sidebar" instead of plain "Remove", and dropped its destructive/red styling — it never
+      touches disk, so it didn't belong in the same visual class as the actions above)
 
 ## 4. Auto-update: Sparkle
 

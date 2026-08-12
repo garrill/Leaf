@@ -320,12 +320,37 @@ final class AppState {
         selectedFile = primaryFile
     }
 
+    /// Blocking confirmation for an action that would lose work with no in-app undo. Mirrors
+    /// `promptForDirtyCheckout`'s plain (non-sheet) `NSAlert` usage — these are all triggered
+    /// from imperative button/menu actions on `AppState`, not from a SwiftUI view that could
+    /// hold its own `@State` alert-presentation flag.
+    private static func confirmDestructiveAction(title: String, message: String, confirmButtonTitle: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: confirmButtonTitle)
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     func discardChanges(for file: ChangedFile) {
         discardChanges(for: [file])
     }
 
     func discardChanges(for files: [ChangedFile]) {
         guard let repo = currentRepository, !files.isEmpty else { return }
+        // Untracked files have no commit to fall back to — `git clean` deletes them outright,
+        // unlike tracked files (`git checkout`) which just revert to the last commit. Call that
+        // out explicitly rather than lumping both under one generic "discard" warning.
+        let hasUntracked = files.contains { $0.status == .untracked }
+        let title = files.count == 1
+            ? "Discard changes to \u{201C}\((files[0].path as NSString).lastPathComponent)\u{201D}?"
+            : "Discard changes to \(files.count) files?"
+        let message = hasUntracked
+            ? "This cannot be undone. Untracked files will be permanently deleted; tracked files will revert to their last committed version."
+            : "This cannot be undone. Files will revert to their last committed version."
+        guard Self.confirmDestructiveAction(title: title, message: message, confirmButtonTitle: "Discard") else { return }
         do {
             try repo.discardChanges(for: files)
             errorMessage = nil
@@ -372,6 +397,11 @@ final class AppState {
 
     func discardStash() {
         guard let repo = currentRepository else { return }
+        guard Self.confirmDestructiveAction(
+            title: "Discard stashed changes?",
+            message: "This cannot be undone. The stashed changes will be permanently deleted.",
+            confirmButtonTitle: "Discard"
+        ) else { return }
         do {
             try repo.discardStash()
             errorMessage = nil
@@ -471,6 +501,11 @@ final class AppState {
 
     func abortMerge() {
         guard let repo = currentRepository else { return }
+        guard Self.confirmDestructiveAction(
+            title: "Abort this merge?",
+            message: "This cannot be undone. Any conflict resolutions you've made so far will be discarded, and the branch will return to its state before the merge.",
+            confirmButtonTitle: "Abort Merge"
+        ) else { return }
         do {
             try repo.mergeAbort()
             errorMessage = nil

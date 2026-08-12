@@ -205,7 +205,7 @@ private struct FetchToolbarView: View {
                 } label: {
                     Label("Fetch", systemImage: "arrow.triangle.2.circlepath")
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.accessoryBarAction)
                 .help("Fetch")
                 .disabled(appState.selectedRepoURL == nil)
             }
@@ -234,6 +234,7 @@ private struct PullPushToolbarView: View {
                         syncBadge(isVisible: appState.behindCount > 0)
                     }
             }
+            .buttonStyle(.accessoryBarAction)
             .help("Pull")
             .disabled(appState.selectedRepoURL == nil ||
                       !appState.hasUpstream ||
@@ -248,6 +249,7 @@ private struct PullPushToolbarView: View {
                         syncBadge(isVisible: appState.aheadCount > 0)
                     }
             }
+            .buttonStyle(.accessoryBarAction)
             .help("Push")
             .disabled(appState.selectedRepoURL == nil ||
                       appState.selectedBranch == nil ||

@@ -62,7 +62,11 @@ struct RepoRowView: View {
                 }
             }
             Divider()
-            Button("Remove", role: .destructive) {
+            // Not a real "delete" — it only removes the sidebar entry, so this skips the
+            // confirm-dialog treatment given to the actually-destructive actions elsewhere
+            // (discard/clean/merge-abort/stash-drop). The label spells that out since the
+            // repo icon otherwise makes this read like it could touch the repo on disk.
+            Button("Remove from Sidebar") {
                 sidebarStore.removeRepo(id: repo.id)
                 if appState.selectedRepoURL == repo.url {
                     appState.deselectRepo()
