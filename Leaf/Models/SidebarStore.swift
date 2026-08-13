@@ -22,12 +22,17 @@ final class SidebarStore {
 
     // MARK: Repo CRUD
 
-    func addRepo(at url: URL) {
-        guard !repos.contains(where: { $0.path == url.path }) else { return }
+    /// Adds `url` as a repo, returning `false` (and not adding it) if it isn't a git repository.
+    /// Already-added repos report `true` without duplicating the entry.
+    @discardableResult
+    func addRepo(at url: URL) -> Bool {
+        guard GitRepository.isGitRepository(at: url) else { return false }
+        guard !repos.contains(where: { $0.path == url.path }) else { return true }
         let repo = SidebarRepo(id: UUID(), path: url.path, displayNameOverride: nil, iconPath: nil, folderID: nil, sortIndex: 0)
         repos.append(repo)
         topLevelOrder.append(.repo(repo.id))
         persist()
+        return true
     }
 
     func removeRepo(id: UUID) {

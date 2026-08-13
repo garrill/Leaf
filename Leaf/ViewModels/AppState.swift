@@ -124,8 +124,28 @@ final class AppState {
         panel.prompt = "Add Repository"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        sidebarStore.addRepo(at: url)
+        guard sidebarStore.addRepo(at: url) else {
+            presentNotARepositoryAlert(for: [url.lastPathComponent])
+            return
+        }
         selectRepo(url)
+    }
+
+    /// Shown when one or more folders added via the picker or a Finder drag turn out not to be
+    /// git repositories (no `.git` entry) — those are skipped rather than added.
+    func presentNotARepositoryAlert(for folderNames: [String]) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        if folderNames.count == 1 {
+            alert.messageText = "\"\(folderNames[0])\" Is Not a Git Repository"
+            alert.informativeText = "This folder does not contain a git repository, so it wasn't added."
+        } else {
+            alert.messageText = "Some Folders Are Not Git Repositories"
+            alert.informativeText = "The following folders don't contain a git repository, so they weren't added:\n\n"
+                + folderNames.joined(separator: "\n")
+        }
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// Clones `urlString` into a new folder (named after the repo) under `destinationParent`,
@@ -928,7 +948,15 @@ final class AppState {
             }
             if source != nil {
                 self.changedFiles = snapshot.changedFiles
-                self.updateUncommittedSummary(repo: repo, statusEntries: snapshot.statusEntries)
+                // Only `.workingChanges` populates real `statusEntries` (see
+                // `GitRepository.changedFilesWithStatus(for:)`) — for `.stash`/`.commit` it's
+                // always `[]`, so applying it unconditionally here would zero out the sidebar's
+                // "Uncommitted Changes" count (and, via `BranchListView`'s row losing its `.tag`,
+                // make that row unclickable) any time an external-change notification fires while
+                // browsing history or the stash.
+                if case .workingChanges = source {
+                    self.updateUncommittedSummary(repo: repo, statusEntries: snapshot.statusEntries)
+                }
                 let currentPaths = Set(snapshot.changedFiles.map(\.path))
                 self.checkedFilePaths = previousCheckedFilePaths.intersection(currentPaths)
                     .union(currentPaths.subtracting(previousChangedFilePaths))

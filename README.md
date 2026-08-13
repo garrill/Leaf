@@ -13,7 +13,7 @@ This is intentionally a bare-bones, simple to use git client, best for solo devs
 ## Features
 
 - **Multi-repo sidebar** group repositories into folders, then reorder, rename and add icons to repos to help organisation
-- **Basic git workflow** — witch and merge branches; commit, stage and unstage files; fetch, pull and push
+- **Basic git workflow** — switch and merge branches; commit, stage and unstage files; fetch, pull and push
 - **Rich diff viewer** — syntax-highlighted, word-level diffs, plus side by-side or swipe over image diffs
 
 ## Requirements
@@ -54,7 +54,7 @@ Leaf runs entirely on your Mac. It talks only to the git you already have instal
 
 ## Testing
 
-`LeafTests` has real unit tests against `GitRepository`, run against throwaway repos in a temp directory (real `git`, no mocks) — see `LeafTests/LeafTests.swift`. `LeafUITests` is still just an Xcode placeholder.
+`LeafTests` has real unit tests against `GitRepository`, run against throwaway repos in a temp directory (real `git`, no mocks) — see `LeafTests/LeafTests.swift`. `LeafUITests` has a handful of real `XCUIApplication` tests (launch, empty state, Settings window, menu contents) — see `LeafUITests/LeafUITests.swift`; `LeafUITestsLaunchTests.swift` is still the stock Xcode placeholder.
 
 ```sh
 xcodebuild -project Leaf.xcodeproj -scheme Leaf test

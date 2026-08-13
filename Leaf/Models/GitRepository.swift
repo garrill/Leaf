@@ -164,6 +164,13 @@ nonisolated struct GitRepository {
         return name.isEmpty ? "repository" : name
     }
 
+    /// Whether `url` is a git repository's working tree root — i.e. it has a `.git` entry.
+    /// Covers both a plain repo (`.git` directory) and a worktree/submodule (`.git` file
+    /// pointing elsewhere), same as `git rev-parse` would accept, without shelling out.
+    static func isGitRepository(at url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.appendingPathComponent(".git").path)
+    }
+
     /// Whether `/usr/bin/git` actually works. On a Mac without Xcode or the Command Line Tools
     /// installed, `/usr/bin/git` still exists as a stub that pops up the system "install Command
     /// Line Tools" dialog and exits non-zero rather than failing to launch — so a `try? Process()`
@@ -235,7 +242,15 @@ nonisolated struct GitRepository {
     private static let conflictStatusCodes: Set<String> = ["UU", "AA", "DD", "AU", "UA", "DU", "UD"]
 
     func statusEntries() throws -> [ChangedFile] {
-        let output = try run(["status", "--porcelain=v1", "--untracked-files=all"])
+        // `--no-optional-locks` stops git from refreshing/rewriting `.git/index`'s stat cache as
+        // a side effect of `status` — without it, every status call bumps the index's mtime,
+        // which `RepoWatcher`'s FSEvents stream (watching the whole repo, `.git` included) picks
+        // up as an external change and reacts to by calling `handleExternalChange()`, which in
+        // turn calls `statusEntries()` again while `.workingChanges` is selected — a self-sustaining
+        // refresh loop that starves in-flight diff loads (their cache-generation guard keeps
+        // getting invalidated before the git process returns) and, once the user selects a commit
+        // or stash, zeroes the sidebar's uncommitted-changes count via a stray leftover firing.
+        let output = try run(["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all"])
         return output
             .split(separator: "\n")
             .compactMap { line -> ChangedFile? in
@@ -335,7 +350,13 @@ nonisolated struct GitRepository {
             }
             return stdout
         }
-        return try run(["diff", "--", file.path])
+        // Against `HEAD`, not a plain `git diff` (which is index-vs-working-tree only) — the
+        // "Uncommitted Changes" row is meant to show *everything* not yet committed, staged or
+        // not. A file that's fully staged with no further edits has an empty index/working-tree
+        // delta, so a plain `git diff` came back empty and the pane showed nothing even though
+        // `statusEntries()` (which diffs against `HEAD` via porcelain status) correctly still
+        // listed the file as changed.
+        return try run(["diff", "HEAD", "--", file.path])
     }
 
     /// Like `runRaw`, but returns raw `Data` instead of decoding as UTF-8 — needed for binary

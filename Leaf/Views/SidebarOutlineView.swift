@@ -522,13 +522,22 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             guard let urls = draggedFolderURLs(from: info) else {
                 return false
             }
+            var rejectedNames: [String] = []
+            var lastAddedURL: URL?
             for url in urls {
-                sidebarStore.addRepo(at: url)
+                if sidebarStore.addRepo(at: url) {
+                    lastAddedURL = url
+                } else {
+                    rejectedNames.append(url.lastPathComponent)
+                }
             }
-            if let lastURL = urls.last {
-                appState.selectRepo(lastURL)
+            if let lastAddedURL {
+                appState.selectRepo(lastAddedURL)
             }
-            return true
+            if !rejectedNames.isEmpty {
+                appState.presentNotARepositoryAlert(for: rejectedNames)
+            }
+            return lastAddedURL != nil
         }
 
         let dragItem = SidebarDragItem(
