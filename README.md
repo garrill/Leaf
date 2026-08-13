@@ -16,6 +16,11 @@ This is intentionally a bare-bones, simple to use git client, best for solo devs
 - **Basic git workflow** — switch and merge branches; commit, stage and unstage files; fetch, pull and push
 - **Rich diff viewer** — syntax-highlighted, word-level diffs, plus side by-side or swipe over image diffs
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img src="docs/screenshot-light.png" alt="Leaf screenshot">
+</picture>
+
 ## Requirements
 
 - macOS with Xcode (minimum MacOS 26)
