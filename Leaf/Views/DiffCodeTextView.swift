@@ -37,6 +37,10 @@ struct DiffLineMetadata {
 final class DiffCodeTextView: NSTextView {
     private(set) var lineMetadata: [DiffLineMetadata] = []
     private var paragraphStartOffsets: [Int] = [0]
+    /// The body font size last applied via `setContent` — `DiffGutterView` reads this to keep its
+    /// line-number font sized proportionally, since the gutter draws independently of the text
+    /// view's own attributed string (see the "Diff pane" gotcha in CLAUDE.md).
+    private(set) var bodyFontSize: CGFloat = NSFont.systemFontSize
 
     /// Floor for the text container's wrap width. `NSTextContainer` treats a width of 0 (or
     /// close to it) as effectively unbounded — each line lays out as one long fragment instead of
@@ -58,8 +62,9 @@ final class DiffCodeTextView: NSTextView {
         return DiffCodeTextView(frame: .zero, textContainer: container)
     }
 
-    func setContent(attributedString: NSAttributedString, metadata: [DiffLineMetadata]) {
+    func setContent(attributedString: NSAttributedString, metadata: [DiffLineMetadata], bodyFontSize: CGFloat) {
         lineMetadata = metadata
+        self.bodyFontSize = bodyFontSize
         textStorage?.setAttributedString(attributedString)
         recomputeParagraphOffsets()
         needsDisplay = true
@@ -198,7 +203,12 @@ final class DiffCodeTextView: NSTextView {
 final class DiffGutterView: NSView {
     weak var codeTextView: DiffCodeTextView?
 
-    private static let numberFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+    /// Scaled off the code text's own body font size (`Settings` → diff font size) rather than a
+    /// fixed constant, so the two stay proportional however the user resizes the body text —
+    /// matching the ~2pt gap between `NSFont.systemFontSize`/`.smallSystemFontSize` this replaced.
+    private var numberFont: NSFont {
+        NSFont.monospacedSystemFont(ofSize: max(9, (codeTextView?.bodyFontSize ?? NSFont.systemFontSize) - 2), weight: .regular)
+    }
     private static let leadingPadding: CGFloat = 4
     private static let columnWidth: CGFloat = 36
     private static let columnGap: CGFloat = 8
@@ -311,7 +321,7 @@ final class DiffGutterView: NSView {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = .right
         let attributed = NSAttributedString(string: "\(number)", attributes: [
-            .font: Self.numberFont,
+            .font: numberFont,
             .foregroundColor: NSColor.secondaryLabelColor,
             .paragraphStyle: paragraphStyle
         ])
@@ -451,7 +461,7 @@ final class DiffCodeContainerView: NSView {
 
     func setContent(attributedString: NSAttributedString, metadata: [DiffLineMetadata], key: DiffContentKey) {
         lastContentKey = key
-        textView.setContent(attributedString: attributedString, metadata: metadata)
+        textView.setContent(attributedString: attributedString, metadata: metadata, bodyFontSize: key.fontSize)
         needsLayout = true
         gutterView.needsDisplay = true
         hunkSeparatorView.needsDisplay = true
@@ -468,6 +478,7 @@ final class DiffCodeContainerView: NSView {
 struct DiffContentKey: Equatable {
     let diffText: String
     let highlightSnapshotID: UUID?
+    let fontSize: CGFloat
 }
 
 /// SwiftUI bridge for the gutter/text-view pair above. Builds the per-line `NSAttributedString`
@@ -479,6 +490,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
     let lines: [DiffLine]
     let highlightSnapshot: HighlightSnapshot?
     let diffText: String
+    var fontSize: CGFloat = NSFont.systemFontSize
 
     /// The gap painted between consecutive hunks — shared with `HunkSeparatorOverlayView`, which
     /// has to correct for this same amount when locating a hunk's top boundary rule.
@@ -516,18 +528,19 @@ struct DiffCodeScrollView: NSViewRepresentable {
     }
 
     private func updateContent(container: DiffCodeContainerView) {
-        let key = DiffContentKey(diffText: diffText, highlightSnapshotID: highlightSnapshot?.id)
+        let key = DiffContentKey(diffText: diffText, highlightSnapshotID: highlightSnapshot?.id, fontSize: fontSize)
         guard container.needsContentUpdate(for: key) else { return }
-        let (attributed, metadata) = Self.buildContent(lines: lines, highlightSnapshot: highlightSnapshot, diffText: diffText)
+        let (attributed, metadata) = Self.buildContent(lines: lines, highlightSnapshot: highlightSnapshot, diffText: diffText, fontSize: fontSize)
         container.setContent(attributedString: attributed, metadata: metadata, key: key)
     }
 
     private static func buildContent(
         lines: [DiffLine],
         highlightSnapshot: HighlightSnapshot?,
-        diffText: String
+        diffText: String,
+        fontSize: CGFloat
     ) -> (NSAttributedString, [DiffLineMetadata]) {
-        let bodyFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        let bodyFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         // Applied to every line so row height — which the gutter and its background/border fills
         // read straight off the layout manager's line fragments — grows along with it everywhere.
         let lineParagraphStyle = NSMutableParagraphStyle()

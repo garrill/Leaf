@@ -32,6 +32,7 @@ struct DiffView: View {
     @Bindable var appState: AppState
     var focusedColumn: FocusState<MainColumn?>.Binding
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(LeafSettings.diffFontSizeKey) private var diffFontSize = LeafSettings.defaultDiffFontSize
     /// Tagged with the diff text it was computed for. Row rendering only trusts it when that tag
     /// still matches `appState.diffText`, so a still-running (or superseded) highlight task can
     /// never paint stale colors onto a newly-selected file's text — the text itself always comes
@@ -207,7 +208,7 @@ struct DiffView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ScrollView {
-                DiffCodeScrollView(lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText)
+                DiffCodeScrollView(lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText, fontSize: CGFloat(diffFontSize))
                     .frame(maxWidth: .infinity)
             }
             .scrollPosition($scrollPosition)

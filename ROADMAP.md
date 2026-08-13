@@ -182,27 +182,36 @@ CI config, no LICENSE.
 
 ## 6. Beta-readiness polish
 
-- [ ] "Git not installed" / Xcode Command Line Tools missing — currently unhandled;
-      `GitRepository` shells to `/usr/bin/git` and will presumably fail confusingly rather
-      than explain what's wrong
-- [ ] First-run / empty-state experience: what a brand-new user sees before adding any
-      repo — confirm it's a clear "Add a repository" prompt, not a blank pane
-- [ ] Consistent error surfacing for failed git operations (network errors, auth failures,
-      permission errors) — audit whether failures currently fail silently vs. show
-      something actionable
-- [ ] Settings/Preferences window completeness pass (whatever currently exists in
-      `CurrentApp.swift`/`AppDelegate.swift`) — anything beta users would expect to
-      configure (diff font size, default external editor, etc.)
-- [ ] Standard macOS menu bar completeness (Window menu, Help menu with a feedback/issue
-      link, About panel with correct version)
-- [ ] A lightweight in-app "Report an issue" path (mailto: or link to a GitHub issues
-      page) so beta feedback has a channel
-- [ ] Crash visibility — at minimum confirm crash logs are locatable in Console.app /
-      `~/Library/Logs/DiagnosticReports`; a crash-reporting SDK is likely overkill for an
-      initial beta but worth a deliberate "no" rather than an oversight
-- [ ] Privacy note: the app is local-only and shells out to the user's own git — worth a
-      one-line statement (README or in-app) since there's no telemetry to disclose, but
-      beta users will ask
+- [x] "Git not installed" / Xcode Command Line Tools missing — already handled:
+      `GitRepository.isGitAvailable()` is checked at launch (`MainWindowController.swift`) and
+      `GitUnavailableView.swift` shows a dedicated screen with an "Install Command Line Tools"
+      button (`xcode-select --install`) and a "Check Again" retry
+- [x] First-run / empty-state experience — already handled: `RepoListView.swift` shows "No
+      Repositories" / "Add a folder that contains a git repository to get started." with a
+      prominent "Add local repository" button when the sidebar is empty
+- [x] Consistent error surfacing for failed git operations — git-op errors funnel into
+      `AppState.errorMessage`, shown in the always-mounted `DiffView` column; clone/new-branch
+      errors get their own sheet-local text. Meaningfully improved by the `GitRepository.run()`
+      stderr fix from the test-coverage pass (2026-08-12) — thrown messages used to read stdout
+      (usually blank on failure) instead of stderr (where git's actual `fatal:`/`error:` text
+      goes)
+- [x] Settings/Preferences window completeness pass (2026-08-12): real `Settings` scene
+      (`SettingsView.swift`, opens via the standard Cmd+,) with a diff font-size slider (wired
+      through `DiffCodeScrollView`/`DiffCodeTextView`/`DiffGutterView`, whose line-number font
+      now scales proportionally with it) and a default-external-editor picker (wired into
+      "Open in Default Program" in `ChangedFilesView`, via `NSWorkspace.OpenConfiguration`)
+- [x] Standard macOS menu bar completeness (2026-08-12): added a `.commands` block in
+      `LeafApp.swift` inserting "Leaf Help" and "Report an Issue…" into the Help menu (linking
+      to the GitHub repo's README and a new-issue page); Window menu is the standard
+      SwiftUI-provided one. About panel version is still whatever `MARKETING_VERSION` says,
+      which is still the placeholder `1.0` — tracked separately in #1
+- [x] A lightweight in-app "Report an issue" path — same Help-menu item above
+      ("Report an Issue…" → `https://github.com/garrill/Leaf/issues/new`)
+- [x] Crash visibility — deliberate "no" recorded here: no crash-reporting SDK for this beta;
+      relying on the OS's own crash logs (Console.app / `~/Library/Logs/DiagnosticReports`),
+      which need no app-side setup
+- [x] Privacy note (2026-08-12): added to `README.md` (new "Privacy" section) and to the new
+      Settings window's "Privacy" section
 
 ## 7. Explicitly deferred (not required for this beta)
 

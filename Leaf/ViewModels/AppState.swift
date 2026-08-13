@@ -65,6 +65,14 @@ final class AppState {
         selectedRepoURL.map { GitRepository(rootURL: $0) }
     }
 
+    /// The sidebar's own record for the selected repo — separate from `currentRepository`
+    /// (a plain `GitRepository` git-command wrapper), needed for anything that touches sidebar
+    /// metadata (display name override, icon, rename) rather than the git repo itself.
+    private var selectedSidebarRepo: SidebarRepo? {
+        guard let url = selectedRepoURL else { return nil }
+        return sidebarStore.repos.first { $0.path == url.path }
+    }
+
     private var repoWatcher: RepoWatcher?
 
     private struct ChangedFilesCacheValue {
@@ -193,6 +201,47 @@ final class AppState {
         repoWatcher = nil
         invalidateSelectionCaches()
         refreshRepositoryState()
+    }
+
+    /// Removes the selected repo from the sidebar — never touches anything on disk, matching
+    /// `RepoRowView`'s per-row "Remove from Sidebar" context-menu action; this is the Repository
+    /// menu's equivalent for whichever repo is currently selected.
+    func removeSelectedRepo() {
+        guard let repo = selectedSidebarRepo else { return }
+        sidebarStore.removeRepo(id: repo.id)
+        deselectRepo()
+    }
+
+    func revealSelectedRepoInFinder() {
+        guard let url = selectedRepoURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func openSelectedRepoInDefaultApplication() {
+        guard let url = selectedRepoURL else { return }
+        LeafSettings.open(url)
+    }
+
+    /// Puts the selected repo's sidebar row into rename mode — `SidebarOutlineView`/`RepoRowView`
+    /// watch `renamingRepoID` and do the actual text-field/commit work.
+    func startRenamingSelectedRepo() {
+        guard let repo = selectedSidebarRepo else { return }
+        renamingRepoID = repo.id
+    }
+
+    /// Mirrors `RepoRowView.pickIcon()`, but for whichever repo is currently selected rather than
+    /// whichever row was right-clicked.
+    func chooseIconForSelectedRepo() {
+        guard let repo = selectedSidebarRepo, let url = selectedRepoURL else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.directoryURL = url
+        panel.prompt = "Choose Icon"
+        guard panel.runModal() == .OK, let iconURL = panel.url else { return }
+        sidebarStore.updateRepo(id: repo.id, displayName: repo.displayNameOverride, iconPath: iconURL.path)
     }
 
     func selectBranch(_ branch: GitBranch) {

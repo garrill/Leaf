@@ -148,7 +148,7 @@ struct ChangedFilesView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([fullURL(for: file)])
             }
             Button("Open in Default Program") {
-                NSWorkspace.shared.open(fullURL(for: file))
+                LeafSettings.open(fullURL(for: file))
             }
             Divider()
             Button("Copy File Path") {

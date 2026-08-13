@@ -21,9 +21,14 @@ final class MainWindowController: NSWindowController {
         window.title = "Leaf"
         window.minSize = NSSize(width: 900, height: 500)
         window.toolbarStyle = .unified
+        // A single-window app has no use for window tabs — without this, AppKit adds "Show Tab
+        // Bar"/"Show All Tabs" to the View menu by default (`.automatic`).
+        window.tabbingMode = .disallowed
         window.center()
 
         super.init(window: window)
+
+        AppStateHolder.shared = appState
 
         if GitRepository.isGitAvailable() {
             presentMainInterface()

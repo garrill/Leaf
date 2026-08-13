@@ -31,7 +31,7 @@ xcodebuild -project Leaf.xcodeproj -scheme Leaf -configuration Debug build
 open /path/to/DerivedData/.../Build/Products/Debug/Leaf.app
 ```
 
-Or just open `Leaf.xcodeproj` in Xcode and run the `Leaf` scheme.
+Or open `Leaf.xcodeproj` in Xcode and run the `Leaf` scheme.
 
 Quit any running instance before rebuilding — `xcodebuild` won't overwrite a running app bundle:
 
@@ -41,20 +41,20 @@ osascript -e 'tell application "Leaf" to quit'
 
 ## Architecture, at a glance
 
-- **Git backend**: shells out to `/usr/bin/git` directly (no libgit2/SwiftGit2) — see
-  `GitRepository.swift`.
+- **Git backend**: shells out to `/usr/bin/git` directly (no libgit2/SwiftGit2) — see `GitRepository.swift`.
 - **State**: `AppState` is the single source of truth for the whole app.
-- **Layout**: `NSSplitViewController` (sidebar | branches/history | files | diff),
-  hosting each column as its own SwiftUI view.
+- **Layout**: `NSSplitViewController` (sidebar | branches/history | files | diff), hosting each column as its own SwiftUI view.
 - **Sidebar**: `NSOutlineView` for native drag-reorder.
 - **Diff view**: `NSTextView`, for proper multi-line selection.
 - App Sandbox is intentionally disabled — the app shells out inside arbitrary repo folders on disk.
 
+## Privacy
+
+Leaf runs entirely on your Mac. It talks only to the git you already have installed and to the remotes you configure — nothing about your repositories, code, or usage is collected or sent anywhere.
 
 ## Testing
 
-`LeafTests`/`LeafUITests` are currently just Xcode placeholders — no real tests exist yet
-(see `ROADMAP.md`).
+`LeafTests` has real unit tests against `GitRepository`, run against throwaway repos in a temp directory (real `git`, no mocks) — see `LeafTests/LeafTests.swift`. `LeafUITests` is still just an Xcode placeholder.
 
 ```sh
 xcodebuild -project Leaf.xcodeproj -scheme Leaf test

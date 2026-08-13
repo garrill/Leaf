@@ -1,5 +1,25 @@
 import AppKit
+import Combine
 import SwiftUI
+
+/// Backs the View menu's "Show Sidebar"/"Hide Sidebar" item (`LeafApp`'s `.commands`). A plain
+/// singleton rather than something threaded through `AppState` — the window/split-view hierarchy
+/// is built in `MainWindowController`, entirely separate from where `LeafApp`'s `Scene`/`commands`
+/// are declared, and this is the one piece of AppKit-side UI state the menu needs to see.
+final class SidebarVisibility: ObservableObject {
+    static let shared = SidebarVisibility()
+    @Published var isCollapsed = false
+    private init() {}
+}
+
+/// Gives `LeafApp`'s `.commands` (the Repository menu) a way to reach the single running
+/// `AppState` — same reasoning as `SidebarVisibility` above: the `Scene`/`commands` in `LeafApp`
+/// are declared independently of `MainWindowController`, which is what actually owns `AppState`.
+/// Set once, in `MainWindowController.init()`, and never cleared — the app has exactly one window
+/// for its whole lifetime (`applicationShouldTerminateAfterLastWindowClosed` returns `true`).
+enum AppStateHolder {
+    static var shared: AppState?
+}
 
 /// Step 4 of the incremental rebuild: all four columns (sidebar, branches, files, diff). The
 /// branch-menu toolbar item stays pinned to the branches column's trailing edge (divider index
@@ -22,6 +42,7 @@ final class MainSplitViewController: NSSplitViewController {
     private var hasAppliedInitialLayout = false
     private let defaultSidebarWidth: CGFloat = 280
     private let defaultBranchesWidth: CGFloat = 320
+    private var sidebarCollapseObservation: NSKeyValueObservation?
 
     init(appState: AppState) {
         self.appState = appState
@@ -65,6 +86,18 @@ final class MainSplitViewController: NSSplitViewController {
         addSplitViewItem(branchesItem)
         addSplitViewItem(filesItem)
         addSplitViewItem(diffItem)
+
+        // Drives the View menu's "Show Sidebar"/"Hide Sidebar" label — `isCollapsed` changes both
+        // from the menu's own `toggleSidebar(_:)` action and from the user dragging the divider
+        // shut directly, so this needs to observe the split view item rather than just reacting
+        // to the menu command.
+        SidebarVisibility.shared.isCollapsed = sidebarItem.isCollapsed
+        sidebarCollapseObservation = sidebarItem.observe(\.isCollapsed, options: [.new]) { _, change in
+            guard let isCollapsed = change.newValue else { return }
+            DispatchQueue.main.async {
+                SidebarVisibility.shared.isCollapsed = isCollapsed
+            }
+        }
     }
 
     override func viewDidAppear() {
