@@ -19,23 +19,59 @@ struct ImageDiffView: View {
     private var newImage: NSImage? { appState.imageDiffNew.flatMap(NSImage.init(data:)) }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Picker("View Mode", selection: $mode) {
-                ForEach(Mode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
+        if oldImage == nil || newImage == nil {
+            singleImageLayout
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 16) {
+                Picker("View Mode", selection: $mode) {
+                    ForEach(Mode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 280)
+                .padding(.top, 16)
+
+                switch mode {
+                case .sideBySide: sideBySideLayout
+                case .swiper: swiperLayout
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 280)
-            .padding(.top, 16)
-
-            switch mode {
-            case .sideBySide: sideBySideLayout
-            case .swiper: swiperLayout
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// A file that's purely added or removed has only one side to show — the tab picker and
+    /// Before/After labels would be redundant, so just show the one image full-bleed (dimensions
+    /// and file size are still worth keeping, just without the now-meaningless side label).
+    private var singleImageLayout: some View {
+        let image = newImage ?? oldImage
+        let data = newImage != nil ? appState.imageDiffNew : appState.imageDiffOld
+        return VStack(spacing: 8) {
+            Group {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.secondary.opacity(0.06))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+                } else {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.06))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+                        .overlay(Text("No Preview Available").font(.callout).foregroundStyle(.secondary))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Text(metadataText(image: image, data: data))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(20)
     }
 
     private var sideBySideLayout: some View {

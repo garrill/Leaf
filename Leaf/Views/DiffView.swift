@@ -196,13 +196,18 @@ struct DiffView: View {
         } else if appState.selectedFile?.isLikelyImage == true {
             ImageDiffView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        } else if appState.diffText.hasPrefix("Binary files ") {
-            ContentUnavailableView(
-                "Binary File Changed",
-                systemImage: "doc.badge.gearshape",
-                description: Text(fileName)
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if appState.diffText.contains("\nBinary files ") || appState.diffText.hasPrefix("Binary files ") {
+            VStack(spacing: 6) {
+                Image(systemName: "doc.badge.gearshape")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                Text("Binary File Changed")
+                    .font(.callout.weight(.medium))
+                Text(fileName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else if appState.diffText.isEmpty {
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
