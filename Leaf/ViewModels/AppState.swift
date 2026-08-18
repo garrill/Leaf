@@ -44,6 +44,10 @@ final class AppState {
     var hasUpstream = false
     var aheadCount = 0
     var behindCount = 0
+    /// Whether an `origin` remote is configured — drives whether `CommitFooterView`'s "unpushed
+    /// commit" toolbar offers a Push button at all, distinct from `hasUpstream` (a fresh local
+    /// branch can lack an upstream yet still have somewhere to push to).
+    var hasOriginRemote = false
 
     var isMergeInProgress = false
     var mergeMessage: String?
@@ -98,6 +102,7 @@ final class AppState {
         let stashFileCount: Int
         let statusEntries: [ChangedFile]
         let errorMessage: String?
+        let hasOriginRemote: Bool
     }
 
     /// Selection data is immutable for a particular repository state. Keeping it here makes
@@ -520,6 +525,28 @@ final class AppState {
         }
     }
 
+    /// Undoes the repo's most recent commit — only ever called from the "unpushed commit"
+    /// toolbar (`UnpushedCommitFooterView`), which only shows for that exact commit, but this
+    /// re-checks it's still `commits.first` in case a background refresh raced the button tap.
+    /// `GitRepository.undoLastCommit()`'s `reset --soft` leaves the index/working tree exactly as
+    /// they were pre-commit, and `refreshRepositoryState()`'s usual selection heuristic then
+    /// naturally lands back on `.workingChanges` showing those same changes again.
+    func undoLastCommit() {
+        guard let repo = currentRepository,
+              case .commit(let commit) = selectedSource,
+              commits.first?.sha == commit.sha else { return }
+        do {
+            try repo.undoLastCommit()
+            // The subject line is all `GitCommit` carries — enough to let the user immediately
+            // re-commit as-is, or edit/expand it, rather than retyping from scratch.
+            commitMessage = commit.summary
+            errorMessage = nil
+            refreshRepositoryState()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     /// Calls `completeMerge()` while a merge is in progress, otherwise the normal commit.
     /// The shared entry point for the commit footer's single button.
     func commitOrCompleteMerge() {
@@ -708,6 +735,7 @@ final class AppState {
             hasUpstream = false
             aheadCount = 0
             behindCount = 0
+            hasOriginRemote = false
             isMergeInProgress = false
             mergeMessage = nil
             repoOwner = nil
@@ -746,6 +774,7 @@ final class AppState {
                 self.aheadCount = 0
                 self.behindCount = 0
             }
+            self.hasOriginRemote = snapshot.hasOriginRemote
             if !snapshot.statusEntries.isEmpty {
                 self.selectSource(.workingChanges)
             } else if snapshot.stashCount > 0 {
@@ -816,10 +845,11 @@ final class AppState {
                 stashCount: stashCount,
                 stashFileCount: stashCount > 0 ? ((try? repo.filesChanged(inStash: "stash@{0}").count) ?? 0) : 0,
                 statusEntries: (try? repo.statusEntries()) ?? [],
-                errorMessage: nil
+                errorMessage: nil,
+                hasOriginRemote: repo.hasOriginRemote()
             )
         } catch {
-            return RepositorySnapshot(owner: owner, isMergeInProgress: isMergeInProgress, mergeMessage: mergeMessage, branches: [], selectedBranch: nil, detachedHeadShortSHA: nil, commits: [], aheadBehind: repo.aheadBehind(), stashCount: repo.stashCount(), stashFileCount: 0, statusEntries: (try? repo.statusEntries()) ?? [], errorMessage: error.localizedDescription)
+            return RepositorySnapshot(owner: owner, isMergeInProgress: isMergeInProgress, mergeMessage: mergeMessage, branches: [], selectedBranch: nil, detachedHeadShortSHA: nil, commits: [], aheadBehind: repo.aheadBehind(), stashCount: repo.stashCount(), stashFileCount: 0, statusEntries: (try? repo.statusEntries()) ?? [], errorMessage: error.localizedDescription, hasOriginRemote: repo.hasOriginRemote())
         }
     }
 
@@ -846,6 +876,7 @@ final class AppState {
         var statusEntries: [ChangedFile]
         var stashCount: Int
         var stashFileCount: Int
+        var hasOriginRemote: Bool
     }
 
     /// Re-syncs branches/commits/files/diff after an FSEvents notification, without disturbing
@@ -915,7 +946,8 @@ final class AppState {
                     changedFiles: changedFiles,
                     statusEntries: statusEntries,
                     stashCount: stashCount,
-                    stashFileCount: stashFileCount
+                    stashFileCount: stashFileCount,
+                    hasOriginRemote: repo.hasOriginRemote()
                 )
             }.value
 
@@ -946,6 +978,7 @@ final class AppState {
                 self.aheadCount = 0
                 self.behindCount = 0
             }
+            self.hasOriginRemote = snapshot.hasOriginRemote
             if source != nil {
                 self.changedFiles = snapshot.changedFiles
                 // Only `.workingChanges` populates real `statusEntries` (see

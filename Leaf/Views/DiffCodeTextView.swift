@@ -475,8 +475,19 @@ final class DiffCodeContainerView: NSView {
 /// (a new `id`) each time it runs, including when only the color scheme changed and the diff text
 /// and line count are otherwise identical, so an identity-based key repaints in that case where a
 /// line-count-based one would not.
+///
+/// `lineCount` is included alongside `diffText` because `DiffView`'s parsed `diffLines` (passed
+/// in as `DiffCodeScrollView.lines`) is cached separately, updated via its own `.onChange`, and
+/// can momentarily lag a render pass behind `diffText` itself changing (each async diff load
+/// lands as its own transaction). Without this, the very first `updateContent` after selecting a
+/// new file could bake in a stale/empty `lines` (same `diffText` as what's about to arrive), and
+/// the later call carrying the now-correct `lines` would look unchanged by `diffText` alone and
+/// get skipped — leaving the pane blank until something else (any key field changing) forced a
+/// rebuild. With syntax highlighting on, a fresh `HighlightSnapshot` arriving shortly after always
+/// provided that forcing nudge, which is what masked this; with it off, nothing ever did.
 struct DiffContentKey: Equatable {
     let diffText: String
+    let lineCount: Int
     let highlightSnapshotID: UUID?
     let fontSize: CGFloat
 }
@@ -528,7 +539,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
     }
 
     private func updateContent(container: DiffCodeContainerView) {
-        let key = DiffContentKey(diffText: diffText, highlightSnapshotID: highlightSnapshot?.id, fontSize: fontSize)
+        let key = DiffContentKey(diffText: diffText, lineCount: lines.count, highlightSnapshotID: highlightSnapshot?.id, fontSize: fontSize)
         guard container.needsContentUpdate(for: key) else { return }
         let (attributed, metadata) = Self.buildContent(lines: lines, highlightSnapshot: highlightSnapshot, diffText: diffText, fontSize: fontSize)
         container.setContent(attributedString: attributed, metadata: metadata, key: key)

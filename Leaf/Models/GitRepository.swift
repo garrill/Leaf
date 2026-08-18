@@ -535,6 +535,20 @@ nonisolated struct GitRepository {
         return try run(["diff", "\(ref)^1", target, "--", file.path])
     }
 
+    /// Whether an `origin` remote is configured at all — distinct from `hasUpstream`/`aheadBehind`
+    /// (which are about the *current branch*'s tracking relationship), since a fresh local branch
+    /// with no upstream yet can still have somewhere to push to.
+    func hasOriginRemote() -> Bool {
+        (try? run(["remote", "get-url", "origin"])) != nil
+    }
+
+    /// Undoes the most recent commit while leaving the working tree and index exactly as they
+    /// were right before it — `--soft` only moves HEAD back to the parent commit, so whatever was
+    /// staged/unstaged going into the commit reappears exactly the same way against the new HEAD.
+    func undoLastCommit() throws {
+        try run(["reset", "--soft", "HEAD~1"])
+    }
+
     func commit(message: String, paths: [String], unstagePaths: [String]) throws {
         // `git commit -- <pathspec>` fails on untracked files ("did not match any files"),
         // so stage the chosen paths explicitly first, then commit whatever is staged.

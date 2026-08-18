@@ -62,6 +62,8 @@ struct ChangedFilesView: View {
                     CommitFooterView(appState: appState)
                 } else if isStash && !appState.changedFiles.isEmpty {
                     StashFooterView(appState: appState)
+                } else if isNewestUnpushedCommit {
+                    UnpushedCommitFooterView(appState: appState)
                 }
             }
 
@@ -215,6 +217,16 @@ struct ChangedFilesView: View {
         appState.selectedSource == .stash
     }
 
+    /// True when the selected source is the branch's own tip commit (`commits.first`, not just
+    /// any `.commit` case — history rows further back never show this toolbar) and that commit
+    /// hasn't reached `origin` yet, whether because the branch has no upstream at all or because
+    /// it does but sits ahead of it.
+    private var isNewestUnpushedCommit: Bool {
+        guard case .commit(let commit) = appState.selectedSource,
+              appState.commits.first?.sha == commit.sha else { return false }
+        return !appState.hasUpstream || appState.aheadCount > 0
+    }
+
     private var showsList: Bool {
         appState.selectedRepoURL != nil && appState.selectedSource != nil && !appState.changedFiles.isEmpty
     }
@@ -359,6 +371,46 @@ private struct StashFooterView: View {
                     appState.restoreStash()
                 }
                 .buttonStyle(.glassProminent)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(10)
+    }
+}
+
+/// Toolbar shown when the selected commit is the branch's own tip and hasn't reached `origin` yet
+/// (`ChangedFilesView.isNewestUnpushedCommit`) — offers to undo it, landing its changes back on
+/// "Uncommitted Changes" (`AppState.undoLastCommit()`'s `reset --soft` plus the usual
+/// post-refresh selection heuristic), or push it straight up. The push button only appears at all
+/// when an `origin` remote actually exists to push to.
+private struct UnpushedCommitFooterView: View {
+    @Bindable var appState: AppState
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    appState.undoLastCommit()
+                } label: {
+                    Label("Undo Commit", systemImage: "arrow.uturn.backward")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+
+                if appState.hasOriginRemote {
+                    Button {
+                        appState.pushCurrentBranch()
+                    } label: {
+                        Label("Push to Origin", systemImage: "arrow.up")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.capsule)
+                    .disabled(appState.isSyncing)
+                }
             }
             .frame(maxWidth: .infinity)
         }
