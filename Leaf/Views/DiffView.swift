@@ -33,6 +33,7 @@ struct DiffView: View {
     var focusedColumn: FocusState<MainColumn?>.Binding
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(LeafSettings.diffFontSizeKey) private var diffFontSize = LeafSettings.defaultDiffFontSize
+    @AppStorage(LeafSettings.syntaxHighlightingEnabledKey) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
     /// Tagged with the diff text it was computed for. Row rendering only trusts it when that tag
     /// still matches `appState.diffText`, so a still-running (or superseded) highlight task can
     /// never paint stale colors onto a newly-selected file's text — the text itself always comes
@@ -223,7 +224,16 @@ struct DiffView: View {
                 scrollOffsetY = newValue
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark)) {
+            .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark, enabled: syntaxHighlightingEnabled)) {
+                // Skip the highlight pass entirely when disabled, rather than running it and
+                // discarding the result at render time — this is the "optimise for speed" half of
+                // the toggle: no JSC round-trip, no `refreshHighlighting`'s deliberate 80ms settle
+                // delay, and `DiffCodeScrollView.buildContent` never waits on a snapshot that would
+                // otherwise still need to arrive before it can paint colors.
+                guard syntaxHighlightingEnabled else {
+                    highlightSnapshot = nil
+                    return
+                }
                 await refreshHighlighting()
             }
         }
@@ -436,7 +446,7 @@ struct DiffView: View {
 
         // Runs are independent hunk-side blocks, so highlight them all concurrently rather than
         // waiting on one JS round-trip before starting the next.
-        await withTaskGroup(of: (run: [DiffLine], attributed: AttributedString?).self) { group in
+        await withTaskGroup(of: (run: [DiffLine], attributed: AttributedString?, text: String).self) { group in
             for run in runs {
                 // Joined here, on the main actor, since `DiffLine.displayText` is a main-actor
                 // isolated computed property (this file's default isolation) and can't be
@@ -444,12 +454,12 @@ struct DiffView: View {
                 let text = run.map(\.displayText).joined(separator: "\n")
                 group.addTask {
                     let attributed = await CodeHighlighter.attributedText(text, language: language, isDark: isDark)
-                    return (run, attributed)
+                    return (run, attributed, text)
                 }
             }
-            for await (run, attributed) in group {
+            for await (run, attributed, text) in group {
                 guard let attributed else { continue }
-                let pieces = Self.splitLines(attributed)
+                let pieces = Self.splitLines(Self.restoringTrimmedWhitespace(original: text, highlighted: attributed))
                 guard pieces.count == run.count else { continue }
                 for (line, piece) in zip(run, pieces) {
                     result[line.id] = piece
@@ -460,6 +470,37 @@ struct DiffView: View {
         if !Task.isCancelled {
             highlightSnapshot = HighlightSnapshot(diffText: targetDiffText, lines: result)
         }
+    }
+
+    /// `HighlightSwift`'s `Highlight.attributedText` runs the block through
+    /// `text.trimmingCharacters(in: .whitespacesAndNewlines)` before handing it to hljs, so its
+    /// returned `AttributedString` is shorter than what was sent whenever a run starts or ends
+    /// with whitespace — almost always true here, since a hunk's first line carries the code's
+    /// own leading indentation. Left uncorrected, splitting that shorter string back into
+    /// per-line pieces desyncs every character offset against `displayText`, so color ranges for
+    /// a hunk's first (and sometimes last) line land a few characters early — visible as syntax
+    /// colors that look "cut" mid-token right at the top of each hunk. Re-padding with the exact
+    /// same (unstyled) whitespace that was trimmed restores alignment before `splitLines` runs.
+    private static func restoringTrimmedWhitespace(original: String, highlighted: AttributedString) -> AttributedString {
+        let charset = CharacterSet.whitespacesAndNewlines
+        var leadingEnd = original.startIndex
+        while leadingEnd < original.endIndex, original[leadingEnd].unicodeScalars.allSatisfy(charset.contains) {
+            leadingEnd = original.index(after: leadingEnd)
+        }
+        var trailingStart = original.endIndex
+        while trailingStart > leadingEnd {
+            let previous = original.index(before: trailingStart)
+            guard original[previous].unicodeScalars.allSatisfy(charset.contains) else { break }
+            trailingStart = previous
+        }
+        let leadingWhitespace = String(original[original.startIndex..<leadingEnd])
+        let trailingWhitespace = String(original[trailingStart..<original.endIndex])
+        guard !leadingWhitespace.isEmpty || !trailingWhitespace.isEmpty else { return highlighted }
+
+        var result = AttributedString(leadingWhitespace)
+        result += highlighted
+        result += AttributedString(trailingWhitespace)
+        return result
     }
 
     /// Splits a syntax-highlighted block back into its per-line pieces on "\n", preserving each
@@ -493,4 +534,5 @@ private struct HighlightRequest: Equatable {
     let path: String?
     let diffText: String
     let isDark: Bool
+    let enabled: Bool
 }
