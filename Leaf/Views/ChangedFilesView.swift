@@ -82,10 +82,20 @@ struct ChangedFilesView: View {
         // cancels and restarts this automatically the moment `selectedSource` changes again, so
         // a superseded selection's git call never lingers to overwrite a newer one. This is what
         // actually keeps the commit-list row highlight (a plain, instant property write) fully
-        // decoupled from however long this load takes.
-        .task(id: appState.selectedSource) {
+        // decoupled from however long this load takes. Repo URL is included alongside the source
+        // because `refreshRepositoryState()` can resolve a newly selected repo to the very same
+        // `ChangeSource` case (e.g. two repos in a row both defaulting to `.workingChanges`) —
+        // without the URL in the key, that repo switch wouldn't change `id` at all, so this task
+        // would never re-run and `changedFiles` would stay stuck at the empty list `selectRepo`
+        // clears it to up front.
+        .task(id: ChangedFilesLoadKey(repoURL: appState.selectedRepoURL, source: appState.selectedSource)) {
             await appState.loadChangedFilesForCurrentSelection()
         }
+    }
+
+    private struct ChangedFilesLoadKey: Hashable {
+        let repoURL: URL?
+        let source: ChangeSource?
     }
 
     private var header: some View {

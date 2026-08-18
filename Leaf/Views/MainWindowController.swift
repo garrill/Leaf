@@ -38,6 +38,24 @@ final class MainWindowController: NSWindowController {
 
         observeTitle()
         updateTitle()
+        observeWindowFocus()
+    }
+
+    /// Refreshes every sidebar repo's status icon on window refocus (which also fires the first
+    /// time the window becomes key, covering app launch) — the only broad re-check, since polling
+    /// on a timer or re-checking on every repo/file click made the icons flicker. Per-repo
+    /// mutations (commit/push/pull/etc.) instead update just that one repo's cached status
+    /// directly — see `RepoStatusStore`.
+    private func observeWindowFocus() {
+        guard let window else { return }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.appState.repoStatusStore.refreshAll(repos: self.appState.sidebarStore.repos)
+        }
     }
 
     @available(*, unavailable)

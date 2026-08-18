@@ -447,6 +447,25 @@ nonisolated struct GitRepository {
         }
     }
 
+    /// Combined status for the sidebar's per-repo status icon — count of files with uncommitted
+    /// changes, plus ahead/behind vs. the upstream branch. Two separate git calls, same as
+    /// `statusEntries()`/`aheadBehind()` are already used individually elsewhere; bundled into one
+    /// struct so `RepoRowView` has a single value to poll for and store.
+    struct SidebarSyncStatus: Equatable {
+        var uncommittedChangeCount: Int
+        var hasUpstream: Bool
+        var aheadCount: Int
+        var behindCount: Int
+    }
+
+    func sidebarSyncStatus() -> SidebarSyncStatus {
+        let uncommittedChangeCount = (try? statusEntries().count) ?? 0
+        guard let counts = aheadBehind() else {
+            return SidebarSyncStatus(uncommittedChangeCount: uncommittedChangeCount, hasUpstream: false, aheadCount: 0, behindCount: 0)
+        }
+        return SidebarSyncStatus(uncommittedChangeCount: uncommittedChangeCount, hasUpstream: true, aheadCount: counts.ahead, behindCount: counts.behind)
+    }
+
     /// Ahead/behind counts of the current branch relative to its upstream, or `nil` if it has none.
     func aheadBehind() -> (ahead: Int, behind: Int)? {
         guard let output = try? run(["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]) else {
@@ -740,6 +759,55 @@ nonisolated struct GitRepository {
             // filesystem notifications instead.
             return (files, [])
         }
+    }
+
+    /// Above this size, `diffText(for:in:)` skips generating a diff entirely. Actually running
+    /// `git diff`/`git show` is fast even on a huge file, but the result then gets fed to
+    /// `DiffCodeTextView` (a real `NSTextView`) plus word-diff/syntax-highlight passes on the main
+    /// thread — laying out hundreds of MB of text there is what actually freezes the UI, confirmed
+    /// against a >100MB SQL dump accidentally committed into a repo.
+    static let maxDiffableFileSize: Int64 = 5 * 1024 * 1024
+
+    /// Cheap upper-bound size check (a `stat` or `git cat-file -s`, never the full diff) for
+    /// whether `file` is too large to diff — called before `diffText(for:in:)` invokes any real
+    /// diff/show command. Images are exempted since they're rendered as images, not diff text.
+    func isFileTooLargeToDiff(_ file: ChangedFile, in source: ChangeSource) -> Bool {
+        guard file.status != .conflicted, !file.isLikelyImage else { return false }
+        let size = fileSize(for: file, in: source)
+        return size > Self.maxDiffableFileSize
+    }
+
+    /// The larger of the "old"/"new" sides' sizes (whichever exist), so a huge file is caught
+    /// whether it was added, deleted, or modified. A side that can't be determined (e.g. a
+    /// deleted file with no reachable blob) contributes 0 rather than failing the whole check.
+    private func fileSize(for file: ChangedFile, in source: ChangeSource) -> Int64 {
+        func onDiskSize() -> Int64 {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: rootURL.appendingPathComponent(file.path).path)
+            return (attrs?[.size] as? Int64) ?? Int64((attrs?[.size] as? Int) ?? 0)
+        }
+        switch source {
+        case .workingChanges:
+            let newSize = file.status == .deleted ? 0 : onDiskSize()
+            let oldSize = (file.status == .untracked || file.status == .added) ? 0 : blobSize("HEAD:\(file.path)")
+            return max(newSize, oldSize)
+        case .stash:
+            let ref = "stash@{0}"
+            if file.status == .untracked {
+                return blobSize("\(ref)^3:\(file.path)")
+            }
+            let newSize = file.status == .deleted ? 0 : blobSize("\(ref):\(file.path)")
+            let oldSize = file.status == .added ? 0 : blobSize("\(ref)^1:\(file.path)")
+            return max(newSize, oldSize)
+        case .commit(let commit):
+            let newSize = file.status == .deleted ? 0 : blobSize("\(commit.sha):\(file.path)")
+            let oldSize = file.status == .added ? 0 : blobSize("\(commit.sha)^:\(file.path)")
+            return max(newSize, oldSize)
+        }
+    }
+
+    private func blobSize(_ spec: String) -> Int64 {
+        guard let output = try? run(["cat-file", "-s", spec]) else { return 0 }
+        return Int64(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     }
 
     /// See `changedFilesWithStatus(for:)`.

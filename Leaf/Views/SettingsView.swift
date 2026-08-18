@@ -9,10 +9,12 @@ enum LeafSettings {
     static let diffFontSizeKey = "diffFontSize"
     static let syntaxHighlightingEnabledKey = "syntaxHighlightingEnabled"
     static let externalEditorPathKey = "externalEditorPath"
+    static let showRepoStatusKey = "showRepoStatus"
 
     static let defaultDiffFontSize = Double(NSFont.systemFontSize)
     static let diffFontSizeRange: ClosedRange<Double> = 10...20
     static let defaultSyntaxHighlightingEnabled = true
+    static let defaultShowRepoStatus = true
 
     /// Opens `url` with the user's configured external editor if set, falling back to its normal
     /// macOS default application otherwise. Shared by `ChangedFilesView`'s per-file "Open in
@@ -32,9 +34,17 @@ struct SettingsView: View {
     @AppStorage(LeafSettings.diffFontSizeKey) private var diffFontSize = LeafSettings.defaultDiffFontSize
     @AppStorage(LeafSettings.syntaxHighlightingEnabledKey) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
     @AppStorage(LeafSettings.externalEditorPathKey) private var externalEditorPath = ""
+    @AppStorage(LeafSettings.showRepoStatusKey) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
 
     var body: some View {
         Form {
+            Section("Repo") {
+                Toggle("Show repository status", isOn: $showRepoStatus)
+                Text("Shows an icon next to each sidebar repository for uncommitted changes and commits to pull or push.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Diff") {
                 HStack {
                     Slider(value: $diffFontSize, in: LeafSettings.diffFontSizeRange, step: 1) {

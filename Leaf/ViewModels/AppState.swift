@@ -4,6 +4,7 @@ import Foundation
 @Observable
 final class AppState {
     let sidebarStore = SidebarStore()
+    let repoStatusStore = RepoStatusStore()
 
     var selectedRepoURL: URL?
     var branches: [GitBranch] = []
@@ -32,6 +33,10 @@ final class AppState {
     var diffText: String = ""
     var imageDiffOld: Data?
     var imageDiffNew: Data?
+    /// True when the current selection's diff was skipped because the file is too large to
+    /// render (see `GitRepository.isFileTooLargeToDiff`) — `DiffView` shows a placeholder instead
+    /// of ever handing the text to `DiffCodeTextView`.
+    var diffFileTooLarge = false
     var errorMessage: String?
     /// Bumped whenever the currently-selected file's on-disk content may have changed out from
     /// under it (see `handleExternalChange`), without the file/source *selection* itself
@@ -708,7 +713,22 @@ final class AppState {
                 self.aheadCount = 0
                 self.behindCount = 0
             }
+            if let repoURL {
+                self.repoStatusStore.setStatus(self.currentSyncStatus, forPath: repoURL.path)
+            }
         }
+    }
+
+    /// The selected repo's status-icon data, built from fields `refreshRepositoryState()`/
+    /// `refreshSyncStatus()` already fetched — handed to `repoStatusStore` so its cache for this
+    /// repo stays warm without an extra git call.
+    private var currentSyncStatus: GitRepository.SidebarSyncStatus {
+        GitRepository.SidebarSyncStatus(
+            uncommittedChangeCount: uncommittedChangeCount,
+            hasUpstream: hasUpstream,
+            aheadCount: aheadCount,
+            behindCount: behindCount
+        )
     }
 
     private func refreshRepositoryState() {
@@ -775,6 +795,9 @@ final class AppState {
                 self.behindCount = 0
             }
             self.hasOriginRemote = snapshot.hasOriginRemote
+            if let repoURL {
+                self.repoStatusStore.setStatus(self.currentSyncStatus, forPath: repoURL.path)
+            }
             if !snapshot.statusEntries.isEmpty {
                 self.selectSource(.workingChanges)
             } else if snapshot.stashCount > 0 {
@@ -1096,11 +1119,13 @@ final class AppState {
             diffText = ""
             imageDiffOld = nil
             imageDiffNew = nil
+            diffFileTooLarge = false
             return
         }
         let cacheKey = DiffCacheKey(source: source, file: file)
         if let cached = diffTextCache[cacheKey] {
             diffText = cached
+            diffFileTooLarge = false
             errorMessage = nil
             return
         }
@@ -1112,6 +1137,7 @@ final class AppState {
             }.value
             guard !Task.isCancelled else { return }
             diffText = ""
+            diffFileTooLarge = false
             errorMessage = nil
             // Only touch these if the bytes actually changed — an unconditional nil-then-set
             // makes the image view flash to its empty state on every FSEvents-triggered refresh,
@@ -1128,6 +1154,19 @@ final class AppState {
         // The surrounding SwiftUI task still cancels stale results before they reach the UI.
         // As above, this never turns the Git process into synchronous UI-actor work.
         let cacheGeneration = selectionCacheGeneration
+        // Checked (a cheap `stat`/`git cat-file -s`) before ever calling `diffText(for:in:)` —
+        // rendering the diff, not generating it, is what froze the app on a >100MB SQL dump.
+        let tooLarge = await Task.detached(priority: .userInitiated) {
+            repo.isFileTooLargeToDiff(file, in: source)
+        }.value
+        guard !Task.isCancelled, cacheGeneration == selectionCacheGeneration else { return }
+        if tooLarge {
+            diffFileTooLarge = true
+            diffText = ""
+            errorMessage = nil
+            return
+        }
+        diffFileTooLarge = false
         let outcome = await Task.detached(priority: .userInitiated) {
             Result { try repo.diffText(for: file, in: source) }
         }.value
