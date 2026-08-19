@@ -32,8 +32,8 @@ struct DiffView: View {
     @Bindable var appState: AppState
     var focusedColumn: FocusState<MainColumn?>.Binding
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage(LeafSettings.diffFontSizeKey) private var diffFontSize = LeafSettings.defaultDiffFontSize
-    @AppStorage(LeafSettings.syntaxHighlightingEnabledKey) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
+    @AppStorage(LeafSettings.diffFontSizeKey, store: LeafSettings.store) private var diffFontSize = LeafSettings.defaultDiffFontSize
+    @AppStorage(LeafSettings.syntaxHighlightingEnabledKey, store: LeafSettings.store) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
     /// Tagged with the diff text it was computed for. Row rendering only trusts it when that tag
     /// still matches `appState.diffText`, so a still-running (or superseded) highlight task can
     /// never paint stale colors onto a newly-selected file's text — the text itself always comes

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Leaf</title>
+        <link>https://raw.githubusercontent.com/garrill/Leaf/main/appcast.xml</link>
+        <description>Leaf release notes and update feed.</description>
+        <language>en</language>
+        <!--
+			Populated by scripts/sign_and_update_appcast.sh (which wraps Sparkle's
+			`generate_appcast` tool) once a real, notarized DMG exists (see ROADMAP.md #5) and
+			has actually been uploaded to a GitHub Release. Each release adds an <item> here,
+			e.g.:
+
+			<item>
+				<title>0.1.0</title>
+				<pubDate>Wed, 19 Aug 2026 00:00:00 +0000</pubDate>
+				<sparkle:version>1</sparkle:version>
+				<sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+				<sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+				<sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+				<description sparkle:format="markdown"><![CDATA[
+			Release notes pulled from CHANGELOG.md.
+			]]></description>
+				<enclosure
+					url="https://github.com/garrill/Leaf/releases/download/v0.1.0/Leaf-0.1.0.dmg"
+					length="..."
+					type="application/octet-stream"
+					sparkle:edSignature="..." />
+			</item>
+		-->
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Wed, 19 Aug 2026 14:39:35 +0100</pubDate>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[
+First beta. See ROADMAP.md for what's still outstanding before this ships.
+]]></description>
+            <enclosure url="https://github.com/garrill/Leaf/releases/download/v0.1.0/Leaf-0.1.0.dmg" length="4178584" type="application/octet-stream" sparkle:edSignature="nBxnIsQ3xPnxmQDAjmLVl7Y98xHtB/sIQPtGXGrpwl17zl8/CtE9lEavOMmSxwij0y2REjn4RtTRNVRA1nmEDQ=="/>
+        </item>
+    </channel>
+</rss>

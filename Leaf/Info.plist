@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>SUPublicEDKey</key>
+	<string>+5UeuQ0o1MsPwzYZXijlrKWgu+G/+N76/qAP7Yp26uw=</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/garrill/Leaf/main/appcast.xml</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+</dict>
+</plist>

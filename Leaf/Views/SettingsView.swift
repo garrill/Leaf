@@ -16,12 +16,26 @@ enum LeafSettings {
     static let defaultSyntaxHighlightingEnabled = true
     static let defaultShowRepoStatus = true
 
+    /// Debug and Release builds of `Leaf` share one `PRODUCT_BUNDLE_IDENTIFIER` (`garrill.Leaf`),
+    /// so they also share one `UserDefaults` domain — there's no separate "test build" for
+    /// `LeafUITests` to launch. `AppDelegate.resetStateIfRequestedForUITesting()` used to wipe
+    /// that shared domain outright on `-uiTestReset`, which meant running the UI tests destroyed
+    /// the real sidebar/settings of whichever build of Leaf a person actually uses day to day.
+    /// `store` isolates UI test runs into a separate suite instead, so `-uiTestReset` only ever
+    /// touches `uiTestSuiteName`, never the real `garrill.Leaf` domain.
+    static let uiTestSuiteName = "garrill.Leaf.uitest"
+
+    static let store: UserDefaults = {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestReset") else { return .standard }
+        return UserDefaults(suiteName: uiTestSuiteName) ?? .standard
+    }()
+
     /// Opens `url` with the user's configured external editor if set, falling back to its normal
     /// macOS default application otherwise. Shared by `ChangedFilesView`'s per-file "Open in
     /// Default Program" and the Repository menu's "Open in <App>" for the repo root — both need
     /// the exact same fallback behavior.
     static func open(_ url: URL) {
-        let path = UserDefaults.standard.string(forKey: externalEditorPathKey) ?? ""
+        let path = store.string(forKey: externalEditorPathKey) ?? ""
         guard !path.isEmpty else {
             NSWorkspace.shared.open(url)
             return
@@ -31,10 +45,10 @@ enum LeafSettings {
 }
 
 struct SettingsView: View {
-    @AppStorage(LeafSettings.diffFontSizeKey) private var diffFontSize = LeafSettings.defaultDiffFontSize
-    @AppStorage(LeafSettings.syntaxHighlightingEnabledKey) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
-    @AppStorage(LeafSettings.externalEditorPathKey) private var externalEditorPath = ""
-    @AppStorage(LeafSettings.showRepoStatusKey) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
+    @AppStorage(LeafSettings.diffFontSizeKey, store: LeafSettings.store) private var diffFontSize = LeafSettings.defaultDiffFontSize
+    @AppStorage(LeafSettings.syntaxHighlightingEnabledKey, store: LeafSettings.store) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
+    @AppStorage(LeafSettings.externalEditorPathKey, store: LeafSettings.store) private var externalEditorPath = ""
+    @AppStorage(LeafSettings.showRepoStatusKey, store: LeafSettings.store) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
 
     var body: some View {
         Form {

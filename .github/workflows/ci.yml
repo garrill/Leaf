@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show available Xcode versions
+        # This project uses recent SDK/language features (objectVersion 77, macOS 26.5 SDK).
+        # If the runner's default Xcode is too old to open the project, list what's installed
+        # here and add `sudo xcode-select -s /Applications/Xcode_<version>.app` above.
+        run: ls /Applications | grep Xcode && xcodebuild -version
+
+      - name: Build
+        run: >
+          xcodebuild -project Leaf.xcodeproj -scheme Leaf -configuration Debug
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          build
+
+      - name: Test
+        run: >
+          xcodebuild -project Leaf.xcodeproj -scheme Leaf -configuration Debug
+          -destination 'platform=macOS'
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          test

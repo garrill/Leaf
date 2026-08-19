@@ -10,7 +10,7 @@ struct RepoRowView: View {
     let onStartRename: () -> Void
     let onCommitRename: (String) -> Void
 
-    @AppStorage(LeafSettings.showRepoStatusKey) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
+    @AppStorage(LeafSettings.showRepoStatusKey, store: LeafSettings.store) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
 
     @State private var draftName: String = ""
     @FocusState private var fieldFocused: Bool
@@ -127,7 +127,7 @@ struct RepoRowView: View {
                         baseColor: NSColor(red: 0x40 / 255, green: 0x86 / 255, blue: 0xDC / 255, alpha: 1)
                     )
                     .frame(width: 9, height: 9)
-                    .offset(x: 4)
+                    .offset(x: 1)
                     .help(status.behindCount == 1 ? "1 commit behind" : "\(status.behindCount) commits behind")
                 }
                 if status.hasUpstream, status.aheadCount > 0 {
@@ -136,7 +136,7 @@ struct RepoRowView: View {
                         baseColor: NSColor(red: 0x40 / 255, green: 0xDC / 255, blue: 0x81 / 255, alpha: 1)
                     )
                     .frame(width: 9, height: 9)
-                    .offset(x: 4)
+                    .offset(x: 1)
                     .help(status.aheadCount == 1 ? "1 commit to push" : "\(status.aheadCount) commits to push")
                 }
             }

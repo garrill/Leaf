@@ -201,11 +201,11 @@ final class SidebarStore {
     private func persist() {
         let snapshot = Snapshot(repos: repos, folders: folders, topLevelOrder: topLevelOrder)
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        UserDefaults.standard.set(data, forKey: defaultsKey)
+        LeafSettings.store.set(data, forKey: defaultsKey)
     }
 
     private func load() {
-        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+        if let data = LeafSettings.store.data(forKey: defaultsKey),
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
             repos = snapshot.repos
             folders = snapshot.folders
@@ -216,7 +216,7 @@ final class SidebarStore {
     }
 
     private func migrate() {
-        let paths = UserDefaults.standard.stringArray(forKey: legacyDefaultsKey) ?? []
+        let paths = LeafSettings.store.stringArray(forKey: legacyDefaultsKey) ?? []
         repos = paths.enumerated().map { index, path in
             SidebarRepo(id: UUID(), path: path, displayNameOverride: nil, iconPath: nil, folderID: nil, sortIndex: index)
         }

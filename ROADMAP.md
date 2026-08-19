@@ -148,35 +148,80 @@ sure each one that can lose uncommitted work has a confirmation:
 
 ## 4. Auto-update: Sparkle
 
-- [ ] Add Sparkle via SPM (unrelated to the earlier SwiftGit2/libgit2 linking problems
-      noted in CLAUDE.md — those were about a C-library package failing to link for macOS
-      arm64 specifically; Sparkle ships a standard prebuilt XCFramework and is widely used
-      via SPM on macOS, but confirm it links cleanly in this project early rather than
-      assuming)
-- [ ] Generate an EdDSA signing key (`generate_keys` tool from Sparkle), keep the private
-      key out of the repo
-- [ ] Decide update feed hosting — GitHub Releases + a generated `appcast.xml` is the
-      standard low-effort option and pairs naturally with notarized DMG releases
-- [ ] Wire up `SUUpdater`/`SPUStandardUpdaterController`, "Check for Updates…" menu item
+- [x] Add Sparkle via SPM (2026-08-19: added as an `XCRemoteSwiftPackageReference` the same
+      way `HighlightSwift` already was, pinned `upToNextMajorVersion` from 2.6.0, resolves to
+      2.9.6; confirmed it links and codesigns cleanly — no repeat of the earlier
+      SwiftGit2/libgit2 arm64 linking problems, which were specific to that C-library package)
+- [x] Generate an EdDSA signing key (2026-08-19: generated via Sparkle's `generate_keys`
+      tool, which shipped with the SPM package artifact — no separate install needed. The
+      private key lives only in the user's macOS Keychain, never touches disk as a file, and
+      isn't in the repo. The public key is wired into the app — see below)
+- [x] Decide update feed hosting (2026-08-19): GitHub Releases + `appcast.xml`. The feed file
+      lives at the repo root, tracked in git, served via
+      `https://raw.githubusercontent.com/garrill/Leaf/main/appcast.xml` — that's now
+      `SUFeedURL` in `Leaf/Info.plist`. `appcast.xml` currently has an empty `<channel>` (no
+      `<item>`s yet — nothing to point at until a signed, notarized DMG exists, roadmap #5).
+      Per-release process once that exists: build the DMG, run Sparkle's `generate_appcast`
+      tool against it (signs it using the Keychain-stored EdDSA private key from the item
+      above, emits an `<item>` with the enclosure URL + signature), commit the updated
+      `appcast.xml` to `main`, then attach the DMG to the matching GitHub Release. This repo
+      needs to be public (or the feed URL needs rethinking) for `raw.githubusercontent.com` to
+      be reachable by installed copies of the app — not yet confirmed either way here.
+- [x] Wire up `SUUpdater`/`SPUStandardUpdaterController`, "Check for Updates…" menu item
+      (2026-08-19: `UpdaterHolder` (`Leaf/UpdaterController.swift`) holds the single
+      `SPUStandardUpdaterController(startingUpdater: true, ...)`, touched once from
+      `AppDelegate.applicationDidFinishLaunching` to force its creation at launch, since
+      `LeafApp`'s `.commands` are declared independently of `AppDelegate` (same pattern
+      `AppStateHolder` already uses for the Repository menu); "Check for Updates…" lives in
+      `CommandGroup(after: .appInfo)` and disables itself via `CheckForUpdatesViewModel`
+      (`@Published` mirror of `SPUUpdater.canCheckForUpdates`, Sparkle's own documented
+      SwiftUI pattern, since `SPUUpdater` itself isn't `ObservableObject`). `SUPublicEDKey` is
+      wired in (2026-08-19) — see the signing-key item above. `SUFeedURL` is now wired too —
+      see "Decide update feed hosting" above)
 - [ ] Confirm notarization + Sparkle interact correctly (notarized builds, Sparkle's own
-      code-signature verification of downloaded updates)
-- [ ] Decide update cadence/channel (e.g. beta channel vs stable, if this beta will get
-      frequent point releases)
+      code-signature verification of downloaded updates) — blocked on the paid Apple Developer
+      account (needed for a Developer ID Application certificate); see #5
+- [x] Decide update cadence/channel (2026-08-19): single channel for now (no separate
+      beta/stable feed — not enough release volume yet to justify one). Cadence: Sparkle's
+      default `SUScheduledCheckInterval` (daily, 86400s), set explicitly in `Leaf/Info.plist`
+      rather than left implicit. Automatic silent installs left off (`SUAutomaticallyUpdate`
+      unset → Sparkle's default of downloading and asking before installing), appropriate for
+      a beta where surprising auto-installs would be unwelcome — revisit once the app is more
+      mature
 
 ## 5. Release engineering
 
-Currently `CODE_SIGN_STYLE = Automatic`, `DEVELOPMENT_TEAM` set, no entitlements file, no
-CI config, no LICENSE.
+`CODE_SIGN_STYLE = Automatic` (Development signing), `DEVELOPMENT_TEAM` set, no entitlements
+file. Paid Apple Developer account not active yet — Developer ID signing and notarization stay
+blocked on that; everything else in this section is unblocked and done or scripted below.
 
 - [ ] Developer ID Application signing (distinct from the current automatic Development
-      signing) for direct distribution
-- [ ] Notarization pipeline (`notarytool submit` + staple), scripted so it's repeatable
-- [ ] DMG packaging (background image, Applications symlink — cosmetic but expected)
-- [ ] `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` bump process tied to releases
-- [ ] CI (GitHub Actions or similar) running build + the new test target on every push —
-      currently no `.yml` workflow exists at all
-- [ ] `LICENSE` file (none currently present — decide terms before any public release)
-- [ ] `CHANGELOG.md` or release notes convention (feeds the Sparkle appcast description)
+      signing) for direct distribution — blocked on paid Apple Developer account
+- [ ] Notarization pipeline (`notarytool submit` + staple), scripted so it's repeatable —
+      blocked on paid Apple Developer account (needs a Developer ID cert + app-specific
+      password/keychain profile); `scripts/make_dmg.sh` (below) has a comment marking exactly
+      where the `notarytool submit ... --wait` + `stapler staple` steps go once unblocked
+- [x] DMG packaging (2026-08-19): `scripts/make_dmg.sh` — builds Release config via
+      `xcodebuild -derivedDataPath`, stages the built `.app` + an `/Applications` symlink, and
+      runs `hdiutil create -format UDZO`. Produces `build/Leaf-<version>.dmg`, ad-hoc/Development-
+      signed only until Developer ID exists (see above). No background image yet — plain
+      DMG for now; the roadmap's "cosmetic but expected" background image is still open
+- [x] `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` bump process (2026-08-19): bumped the
+      placeholder `1.0` → `0.1.0` for beta across all three targets' Debug/Release configs.
+      No automated bump tooling yet (e.g. `agvtool`) — manual edit of `project.pbxproj` per
+      release for now, revisit if release frequency makes that painful
+- [x] CI (2026-08-19): `.github/workflows/ci.yml` — `xcodebuild build` then `xcodebuild test`
+      against the `Leaf` scheme on `macos-latest`, with `CODE_SIGNING_ALLOWED=NO
+      CODE_SIGNING_REQUIRED=NO` so it doesn't need a signing identity. Caveat: this project's
+      `objectVersion 77` / macOS 26.5 SDK is newer than any Xcode version confirmed available
+      on GitHub-hosted macOS runners at the time this was written — the workflow lists
+      installed Xcode versions as a debug step; if the default is too old to open the project,
+      pin one with `xcode-select -s` or move to a self-hosted/larger runner. Not yet confirmed
+      green on an actual push
+- [x] `LICENSE` file (2026-08-19): MIT, user's explicit choice
+- [x] `CHANGELOG.md` or release notes convention (2026-08-19): added, `[Unreleased]` +
+      per-version sections, with a note that each version's entry doubles as the appcast
+      `<description>` when that version ships
 - [ ] `README.md` refresh with real screenshots for outside readers (text content is
       renamed to Leaf already; still needs actual screenshots and outward-facing polish)
 

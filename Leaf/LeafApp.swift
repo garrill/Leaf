@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import Sparkle
 import SwiftUI
 
 /// No `WindowGroup` here — the window itself is AppKit-owned (`AppDelegate` builds a
@@ -18,13 +19,20 @@ import SwiftUI
 struct LeafApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @ObservedObject private var sidebarVisibility = SidebarVisibility.shared
-    @AppStorage(LeafSettings.externalEditorPathKey) private var externalEditorPath = ""
+    @AppStorage(LeafSettings.externalEditorPathKey, store: LeafSettings.store) private var externalEditorPath = ""
+    @StateObject private var checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: UpdaterHolder.shared.updater)
 
     var body: some Scene {
         Settings {
             SettingsView()
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    UpdaterHolder.shared.checkForUpdates(nil)
+                }
+                .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
+            }
             CommandGroup(replacing: .sidebar) {
                 Button(sidebarVisibility.isCollapsed ? "Show Sidebar" : "Hide Sidebar") {
                     NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
