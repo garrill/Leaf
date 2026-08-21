@@ -62,7 +62,11 @@ struct ChangedFilesView: View {
                     CommitFooterView(appState: appState)
                 } else if isStash && !appState.changedFiles.isEmpty {
                     StashFooterView(appState: appState)
-                } else if isNewestUnpushedCommit {
+                } else if isNewestUnpushedCommit || appState.pushSucceeded {
+                    // `appState.pushSucceeded` keeps this footer around for its own few seconds
+                    // even though a successful push immediately zeroes `aheadCount`, which would
+                    // otherwise make `isNewestUnpushedCommit` false and yank the success message
+                    // away before it's had a chance to animate out.
                     UnpushedCommitFooterView(appState: appState)
                 }
             }
@@ -398,32 +402,68 @@ private struct UnpushedCommitFooterView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Button {
-                    appState.undoLastCommit()
-                } label: {
-                    Label("Undo Commit", systemImage: "arrow.uturn.backward")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+            if appState.pushSucceeded {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Successfully pushed to origin")
+                        .font(.callout)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-
-                if appState.hasOriginRemote {
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                HStack(spacing: 8) {
                     Button {
-                        appState.pushCurrentBranch()
+                        appState.undoLastCommit()
                     } label: {
-                        Label("Push to Origin", systemImage: "arrow.up")
+                        Label("Undo Commit", systemImage: "arrow.uturn.backward")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.glass)
                     .buttonBorderShape(.capsule)
-                    .disabled(appState.isSyncing)
+                    .disabled(appState.isPushingCommit)
+
+                    if appState.hasOriginRemote {
+                        Button {
+                            appState.pushCurrentBranch()
+                        } label: {
+                            HStack(spacing: 6) {
+                                if appState.isPushingCommit {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Image(systemName: "arrow.up")
+                                }
+                                Text(appState.isPushingCommit ? (appState.pushProgressText ?? "Pushing") : "Push to Origin")
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
+                        .disabled(appState.isSyncing)
+                    }
                 }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
         }
         .padding(10)
+        .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
+        .alert(
+            "Push Failed",
+            isPresented: Binding(
+                get: { appState.pushErrorMessage != nil },
+                set: { isPresented in if !isPresented { appState.pushErrorMessage = nil } }
+            ),
+            presenting: appState.pushErrorMessage
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
     }
 }

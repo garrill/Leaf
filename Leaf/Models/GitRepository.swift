@@ -91,6 +91,46 @@ enum GitError: Error, LocalizedError {
     }
 }
 
+/// Buffers a live process's stderr for `runRaw(_:progress:)`, splitting into lines as chunks arrive
+/// so a caller can render git's progress meter (e.g. `push`'s "Writing objects: 42% (5/12)") as it
+/// updates rather than only after the process exits. git repaints that meter in place via `\r`, not
+/// `\n`, so lines are split on either. `readabilityHandler` fires on a private dispatch queue, so
+/// access to the buffers is serialized with a lock; `@unchecked Sendable` reflects that the lock,
+/// not the compiler, is what makes this safe to share across that queue and the process's own thread.
+private final class ProgressLineAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lineBuffer = Data()
+    private var fullData = Data()
+    private let handler: @Sendable (String) -> Void
+
+    init(handler: @escaping @Sendable (String) -> Void) {
+        self.handler = handler
+    }
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        fullData.append(chunk)
+        lineBuffer.append(chunk)
+        var lines: [String] = []
+        while let index = lineBuffer.firstIndex(where: { $0 == 0x0d || $0 == 0x0a }) {
+            let lineData = lineBuffer[..<index]
+            lineBuffer.removeSubrange(...index)
+            if let line = String(data: lineData, encoding: .utf8) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty { lines.append(trimmed) }
+            }
+        }
+        lock.unlock()
+        for line in lines { handler(line) }
+    }
+
+    var finalData: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return fullData
+    }
+}
+
 /// Explicitly `nonisolated` — the project's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` setting
 /// would otherwise make every method here MainActor-isolated, which is exactly wrong for a type
 /// whose whole job is shelling out to `/usr/bin/git` synchronously and getting called from
@@ -100,8 +140,8 @@ nonisolated struct GitRepository {
     let rootURL: URL
 
     @discardableResult
-    private func run(_ arguments: [String]) throws -> String {
-        let (output, errorOutput, exitCode) = try runRaw(arguments)
+    private func run(_ arguments: [String], progress: (@Sendable (String) -> Void)? = nil) throws -> String {
+        let (output, errorOutput, exitCode) = try runRaw(arguments, progress: progress)
         if exitCode != 0 {
             // git writes its actual fatal/error text to stderr, not stdout — stdout is usually
             // empty on failure, which previously made every `GitError.commandFailed` message
@@ -114,7 +154,12 @@ nonisolated struct GitRepository {
 
     /// Runs git without treating a non-zero exit as an error, for commands
     /// (like `diff --no-index`) that use the exit code to report "differences found".
-    private func runRaw(_ arguments: [String]) throws -> (stdout: String, stderr: String, exitCode: Int32) {
+    ///
+    /// When `progress` is supplied, stderr is streamed line-by-line as the process runs (instead of
+    /// read in one shot at the end) so callers like `push(branch:progress:)` can surface git's own
+    /// progress meter live. git repaints that meter via `\r`, not `\n`, so `ProgressLineAccumulator`
+    /// splits on either.
+    private func runRaw(_ arguments: [String], progress: (@Sendable (String) -> Void)? = nil) throws -> (stdout: String, stderr: String, exitCode: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.currentDirectoryURL = rootURL
@@ -125,11 +170,37 @@ nonisolated struct GitRepository {
         process.standardOutput = stdout
         process.standardError = stderr
 
+        let accumulator = progress.map { ProgressLineAccumulator(handler: $0) }
+        if let accumulator {
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    accumulator.append(chunk)
+                }
+            }
+        }
+
         try process.run()
 
         let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let errData: Data
+        if let accumulator {
+            // `readabilityHandler` fires asynchronously off a GCD dispatch source — for a fast
+            // command (e.g. pushing to a local remote), the process can exit before that source
+            // ever gets scheduled, silently dropping whatever stderr it wrote. Clearing the
+            // handler only stops *future* callbacks; it doesn't guarantee past ones ran. A final
+            // synchronous `readDataToEndOfFile()` drains anything still sitting unread in the pipe.
+            process.waitUntilExit()
+            stderr.fileHandleForReading.readabilityHandler = nil
+            let remainder = stderr.fileHandleForReading.readDataToEndOfFile()
+            if !remainder.isEmpty { accumulator.append(remainder) }
+            errData = accumulator.finalData
+        } else {
+            errData = stderr.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+        }
 
         let output = String(data: outData, encoding: .utf8) ?? ""
         let errorOutput = String(data: errData, encoding: .utf8) ?? ""
@@ -439,11 +510,13 @@ nonisolated struct GitRepository {
     }
 
     /// Pushes the current branch, setting up its upstream on the first push if none exists yet.
-    func push(branch: String) throws {
+    /// `--progress` forces git to emit its normal progress meter even though stderr here is a pipe,
+    /// not a tty (git otherwise suppresses it), which `progress` receives one line at a time.
+    func push(branch: String, progress: (@Sendable (String) -> Void)? = nil) throws {
         do {
-            try run(["push"])
+            try run(["push", "--progress"], progress: progress)
         } catch let GitError.commandFailed(message) where message.contains("has no upstream branch") {
-            try run(["push", "--set-upstream", "origin", branch])
+            try run(["push", "--progress", "--set-upstream", "origin", branch], progress: progress)
         }
     }
 

@@ -54,6 +54,18 @@ final class AppState {
     /// branch can lack an upstream yet still have somewhere to push to).
     var hasOriginRemote = false
 
+    /// Drives `UnpushedCommitFooterView`'s push button state, independent of the generic
+    /// `isSyncing` (which also covers fetch/pull and just disables buttons). `pushProgressText`
+    /// is git's own `--progress` meter (e.g. "Writing objects (5/12)"), reformatted by
+    /// `AppState.formatPushProgress(_:)`. `pushSucceeded` briefly flips true after a successful
+    /// push so the footer can show a checkmark before it animates away; `pushErrorMessage` is
+    /// separate from the generic `errorMessage` (which `DiffView` also reads inline) so a push
+    /// failure always surfaces as its own alert instead.
+    var isPushingCommit = false
+    var pushProgressText: String?
+    var pushSucceeded = false
+    var pushErrorMessage: String?
+
     var isMergeInProgress = false
     var mergeMessage: String?
 
@@ -680,21 +692,57 @@ final class AppState {
     func pushCurrentBranch() {
         guard let repo = currentRepository, let branch = selectedBranch?.name, !isSyncing else { return }
         isSyncing = true
+        isPushingCommit = true
+        pushProgressText = nil
+        pushSucceeded = false
+        pushErrorMessage = nil
         Task {
             do {
-                try await Task.detached(priority: .userInitiated) { try repo.push(branch: branch) }.value
+                try await Task.detached(priority: .userInitiated) {
+                    try repo.push(branch: branch) { [weak self] line in
+                        Task { @MainActor in
+                            self?.pushProgressText = Self.formatPushProgress(line)
+                        }
+                    }
+                }.value
                 await MainActor.run {
                     self.errorMessage = nil
                     self.isSyncing = false
+                    self.isPushingCommit = false
+                    self.pushProgressText = nil
                     self.refreshSyncStatus()
+                    self.pushSucceeded = true
+                }
+                try? await Task.sleep(for: .seconds(3))
+                await MainActor.run {
+                    self.pushSucceeded = false
                 }
             } catch {
                 await MainActor.run {
-                    self.errorMessage = error.localizedDescription
                     self.isSyncing = false
+                    self.isPushingCommit = false
+                    self.pushProgressText = nil
+                    self.pushErrorMessage = error.localizedDescription
                 }
             }
         }
+    }
+
+    /// Reformats one line of git's `--progress` meter, e.g. "Writing objects:  42% (5/12)", into
+    /// "Writing objects (5/12)" for the push footer. Falls back to the stage name alone (or `nil`
+    /// for lines with neither, like "Delta compression using up to 8 threads") when there's no
+    /// `(x/y)` count to show.
+    static func formatPushProgress(_ line: String) -> String? {
+        guard let colonIndex = line.firstIndex(of: ":") else { return nil }
+        let stage = line[..<colonIndex].trimmingCharacters(in: .whitespaces)
+        guard !stage.isEmpty else { return nil }
+        guard let openParen = line.range(of: "(", options: .backwards),
+              let closeParen = line.range(of: ")", options: .backwards),
+              openParen.lowerBound < closeParen.lowerBound else {
+            return stage
+        }
+        let counts = line[openParen.lowerBound..<closeParen.upperBound]
+        return "\(stage) \(counts)"
     }
 
     private func refreshSyncStatus() {
