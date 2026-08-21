@@ -10,6 +10,7 @@ struct FolderRowView: View {
     let onStartRename: () -> Void
     let onCommitRename: (String) -> Void
     let onSort: () -> Void
+    let onAddRepo: () -> Void
     let onDelete: () -> Void
 
     @State private var draftName: String = ""
@@ -68,6 +69,7 @@ struct FolderRowView: View {
         .contextMenu {
             Button("Rename") { onStartRename() }
             Button("Sort Items by Name") { onSort() }
+            Button("Add Repo to this Group…") { onAddRepo() }
             Divider()
             Button("Delete…", role: .destructive) { onDelete() }
         }
@@ -126,6 +128,7 @@ private struct FolderRowPreviewRepo: View {
             onStartRename: {},
             onCommitRename: { _ in },
             onSort: {},
+            onAddRepo: {},
             onDelete: {}
         )
         FolderRowPreviewRepo(name: "Oakdoor", selected: true, appState: appState, sidebarStore: sidebarStore)
@@ -142,6 +145,7 @@ private struct FolderRowPreviewRepo: View {
             onStartRename: {},
             onCommitRename: { _ in },
             onSort: {},
+            onAddRepo: {},
             onDelete: {}
         )
         FolderRowPreviewRepo(name: "Radio", selected: false, appState: appState, sidebarStore: sidebarStore)
@@ -157,6 +161,7 @@ private struct FolderRowPreviewRepo: View {
             onStartRename: {},
             onCommitRename: { _ in },
             onSort: {},
+            onAddRepo: {},
             onDelete: {}
         )
     }

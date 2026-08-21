@@ -769,6 +769,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 sidebarStore.sortRepos(inFolder: folder.id)
             },
 
+            onAddRepo: { [self] in
+                appState.addRepoViaPicker(intoFolder: folder.id)
+            },
+
             onDelete: { [self] in
                 requestDeleteFolder(folder)
             }

@@ -26,11 +26,22 @@ final class SidebarStore {
     /// Already-added repos report `true` without duplicating the entry.
     @discardableResult
     func addRepo(at url: URL) -> Bool {
+        addRepo(at: url, intoFolder: nil)
+    }
+
+    /// Adds `url` as a repo directly into `folderID` (nil = top level), returning `false` (and not
+    /// adding it) if it isn't a git repository. Already-added repos report `true` without duplicating
+    /// the entry or moving it into the folder.
+    @discardableResult
+    func addRepo(at url: URL, intoFolder folderID: UUID?) -> Bool {
         guard GitRepository.isGitRepository(at: url) else { return false }
         guard !repos.contains(where: { $0.path == url.path }) else { return true }
-        let repo = SidebarRepo(id: UUID(), path: url.path, displayNameOverride: nil, iconPath: nil, folderID: nil, sortIndex: 0)
+        let sortIndex = repos.filter { $0.folderID == folderID }.count
+        let repo = SidebarRepo(id: UUID(), path: url.path, displayNameOverride: nil, iconPath: nil, folderID: folderID, sortIndex: sortIndex)
         repos.append(repo)
-        topLevelOrder.append(.repo(repo.id))
+        if folderID == nil {
+            topLevelOrder.append(.repo(repo.id))
+        }
         persist()
         return true
     }

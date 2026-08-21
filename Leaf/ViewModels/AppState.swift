@@ -127,6 +127,12 @@ final class AppState {
     }
 
     func addRepoViaPicker() {
+        addRepoViaPicker(intoFolder: nil)
+    }
+
+    /// Same picker flow as `addRepoViaPicker()`, but adds the chosen repo directly into `folderID`
+    /// instead of the top level.
+    func addRepoViaPicker(intoFolder folderID: UUID?) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -134,7 +140,7 @@ final class AppState {
         panel.prompt = "Add Repository"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard sidebarStore.addRepo(at: url) else {
+        guard sidebarStore.addRepo(at: url, intoFolder: folderID) else {
             presentNotARepositoryAlert(for: [url.lastPathComponent])
             return
         }
