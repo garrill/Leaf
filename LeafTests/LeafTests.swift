@@ -554,23 +554,23 @@ final class TestRepo {
     }
 
     // A line ending exactly at ")" (e.g. "Compressing objects: 100% (8/8)", with no trailing
-    // ", done." text after the count) previously crashed: `formatPushProgress` sliced through
+    // ", done." text after the count) previously crashed: `formatProgressLine` sliced through
     // `closeParen.upperBound` with a *closed* range, and that upper bound is `endIndex` when ")"
     // is the line's last character — not a valid index to include in a closed range subscript.
-    @Test func formatPushProgressHandlesLineEndingAtCloseParen() {
-        #expect(AppState.formatPushProgress("Compressing objects: 100% (8/8)") == "Compressing objects (8/8)")
+    @Test func formatProgressLineHandlesLineEndingAtCloseParen() {
+        #expect(AppState.formatProgressLine("Compressing objects: 100% (8/8)") == "Compressing objects (8/8)")
     }
 
-    @Test func formatPushProgressHandlesTrailingTextAfterCounts() {
-        #expect(AppState.formatPushProgress("Writing objects:  42% (5/12), 1.15 KiB | 1.15 MiB/s") == "Writing objects (5/12)")
+    @Test func formatProgressLineHandlesTrailingTextAfterCounts() {
+        #expect(AppState.formatProgressLine("Writing objects:  42% (5/12), 1.15 KiB | 1.15 MiB/s") == "Writing objects (5/12)")
     }
 
-    @Test func formatPushProgressHandlesNoCounts() {
-        #expect(AppState.formatPushProgress("Delta compression using up to 8 threads") == nil)
+    @Test func formatProgressLineHandlesNoCounts() {
+        #expect(AppState.formatProgressLine("Delta compression using up to 8 threads") == nil)
     }
 
-    @Test func formatPushProgressHandlesNoColon() {
-        #expect(AppState.formatPushProgress("done.") == nil)
+    @Test func formatProgressLineHandlesNoColon() {
+        #expect(AppState.formatProgressLine("done.") == nil)
     }
 }
 
