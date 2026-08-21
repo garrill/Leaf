@@ -273,22 +273,48 @@ nonisolated struct GitRepository {
 
     /// Runs `git clone` directly (not via the instance `run`/`runRaw` helpers, which pin
     /// `currentDirectoryURL` to an already-existing `rootURL` — the clone destination doesn't
-    /// exist yet).
-    static func clone(from urlString: String, into destination: URL) throws {
+    /// exist yet). `--progress` plus the same live-stderr-streaming setup as `runRaw(_:progress:)`
+    /// lets a caller (`AppState.cloneRepo`) surface git's own "Receiving objects: 42% (5/12)"-style
+    /// meter while the clone is still in flight.
+    static func clone(from urlString: String, into destination: URL, progress: (@Sendable (String) -> Void)? = nil) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.currentDirectoryURL = destination.deletingLastPathComponent()
-        process.arguments = ["clone", urlString, destination.path]
+        process.arguments = ["clone", "--progress", urlString, destination.path]
 
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
 
+        let accumulator = progress.map { ProgressLineAccumulator(handler: $0) }
+        if let accumulator {
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    accumulator.append(chunk)
+                }
+            }
+        }
+
         try process.run()
-        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
         _ = stdout.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let errData: Data
+        if let accumulator {
+            // See `runRaw(_:progress:)` for why a final synchronous drain is needed even after
+            // clearing the handler — a fast clone can exit before the async readability source
+            // ever fires, silently dropping whatever stderr it wrote.
+            process.waitUntilExit()
+            stderr.fileHandleForReading.readabilityHandler = nil
+            let remainder = stderr.fileHandleForReading.readDataToEndOfFile()
+            if !remainder.isEmpty { accumulator.append(remainder) }
+            errData = accumulator.finalData
+        } else {
+            errData = stderr.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+        }
 
         if process.terminationStatus != 0 {
             let errorOutput = String(data: errData, encoding: .utf8) ?? ""

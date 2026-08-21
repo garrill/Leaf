@@ -73,16 +73,34 @@ struct RepoRowView: View {
                 }
             }
             Divider()
-            // Not a real "delete" — it only removes the sidebar entry, so this skips the
-            // confirm-dialog treatment given to the actually-destructive actions elsewhere
-            // (discard/clean/merge-abort/stash-drop). The label spells that out since the
-            // repo icon otherwise makes this read like it could touch the repo on disk.
-            Button("Remove from Sidebar") {
-                sidebarStore.removeRepo(id: repo.id)
-                if appState.selectedRepoURL == repo.url {
-                    appState.deselectRepo()
-                }
+            Button("Remove...", role: .destructive) {
+                confirmRemoveFromSidebar()
             }
+        }
+    }
+
+    private func confirmRemoveFromSidebar() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Are you sure you want to remove \u{201C}\(repo.displayName)\u{201D} from Leaf?"
+
+        let checkbox = NSButton(checkboxWithTitle: "Also move this repository to the Bin", target: nil, action: nil)
+        checkbox.state = .off
+        alert.accessoryView = checkbox
+
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let moveToBin = checkbox.state == .on
+        sidebarStore.removeRepo(id: repo.id)
+        if appState.selectedRepoURL == repo.url {
+            appState.deselectRepo()
+        }
+        if moveToBin {
+            try? FileManager.default.trashItem(at: repo.url, resultingItemURL: nil)
         }
     }
 

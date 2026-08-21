@@ -69,8 +69,14 @@ final class AppState {
     var isMergeInProgress = false
     var mergeMessage: String?
 
+    /// `cloneProgressText` mirrors `pushProgressText`'s treatment of git's `--progress` meter
+    /// (via `AppState.formatProgressLine(_:)`) for `CloneRepoSheet`'s status line.
+    /// `cloneProgressFraction` drives its progress bar, via `cloneStageFraction(for:)`, and is
+    /// clamped to never decrease (see `cloneRepo`) since that mapping isn't itself monotonic.
     var isCloning = false
     var cloneErrorMessage: String?
+    var cloneProgressText: String?
+    var cloneProgressFraction: Double?
 
     var renamingFolderID: UUID?
     var renamingRepoID: UUID?
@@ -194,13 +200,29 @@ final class AppState {
 
         isCloning = true
         cloneErrorMessage = nil
+        cloneProgressText = nil
+        cloneProgressFraction = nil
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try GitRepository.clone(from: trimmedURL, into: destination)
+                    try GitRepository.clone(from: trimmedURL, into: destination) { [weak self] line in
+                        Task { @MainActor in
+                            guard let self else { return }
+                            self.cloneProgressText = Self.formatProgressLine(line)
+                            if let fraction = Self.cloneStageFraction(for: line) {
+                                // Clamped to never decrease: within the "remote" macro-stage,
+                                // git's own sub-phases (enumerating/counting/compressing) each
+                                // restart their *own* 0-100%, which would otherwise visibly snap
+                                // the bar backward every time git moves to the next sub-phase.
+                                self.cloneProgressFraction = max(self.cloneProgressFraction ?? 0, fraction)
+                            }
+                        }
+                    }
                 }.value
                 await MainActor.run {
                     self.isCloning = false
+                    self.cloneProgressText = nil
+                    self.cloneProgressFraction = nil
                     self.sidebarStore.addRepo(at: destination)
                     self.selectRepo(destination)
                     completion(true)
@@ -208,6 +230,8 @@ final class AppState {
             } catch {
                 await MainActor.run {
                     self.isCloning = false
+                    self.cloneProgressText = nil
+                    self.cloneProgressFraction = nil
                     self.cloneErrorMessage = error.localizedDescription
                     completion(false)
                 }
@@ -251,13 +275,32 @@ final class AppState {
         refreshRepositoryState()
     }
 
-    /// Removes the selected repo from the sidebar — never touches anything on disk, matching
-    /// `RepoRowView`'s per-row "Remove from Sidebar" context-menu action; this is the Repository
-    /// menu's equivalent for whichever repo is currently selected.
+    /// Removes the selected repo from the sidebar, matching `RepoRowView`'s per-row "Remove from
+    /// Sidebar" context-menu action (same confirmation alert, same optional move-to-Bin); this is
+    /// the Repository menu's equivalent for whichever repo is currently selected.
     func removeSelectedRepo() {
         guard let repo = selectedSidebarRepo else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Are you sure you want to remove \u{201C}\(repo.displayName)\u{201D} from Leaf?"
+
+        let checkbox = NSButton(checkboxWithTitle: "Also move this repository to the Bin", target: nil, action: nil)
+        checkbox.state = .off
+        alert.accessoryView = checkbox
+
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let moveToBin = checkbox.state == .on
         sidebarStore.removeRepo(id: repo.id)
         deselectRepo()
+        if moveToBin {
+            try? FileManager.default.trashItem(at: repo.url, resultingItemURL: nil)
+        }
     }
 
     func revealSelectedRepoInFinder() {
@@ -701,7 +744,7 @@ final class AppState {
                 try await Task.detached(priority: .userInitiated) {
                     try repo.push(branch: branch) { [weak self] line in
                         Task { @MainActor in
-                            self?.pushProgressText = Self.formatPushProgress(line)
+                            self?.pushProgressText = Self.formatProgressLine(line)
                         }
                     }
                 }.value
@@ -729,10 +772,10 @@ final class AppState {
     }
 
     /// Reformats one line of git's `--progress` meter, e.g. "Writing objects:  42% (5/12)", into
-    /// "Writing objects (5/12)" for the push footer. Falls back to the stage name alone (or `nil`
-    /// for lines with neither, like "Delta compression using up to 8 threads") when there's no
-    /// `(x/y)` count to show.
-    static func formatPushProgress(_ line: String) -> String? {
+    /// "Writing objects (5/12)" for the push footer/clone progress line. Falls back to the stage
+    /// name alone (or `nil` for lines with neither, like "Delta compression using up to 8 threads")
+    /// when there's no `(x/y)` count to show.
+    static func formatProgressLine(_ line: String) -> String? {
         guard let colonIndex = line.firstIndex(of: ":") else { return nil }
         let stage = line[..<colonIndex].trimmingCharacters(in: .whitespaces)
         guard !stage.isEmpty else { return nil }
@@ -743,6 +786,48 @@ final class AppState {
         }
         let counts = line[openParen.lowerBound..<closeParen.upperBound]
         return "\(stage) \(counts)"
+    }
+
+    /// Extracts the `NN%` figure from one line of git's `--progress` meter (e.g.
+    /// "Receiving objects:  42% (420/1000)" -> 0.42). `nil` for lines that don't report a
+    /// percentage (e.g. "remote: Enumerating objects: 12, done.").
+    private static func progressFraction(from line: String) -> Double? {
+        guard let percentRange = line.range(of: #"\d+(?=%)"#, options: .regularExpression),
+              let percent = Double(line[percentRange]) else {
+            return nil
+        }
+        return percent / 100
+    }
+
+    /// `git clone --progress` runs through a fixed sequence of stages: enumerating/counting/
+    /// compressing happen server-side (all prefixed "remote:"), then git receives the objects,
+    /// resolves deltas, and checks the result out into the working tree. Each stage reports its
+    /// own independent 0-100%, so showing that percentage directly makes `CloneRepoSheet`'s
+    /// progress bar snap backward to 0 every time git moves to the next stage. Bucketing the four
+    /// stages into even quarters of the bar instead — "remote" 0-25%, receiving 25-50%, resolving
+    /// deltas 50-75%, updating files 75-100% — makes it read as one steadily-advancing bar.
+    private enum CloneStage: Int, CaseIterable {
+        case remote, receivingObjects, resolvingDeltas, updatingFiles
+
+        static func stage(for line: String) -> CloneStage? {
+            if line.contains("Receiving objects") { return .receivingObjects }
+            if line.contains("Resolving deltas") { return .resolvingDeltas }
+            // Git renamed "Checking out files" to "Updating files" at some point; accept both.
+            if line.contains("Updating files") || line.contains("Checking out files") { return .updatingFiles }
+            if line.hasPrefix("remote:") || line.contains("Enumerating objects") { return .remote }
+            return nil
+        }
+    }
+
+    /// Maps one line of git clone's `--progress` output to overall progress (0...1) across all
+    /// four `CloneStage`s, rather than that stage's own independent percentage. `nil` if the line
+    /// doesn't match a recognized stage at all.
+    static func cloneStageFraction(for line: String) -> Double? {
+        guard let stage = CloneStage.stage(for: line) else { return nil }
+        let stageWidth = 1.0 / Double(CloneStage.allCases.count)
+        let stageBase = Double(stage.rawValue) * stageWidth
+        let withinStage = (progressFraction(from: line) ?? 0) * stageWidth
+        return stageBase + withinStage
     }
 
     private func refreshSyncStatus() {

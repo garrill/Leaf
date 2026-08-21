@@ -67,9 +67,19 @@ struct ChangedFilesView: View {
                     // even though a successful push immediately zeroes `aheadCount`, which would
                     // otherwise make `isNewestUnpushedCommit` false and yank the success message
                     // away before it's had a chance to animate out.
+                    //
+                    // By the time `pushSucceeded` flips back to false 3s later, `aheadCount` has
+                    // long since settled to 0 (via `refreshSyncStatus()`'s own async fetch), so
+                    // `isNewestUnpushedCommit` is already false too — that flip removes this whole
+                    // branch, not just something inside `UnpushedCommitFooterView`. The transition
+                    // has to live here, at the point the branch itself disappears, or the exit
+                    // never animates; `UnpushedCommitFooterView`'s own internal transition only
+                    // covers swapping between its buttons and its toast while it stays mounted.
                     UnpushedCommitFooterView(appState: appState)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
 
             if appState.selectedRepoURL == nil {
                 // Blank — column 2 already communicates "no repository selected".
@@ -403,15 +413,8 @@ private struct UnpushedCommitFooterView: View {
     var body: some View {
         VStack(spacing: 8) {
             if appState.pushSucceeded {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text("Successfully pushed to origin")
-                        .font(.callout)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                PushSuccessToastView()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
                 HStack(spacing: 8) {
                     Button {
@@ -464,6 +467,38 @@ private struct UnpushedCommitFooterView: View {
             Button("OK", role: .cancel) {}
         } message: { message in
             Text(message)
+        }
+    }
+}
+
+/// A floating "liquid glass" pill (frosted `.ultraThinMaterial` blur behind a translucent green
+/// tint, a hairline white edge highlight, and a soft drop shadow), styled after
+/// writetodisk.com/liquid-glass-toast/ — modulo that reference's actual `.glassEffect()`
+/// modifier, which doesn't exist in the macOS 26.5 SDK (see CLAUDE.md); a tinted material
+/// stand-in gets the same look. Centered rather than stretched full-width, so it reads as a
+/// floating toast and not another full-width footer row.
+private struct PushSuccessToastView: View {
+    var body: some View {
+        HStack {
+            Spacer(minLength: 0)
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.white)
+                Text("Successfully pushed to origin")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+            .background {
+                Capsule().fill(.ultraThinMaterial)
+                Capsule().fill(Color.green.opacity(0.55))
+            }
+            .overlay {
+                Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 0.75)
+            }
+            .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
+            Spacer(minLength: 0)
         }
     }
 }
