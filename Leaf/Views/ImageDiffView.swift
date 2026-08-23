@@ -170,6 +170,9 @@ private struct ImageSwiperView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: geo.size.width, height: geo.size.height)
+                        .mask(alignment: .trailing) {
+                            Rectangle().frame(width: geo.size.width * (1 - position))
+                        }
                 } else {
                     Text("File Deleted")
                         .font(.callout)
