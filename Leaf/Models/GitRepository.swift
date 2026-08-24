@@ -184,7 +184,20 @@ nonisolated struct GitRepository {
 
         try process.run()
 
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+        // Drain stdout on a background queue concurrently with reading stderr on the calling
+        // thread below — reading either pipe fully before touching the other can deadlock: if the
+        // unread pipe's OS buffer (~64KB) fills up, git blocks trying to write to it, the process
+        // never exits/closes its pipes, and `readDataToEndOfFile()` on the pipe being read never
+        // sees EOF. A verbose command with large output on both streams (e.g. a noisy merge/push)
+        // could hang the app indefinitely without this.
+        let stdoutDrainGroup = DispatchGroup()
+        var outData = Data()
+        stdoutDrainGroup.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            outData = stdout.fileHandleForReading.readDataToEndOfFile()
+            stdoutDrainGroup.leave()
+        }
+
         let errData: Data
         if let accumulator {
             // `readabilityHandler` fires asynchronously off a GCD dispatch source — for a fast
@@ -201,6 +214,7 @@ nonisolated struct GitRepository {
             errData = stderr.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
         }
+        stdoutDrainGroup.wait()
 
         let output = String(data: outData, encoding: .utf8) ?? ""
         let errorOutput = String(data: errData, encoding: .utf8) ?? ""

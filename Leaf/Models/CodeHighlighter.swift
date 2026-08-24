@@ -16,8 +16,12 @@ enum CodeHighlighter {
     /// Keyed on the exact hunk-side text block, so re-viewing a file already highlighted this
     /// session (or scrolling back to a previous file) is instant with no JS round-trip. Callers
     /// only ever run on the main actor, so a plain dictionary is safe without extra locking.
-    /// Unbounded for now — entries are small hunk-sized snippets, not whole files.
+    /// Bounded to `cacheLimit` entries (FIFO eviction, oldest-inserted first) — over a long
+    /// session browsing many large/varied diffs this would otherwise grow without limit, since
+    /// every unique text block ever highlighted stays resident for the app's lifetime.
     private static var cache: [CacheKey: AttributedString] = [:]
+    private static var cacheOrder: [CacheKey] = []
+    private static let cacheLimit = 500
 
     /// Highlights `text`, using the theme-appropriate Xcode colors, and caching the result.
     /// Returns nil (rather than throwing) on any HighlightSwift failure, since a highlighting
@@ -32,6 +36,14 @@ enum CodeHighlighter {
             return nil
         }
         cache[key] = attributed
+        cacheOrder.append(key)
+        if cacheOrder.count > cacheLimit {
+            let overflow = cacheOrder.count - cacheLimit
+            for staleKey in cacheOrder.prefix(overflow) {
+                cache.removeValue(forKey: staleKey)
+            }
+            cacheOrder.removeFirst(overflow)
+        }
         return attributed
     }
 

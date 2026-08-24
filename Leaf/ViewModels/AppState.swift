@@ -337,10 +337,19 @@ final class AppState {
 
     func selectBranch(_ branch: GitBranch) {
         guard let repo = currentRepository else { return }
-        if !branch.isCurrent {
+        guard !branch.isCurrent else {
+            refreshRepositoryState()
+            return
+        }
+        // `checkout`/`stashChanges`/`restoreStash` all shell out synchronously (`Process.
+        // waitUntilExit()`); running them inline on the main thread would freeze the whole UI for
+        // the duration of the call on a branch switch touching many files, so the actual git work
+        // happens in `Task.detached`, same pattern as `fetchRemote`/`pullCurrentBranch`.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
-                try repo.checkout(branch: branch.name)
-                errorMessage = nil
+                try await Task.detached(priority: .userInitiated) { try repo.checkout(branch: branch.name) }.value
+                self.errorMessage = nil
             } catch let GitError.commandFailed(message) where Self.isLocalChangesCheckoutFailure(message) {
                 // Checkout is blocked by a dirty working tree — ask the user whether to bring
                 // those changes along to the new branch, stash them behind on the current one,
@@ -348,31 +357,35 @@ final class AppState {
                 switch Self.promptForDirtyCheckout(to: branch.name) {
                 case .bringChanges:
                     do {
-                        try repo.stashChanges(paths: [], includeUntracked: true)
-                        try repo.checkout(branch: branch.name)
-                        let result = try repo.restoreStash()
-                        errorMessage = result == .conflicts
+                        let result = try await Task.detached(priority: .userInitiated) { () throws -> GitRepository.StashRestoreResult in
+                            try repo.stashChanges(paths: [], includeUntracked: true)
+                            try repo.checkout(branch: branch.name)
+                            return try repo.restoreStash()
+                        }.value
+                        self.errorMessage = result == .conflicts
                             ? "Bringing your changes to \(branch.name) caused conflicts. Resolve them in Working Changes."
                             : nil
                     } catch {
-                        errorMessage = error.localizedDescription
+                        self.errorMessage = error.localizedDescription
                     }
                 case .stashChanges:
                     do {
-                        try repo.stashChanges(paths: [], includeUntracked: true)
-                        try repo.checkout(branch: branch.name)
-                        errorMessage = nil
+                        try await Task.detached(priority: .userInitiated) {
+                            try repo.stashChanges(paths: [], includeUntracked: true)
+                            try repo.checkout(branch: branch.name)
+                        }.value
+                        self.errorMessage = nil
                     } catch {
-                        errorMessage = error.localizedDescription
+                        self.errorMessage = error.localizedDescription
                     }
                 case .cancel:
                     break
                 }
             } catch {
-                errorMessage = error.localizedDescription
+                self.errorMessage = error.localizedDescription
             }
+            self.refreshRepositoryState()
         }
-        refreshRepositoryState()
     }
 
     /// Matches git's checkout-blocked-by-local-changes wording (both the tracked- and
@@ -491,12 +504,15 @@ final class AppState {
             ? "This cannot be undone. Untracked files will be permanently deleted; tracked files will revert to their last committed version."
             : "This cannot be undone. Files will revert to their last committed version."
         guard Self.confirmDestructiveAction(title: title, message: message, confirmButtonTitle: "Discard") else { return }
-        do {
-            try repo.discardChanges(for: files)
-            errorMessage = nil
-            Task { await loadChangedFilesForCurrentSelection() }
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.discardChanges(for: files) }.value
+                self.errorMessage = nil
+                await self.loadChangedFilesForCurrentSelection()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -508,12 +524,17 @@ final class AppState {
     func stashChanges(for files: [ChangedFile]) {
         guard let repo = currentRepository, !files.isEmpty else { return }
         let includeUntracked = files.contains { $0.status == .untracked }
-        do {
-            try repo.stashChanges(paths: files.map(\.path), includeUntracked: includeUntracked)
-            errorMessage = nil
-            refreshRepositoryState()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try repo.stashChanges(paths: files.map(\.path), includeUntracked: includeUntracked)
+                }.value
+                self.errorMessage = nil
+                self.refreshRepositoryState()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -523,15 +544,18 @@ final class AppState {
     /// other on-disk conflict, rather than needing a separate stash-conflict UI.
     func restoreStash() {
         guard let repo = currentRepository else { return }
-        do {
-            let result = try repo.restoreStash()
-            errorMessage = nil
-            refreshRepositoryState()
-            if result == .conflicts {
-                selectSource(.workingChanges)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await Task.detached(priority: .userInitiated) { try repo.restoreStash() }.value
+                self.errorMessage = nil
+                self.refreshRepositoryState()
+                if result == .conflicts {
+                    self.selectSource(.workingChanges)
+                }
+            } catch {
+                self.errorMessage = error.localizedDescription
             }
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -542,12 +566,15 @@ final class AppState {
             message: "This cannot be undone. The stashed changes will be permanently deleted.",
             confirmButtonTitle: "Discard"
         ) else { return }
-        do {
-            try repo.discardStash()
-            errorMessage = nil
-            refreshRepositoryState()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.discardStash() }.value
+                self.errorMessage = nil
+                self.refreshRepositoryState()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -557,12 +584,15 @@ final class AppState {
 
     func ignoreFiles(_ files: [ChangedFile]) {
         guard let repo = currentRepository, !files.isEmpty else { return }
-        do {
-            try repo.ignoreFiles(files)
-            errorMessage = nil
-            Task { await loadChangedFilesForCurrentSelection() }
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.ignoreFiles(files) }.value
+                self.errorMessage = nil
+                await self.loadChangedFilesForCurrentSelection()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -581,13 +611,18 @@ final class AppState {
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !paths.isEmpty, !message.isEmpty else { return }
 
-        do {
-            try repo.commit(message: message, paths: paths, unstagePaths: unstagePaths)
-            commitMessage = ""
-            errorMessage = nil
-            refreshRepositoryState()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try repo.commit(message: message, paths: paths, unstagePaths: unstagePaths)
+                }.value
+                self.commitMessage = ""
+                self.errorMessage = nil
+                self.refreshRepositoryState()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -601,15 +636,18 @@ final class AppState {
         guard let repo = currentRepository,
               case .commit(let commit) = selectedSource,
               commits.first?.sha == commit.sha else { return }
-        do {
-            try repo.undoLastCommit()
-            // The subject line is all `GitCommit` carries — enough to let the user immediately
-            // re-commit as-is, or edit/expand it, rather than retyping from scratch.
-            commitMessage = commit.summary
-            errorMessage = nil
-            refreshRepositoryState()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.undoLastCommit() }.value
+                // The subject line is all `GitCommit` carries — enough to let the user immediately
+                // re-commit as-is, or edit/expand it, rather than retyping from scratch.
+                self.commitMessage = commit.summary
+                self.errorMessage = nil
+                self.refreshRepositoryState()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -647,17 +685,18 @@ final class AppState {
     /// `.conflicted` — editing the file alone doesn't change what `git status` reports.
     func markResolved(_ file: ChangedFile) {
         guard let repo = currentRepository else { return }
-        do {
-            try repo.markResolved(file)
-            errorMessage = nil
-            Task {
-                await loadChangedFilesForCurrentSelection(preserveChecks: true, resetSelection: false)
-                if selectedFile?.path == file.path {
-                    await loadDiffForCurrentSelection()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.markResolved(file) }.value
+                self.errorMessage = nil
+                await self.loadChangedFilesForCurrentSelection(preserveChecks: true, resetSelection: false)
+                if self.selectedFile?.path == file.path {
+                    await self.loadDiffForCurrentSelection()
                 }
+            } catch {
+                self.errorMessage = error.localizedDescription
             }
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -668,12 +707,15 @@ final class AppState {
             message: "This cannot be undone. Any conflict resolutions you've made so far will be discarded, and the branch will return to its state before the merge.",
             confirmButtonTitle: "Abort Merge"
         ) else { return }
-        do {
-            try repo.mergeAbort()
-            errorMessage = nil
-            refreshRepositoryState()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.mergeAbort() }.value
+                self.errorMessage = nil
+                self.refreshRepositoryState()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -682,13 +724,18 @@ final class AppState {
         let resolvedPaths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        do {
-            try repo.completeMerge(message: message, resolvedPaths: resolvedPaths)
-            commitMessage = ""
-            errorMessage = nil
-            refreshRepositoryState()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try repo.completeMerge(message: message, resolvedPaths: resolvedPaths)
+                }.value
+                self.commitMessage = ""
+                self.errorMessage = nil
+                self.refreshRepositoryState()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 

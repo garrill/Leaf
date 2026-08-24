@@ -373,7 +373,7 @@ private struct CommitFooterView: View {
         }
         let branchName = appState.selectedBranch?.name ?? "…"
         let suffix = checkedCount == 1 ? "" : "s"
-        return Text("Commit \(checkedCount) file\(suffix) to **\(branchName)**")
+        return Text("Commit \(checkedCount) file\(suffix) to ") + Text(branchName).bold()
     }
 }
 

@@ -166,6 +166,19 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     private var isApplyingSelection = false
     private var hoveredFolderIDs: Set<UUID> = []
 
+    /// The tree-shape-relevant slice of `sidebarStore` state as of the last `reloadData()` —
+    /// lets `reloadPreservingState()` skip the actual `reloadData()`/expand-collapse pass (which
+    /// recreates every row's `NSHostingView`) when nothing structural changed and this call was
+    /// only triggered by `appState.selectedRepoURL` changing (e.g. clicking a different repo).
+    /// `SidebarFolder.isExpanded` is part of the struct, so an expand/collapse still invalidates
+    /// this correctly.
+    private struct StructureSnapshot: Equatable {
+        let repos: [SidebarRepo]
+        let folders: [SidebarFolder]
+        let topLevelOrder: [TopLevelEntry]
+    }
+    private var lastStructureSnapshot: StructureSnapshot?
+
     private var sidebarStore: SidebarStore {
         appState.sidebarStore
     }
@@ -226,29 +239,42 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     func reloadPreservingState() {
         guard let outlineView else { return }
 
-        // `reloadData()` recreates every row's underlying item object, and can itself
-        // synchronously fire `outlineViewSelectionDidChange` for the row that's already
-        // selected purely because of that — not because the user (or `appState`) actually
-        // changed anything. Left unguarded, that spurious notification reached
-        // `AppState.selectRepo(_:)` and ran its fully-synchronous `refreshRepositoryState()`
+        // `reloadData()` recreates every row's underlying item object (re-hosting every
+        // `NSHostingView`), and can itself synchronously fire `outlineViewSelectionDidChange` for
+        // the row that's already selected purely because of that — not because the user (or
+        // `appState`) actually changed anything. Left unguarded, that spurious notification
+        // reached `AppState.selectRepo(_:)` and ran its fully-synchronous `refreshRepositoryState()`
         // (branches, commits, status, a `git remote get-url origin` call) on the main thread —
         // confirmed via Instruments as a real source of hangs, and one that fired on *every*
         // re-render of this view (including ones triggered by unrelated state elsewhere in the
         // app, like a commit-history selection settling), not just actual repo switches.
         // `applySelectionFromAppState()` below is what authoritatively reconciles the selection
         // afterward, so nothing is lost by ignoring whatever `reloadData()` does on its own.
+        //
+        // This view also gets re-invoked on every `appState.selectedRepoURL` change (clicking a
+        // different repo in the sidebar) even though the tree *shape* hasn't changed at all — only
+        // rebuild rows when the structural state actually changed, since a full `reloadData()`
+        // scales with total sidebar item count and was otherwise paid on every single click.
+        let snapshot = StructureSnapshot(
+            repos: sidebarStore.repos,
+            folders: sidebarStore.folders,
+            topLevelOrder: sidebarStore.topLevelOrder
+        )
+        if snapshot != lastStructureSnapshot {
+            lastStructureSnapshot = snapshot
 
-        isApplyingSelection = true
-        outlineView.reloadData()
-        isApplyingSelection = false
+            isApplyingSelection = true
+            outlineView.reloadData()
+            isApplyingSelection = false
 
-        for folder in sidebarStore.folders {
-            let item = item(forFolder: folder.id)
+            for folder in sidebarStore.folders {
+                let item = item(forFolder: folder.id)
 
-            if folder.isExpanded {
-                outlineView.expandItem(item)
-            } else {
-                outlineView.collapseItem(item)
+                if folder.isExpanded {
+                    outlineView.expandItem(item)
+                } else {
+                    outlineView.collapseItem(item)
+                }
             }
         }
 
