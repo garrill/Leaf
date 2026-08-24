@@ -1194,7 +1194,12 @@ final class AppState {
                 self.behindCount = 0
             }
             self.hasOriginRemote = snapshot.hasOriginRemote
-            if source != nil {
+            // The selection can change while this snapshot's git calls were in flight (e.g. a
+            // commit both flips `selectedSource` via its own `refreshRepositoryState()` *and*
+            // triggers this very external-change notification via `.git`'s FSEvents) — applying
+            // a result fetched for the *old* `source` would stomp the newly selected source's
+            // freshly loaded files with stale (often empty) ones.
+            if source != nil, source == self.selectedSource {
                 self.changedFiles = snapshot.changedFiles
                 // Only `.workingChanges` populates real `statusEntries` (see
                 // `GitRepository.changedFilesWithStatus(for:)`) — for `.stash`/`.commit` it's
