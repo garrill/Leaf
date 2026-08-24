@@ -55,7 +55,7 @@ decisions.
       `NSTextView` rather than a synthetic SwiftUI focus proxy, so up/down, page up/down,
       home/end, etc. all come from `NSTextView`'s native key bindings instead of being
       hand-rolled.
-- [ ] **Commit box shortcuts:** Enter/Return triggers the Commit button (commit only, no
+- [x] **Commit box shortcuts:** Enter/Return triggers the Commit button (commit only, no
       push) without requiring a mouse click; Escape undoes a commit.
 
 ### Diff viewer
@@ -102,7 +102,7 @@ decisions.
 
 ### Bugs
 
-- [ ] **"No changes" message shown incorrectly after committing.** After a commit
+- [x] **"No changes" message shown incorrectly after committing.** After a commit
       completes, the changed-files shows a "no changes" empty state  rather than the files
       that have just been commited. Reproduce against `AppState`'s post-commit reload path
       (`loadChangedFilesForCurrentSelection`) before fixing.

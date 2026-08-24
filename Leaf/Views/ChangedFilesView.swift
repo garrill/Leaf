@@ -4,6 +4,12 @@ import SwiftUI
 struct ChangedFilesView: View {
     @Bindable var appState: AppState
     @FocusState private var isFocused: Bool
+    /// Focus for the commit message field, tracked here (rather than solely inside
+    /// `CommitFooterView`) so this view's own arrow-key/escape column-navigation handlers and its
+    /// `isFocused` reclaim logic below can both check it and back off — see the comment on
+    /// `CommitFooterView.isMessageFocused` for why a shared, separately-identified `@FocusState`
+    /// is required here instead of letting the field fall under `isFocused`'s scope.
+    @FocusState private var isCommitMessageFocused: Bool
 
     var body: some View {
         ZStack {
@@ -60,7 +66,7 @@ struct ChangedFilesView: View {
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 if isWorkingChanges && !appState.changedFiles.isEmpty {
-                    CommitFooterView(appState: appState)
+                    CommitFooterView(appState: appState, isMessageFocused: $isCommitMessageFocused)
                 } else if isStash && !appState.changedFiles.isEmpty {
                     StashFooterView(appState: appState)
                 } else if isNewestUnpushedCommit || appState.pushSucceeded {
@@ -82,12 +88,23 @@ struct ChangedFilesView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
             .focused($isFocused)
+            // Left/right/escape here are column-navigation shortcuts, not something the commit
+            // message field should ever see — while it has focus, arrow keys need to move the
+            // text cursor and escape needs to do nothing, so all three back off and let the
+            // field's own default key handling run instead.
             .onKeyPress(.leftArrow) {
+                guard !isCommitMessageFocused else { return .ignored }
                 appState.focusedColumn = .branches
                 return .handled
             }
             .onKeyPress(.rightArrow) {
+                guard !isCommitMessageFocused else { return .ignored }
                 appState.focusedColumn = .diff
+                return .handled
+            }
+            .onKeyPress(.escape) {
+                guard !isCommitMessageFocused, isNewestUnpushedCommit, !appState.isPushingCommit else { return .ignored }
+                appState.undoLastCommit()
                 return .handled
             }
 
@@ -123,8 +140,15 @@ struct ChangedFilesView: View {
         // neighboring column's own `true` assignment (both fire from the same `focusedColumn`
         // change) — depending on NSHostingController update order, this column's `false` could
         // land after the other column's `true` and steal focus back to nothing.
+        // Skipped while the commit message field already holds focus: setting `isFocused` here
+        // would make SwiftUI hand real first-responder status to the List itself, yanking it away
+        // from the field's `NSTextView` a beat after a click had just granted it — the exact
+        // "only one of the two can actually hold it" conflict `DiffView` hits with its own text
+        // view (see that file's comment on the same fight). `CommitFooterView`'s own `onChange`
+        // is what sets `appState.focusedColumn = .files` when the field is clicked directly, so
+        // this guard is what stops that from looping back and reclaiming focus in the same beat.
         .onChange(of: appState.focusedColumn) { _, newValue in
-            guard newValue == .files else { return }
+            guard newValue == .files, !isCommitMessageFocused else { return }
             isFocused = true
         }
         // The user tabbed/clicked into this column directly (not via arrow-key navigation) —
@@ -348,6 +372,24 @@ struct ChangedFilesView: View {
 /// laggy on repos with many changed files.
 private struct CommitFooterView: View {
     @Bindable var appState: AppState
+    /// Passed down from `ChangedFilesView` (rather than a plain local `@FocusState` here) so that
+    /// view's own column-navigation key handlers and its `isFocused` reclaim logic can see when
+    /// this field has focus. It has to be its own separately-identified `@FocusState` rather than
+    /// falling under `ChangedFilesView.isFocused`'s scope — with only one `.focused($isFocused)`
+    /// in the tree, SwiftUI resolves *any* focusable descendant (this field included) as "focus
+    /// for that binding," so a click landing in the field was also flipping `isFocused` true and
+    /// making the List itself claim real first-responder status a beat later — stealing the field
+    /// back before the click's effect had a chance to stick, and requiring a second click to win.
+    var isMessageFocused: FocusState<Bool>.Binding
+
+    /// Return-key submission can't be done via `.onKeyPress(.return)` on the field itself:
+    /// `axis: .vertical` backs the field with a real multi-line `NSTextView`, which swallows
+    /// Return as `insertNewline:` at the AppKit level before SwiftUI's key-press pipeline ever
+    /// sees it (confirmed empirically — the modifier never fired). A local `NSEvent` monitor,
+    /// installed only while this field holds focus, intercepts the key first and can suppress it
+    /// by returning `nil`. Shift+Return still passes through untouched so a multi-line message
+    /// stays possible.
+    @State private var returnKeyMonitor: Any?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -364,6 +406,7 @@ private struct CommitFooterView: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(.white.opacity(0.25), lineWidth: 0.5)
                 )
+                .focused(isMessageFocused)
 
             Button {
                 appState.commitOrCompleteMerge()
@@ -377,6 +420,36 @@ private struct CommitFooterView: View {
             .disabled(!canCommit)
         }
         .padding(10)
+        .onChange(of: isMessageFocused.wrappedValue) { _, focused in
+            if focused {
+                // Set directly rather than through `ChangedFilesView.isFocused` — see that
+                // view's own `onChange(of: appState.focusedColumn)` for why routing this through
+                // the List's focus state instead would just reclaim the field right back.
+                appState.focusedColumn = .files
+                installReturnKeyMonitor()
+            } else {
+                removeReturnKeyMonitor()
+            }
+        }
+        .onDisappear {
+            removeReturnKeyMonitor()
+        }
+    }
+
+    private func installReturnKeyMonitor() {
+        removeReturnKeyMonitor()
+        returnKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 36, !event.modifierFlags.contains(.shift) else { return event }
+            guard canCommit else { return event }
+            appState.commitOrCompleteMerge()
+            return nil
+        }
+    }
+
+    private func removeReturnKeyMonitor() {
+        guard let returnKeyMonitor else { return }
+        NSEvent.removeMonitor(returnKeyMonitor)
+        self.returnKeyMonitor = nil
     }
 
     private var checkedCount: Int {
