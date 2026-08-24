@@ -206,7 +206,7 @@ final class AppState {
             do {
                 try await Task.detached(priority: .userInitiated) {
                     try GitRepository.clone(from: trimmedURL, into: destination) { [weak self] line in
-                        Task { @MainActor in
+                        Task { @MainActor [weak self] in
                             guard let self else { return }
                             self.cloneProgressText = Self.formatProgressLine(line)
                             if let fraction = Self.cloneStageFraction(for: line) {
@@ -743,7 +743,7 @@ final class AppState {
             do {
                 try await Task.detached(priority: .userInitiated) {
                     try repo.push(branch: branch) { [weak self] line in
-                        Task { @MainActor in
+                        Task { @MainActor [weak self] in
                             self?.pushProgressText = Self.formatProgressLine(line)
                         }
                     }

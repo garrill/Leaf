@@ -372,8 +372,8 @@ private struct CommitFooterView: View {
             return Text("Complete Merge")
         }
         let branchName = appState.selectedBranch?.name ?? "…"
-        return Text("Commit \(checkedCount) file\(checkedCount == 1 ? "" : "s") to ")
-            + Text(branchName).bold()
+        let suffix = checkedCount == 1 ? "" : "s"
+        return Text("Commit \(checkedCount) file\(suffix) to **\(branchName)**")
     }
 }
 

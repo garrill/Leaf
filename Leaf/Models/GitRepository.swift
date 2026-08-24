@@ -29,7 +29,7 @@ enum FileChangeStatus: String {
     }
 }
 
-struct ChangedFile: Identifiable, Hashable {
+nonisolated struct ChangedFile: Identifiable, Hashable {
     let path: String
     let status: FileChangeStatus
     /// The pre-rename path, set only when `status == .renamed`.
@@ -97,7 +97,7 @@ enum GitError: Error, LocalizedError {
 /// `\n`, so lines are split on either. `readabilityHandler` fires on a private dispatch queue, so
 /// access to the buffers is serialized with a lock; `@unchecked Sendable` reflects that the lock,
 /// not the compiler, is what makes this safe to share across that queue and the process's own thread.
-private final class ProgressLineAccumulator: @unchecked Sendable {
+private nonisolated final class ProgressLineAccumulator: @unchecked Sendable {
     private let lock = NSLock()
     private var lineBuffer = Data()
     private var fullData = Data()
