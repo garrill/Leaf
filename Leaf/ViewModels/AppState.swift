@@ -7,6 +7,12 @@ final class AppState {
     let repoStatusStore = RepoStatusStore()
 
     var selectedRepoURL: URL?
+    /// Which of the four columns currently holds keyboard focus, driving left/right arrow-key
+    /// navigation between them (`MainColumn.repos`/`.branches`/`.files` — `.diff` isn't wired up
+    /// yet). The source of truth each column's own local `@FocusState` syncs against, since a
+    /// separate `NSHostingController` per column (see `MainSplitViewController`) means there's no
+    /// single shared `@FocusState` that could drive this directly.
+    var focusedColumn: MainColumn?
     var branches: [GitBranch] = []
     var selectedBranch: GitBranch?
     var isDetachedHead = false

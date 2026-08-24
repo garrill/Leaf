@@ -77,7 +77,7 @@ final class MainSplitViewController: NSSplitViewController {
         filesItem.minimumThickness = 200
         filesItem.maximumThickness = 500
 
-        let diffHost = NSHostingController(rootView: DiffPaneHost(appState: appState))
+        let diffHost = NSHostingController(rootView: DiffView(appState: appState))
         diffHost.sizingOptions = []
         let diffItem = NSSplitViewItem(viewController: diffHost)
         diffItem.minimumThickness = 320
@@ -106,17 +106,5 @@ final class MainSplitViewController: NSSplitViewController {
         hasAppliedInitialLayout = true
         splitView.setPosition(defaultSidebarWidth, ofDividerAt: 0)
         splitView.setPosition(defaultSidebarWidth + defaultBranchesWidth, ofDividerAt: 1)
-    }
-}
-
-/// `DiffView` still takes an externally-owned `FocusState<MainColumn?>.Binding` from the old
-/// single-`NavigationSplitView` days (for its left-arrow-back-to-files handling) — this just gives
-/// it a local one to satisfy that until cross-column focus is wired back up as its own step.
-private struct DiffPaneHost: View {
-    @Bindable var appState: AppState
-    @FocusState private var focusedColumn: MainColumn?
-
-    var body: some View {
-        DiffView(appState: appState, focusedColumn: $focusedColumn)
     }
 }

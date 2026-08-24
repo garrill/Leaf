@@ -30,7 +30,6 @@ struct DiffLine: Identifiable {
 
 struct DiffView: View {
     @Bindable var appState: AppState
-    var focusedColumn: FocusState<MainColumn?>.Binding
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(LeafSettings.diffFontSizeKey, store: LeafSettings.store) private var diffFontSize = LeafSettings.defaultDiffFontSize
     @AppStorage(LeafSettings.syntaxHighlightingEnabledKey, store: LeafSettings.store) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
@@ -45,12 +44,6 @@ struct DiffView: View {
     /// `header`'s `addedCount`/`removedCount` and `content`'s `DiffCodeScrollView` construction
     /// each independently re-parsed the same text on every single render.
     @State private var diffLines: [DiffLine] = []
-    /// Scroll state for the diff pane so the up/down arrow keys can drive it once focus has
-    /// moved here (right arrow from the files list) — synced from real scroll events via
-    /// `onScrollGeometryChange` and driven programmatically via `scrollPosition`.
-    @State private var scrollPosition = ScrollPosition()
-    @State private var scrollOffsetY: CGFloat = 0
-    private static let arrowScrollStep: CGFloat = 40
 
     static let paneBackgroundNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -144,20 +137,19 @@ struct DiffView: View {
             .safeAreaBar(edge: .top, spacing: 0) { header }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Self.paneBackgroundColor)
-            .focusable()
-            .focusEffectDisabled()
-            .focused(focusedColumn, equals: .diff)
-            .onKeyPress(.leftArrow) {
-                focusedColumn.wrappedValue = .files
-                return .handled
-            }
-            .onKeyPress(.upArrow) {
-                scrollBy(-Self.arrowScrollStep)
-                return .handled
-            }
-            .onKeyPress(.downArrow) {
-                scrollBy(Self.arrowScrollStep)
-                return .handled
+            // Cross-column focus (`AppState.focusedColumn`) is tracked here purely for the visual
+            // outline — real AppKit keyboard focus lives on the actual `DiffCodeTextView` instead
+            // (see `DiffCodeScrollView.updateNSView`/`DiffCodeTextView.becomeFirstResponder`), so
+            // up/down, page up/down, home/end, etc. all come from `NSTextView`'s own standard key
+            // bindings rather than being hand-rolled here. A `.focusable()`/`.focused()` pair tied
+            // to the same `appState.focusedColumn` doesn't work for this: it would fight over real
+            // first-responder status with the text view (only one of the two can actually hold
+            // it), so the ring is drawn manually instead, off the same already-shared state.
+            .overlay {
+                if appState.focusedColumn == .diff {
+                    Rectangle()
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
+                }
             }
             // Keyed on both the file and the source (the same file can be selected across
             // different commits) — SwiftUI cancels/restarts this automatically on change, same
@@ -179,11 +171,6 @@ struct DiffView: View {
     private struct DiffParseKey: Equatable {
         let diffText: String
         let isConflicted: Bool
-    }
-
-    private func scrollBy(_ delta: CGFloat) {
-        let newY = max(0, scrollOffsetY + delta)
-        scrollPosition.scrollTo(point: CGPoint(x: 0, y: newY))
     }
 
     @ViewBuilder
@@ -226,14 +213,8 @@ struct DiffView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ScrollView {
-                DiffCodeScrollView(lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText, fontSize: CGFloat(diffFontSize))
+                DiffCodeScrollView(appState: appState, lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText, fontSize: CGFloat(diffFontSize))
                     .frame(maxWidth: .infinity)
-            }
-            .scrollPosition($scrollPosition)
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentOffset.y
-            } action: { _, newValue in
-                scrollOffsetY = newValue
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark, enabled: syntaxHighlightingEnabled)) {
@@ -548,3 +529,4 @@ private struct HighlightRequest: Equatable {
     let isDark: Bool
     let enabled: Bool
 }
+

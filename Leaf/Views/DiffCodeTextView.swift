@@ -35,6 +35,15 @@ struct DiffLineMetadata {
 /// needed for `.scrollEdgeEffectStyle` to actually blur content under the diff header (a plain
 /// `NSScrollView` wrapped via `NSViewRepresentable` never participates in that SwiftUI-only API).
 final class DiffCodeTextView: NSTextView {
+    /// Set by `DiffCodeScrollView` so this view can participate in cross-column arrow-key focus
+    /// navigation (`AppState.focusedColumn`) as a real AppKit first responder — becoming first
+    /// responder (a click, or `DiffCodeScrollView.updateNSView` claiming it on the diff column's
+    /// behalf) claims `.diff`; a left-arrow press hands focus back to the files column. Every
+    /// other key (up/down, page up/down, home/end, ⌘↑/⌘↓, …) is left to `NSTextView`'s own
+    /// standard key bindings, which is the whole point of routing real focus here rather than
+    /// hand-rolling scroll behavior in SwiftUI — see `DiffView`'s history for why the hand-rolled
+    /// version was abandoned.
+    weak var appState: AppState?
     private(set) var lineMetadata: [DiffLineMetadata] = []
     private var paragraphStartOffsets: [Int] = [0]
     /// The body font size last applied via `setContent` — `DiffGutterView` reads this to keep its
@@ -85,6 +94,22 @@ final class DiffCodeTextView: NSTextView {
         // Keep the text container tracking this view's actual assigned frame width, in case it
         // differs slightly (rounding) from whatever width `fittingHeight(forWidth:)` last saw.
         textContainer?.containerSize = NSSize(width: max(bounds.width, Self.minWrapWidth), height: .greatestFiniteMagnitude)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            appState?.focusedColumn = .diff
+        }
+        return result
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 123 { // Left arrow — hand focus back to the files column.
+            appState?.focusedColumn = .files
+            return
+        }
+        super.keyDown(with: event)
     }
 
     private func recomputeParagraphOffsets() {
@@ -424,6 +449,11 @@ final class DiffCodeContainerView: NSView {
     /// (confirmed via Instruments: ~200ms combined for `buildContent`/`setContent`/
     /// `fittingHeight` on a single unrelated re-render) even when nothing about the diff had.
     private var lastContentKey: DiffContentKey?
+    /// The file/source last seen by `resetScrollIfSelectionChanged` — deliberately a separate key
+    /// from `lastContentKey`: content also changes (a new `DiffContentKey`) when syntax
+    /// highlighting finishes arriving late for the *same* file, which must not reset scroll
+    /// position out from under someone already reading further down.
+    private var lastSelectionKey: DiffSelectionKey?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -466,6 +496,23 @@ final class DiffCodeContainerView: NSView {
         gutterView.needsDisplay = true
         hunkSeparatorView.needsDisplay = true
     }
+
+    /// Selecting a different file (or the same file under a different commit/source) resets
+    /// scroll to the top — switching files only swaps the text content, which otherwise leaves
+    /// whatever scroll offset the previous file was left at.
+    func resetScrollIfSelectionChanged(_ key: DiffSelectionKey) {
+        guard key != lastSelectionKey else { return }
+        lastSelectionKey = key
+        textView.scrollToBeginningOfDocument(nil)
+    }
+}
+
+/// Identifies which file/source is currently selected, independent of `DiffContentKey` (which
+/// identifies what's currently *painted* — see `DiffCodeContainerView.lastSelectionKey`'s doc
+/// comment for why the two can't be the same key).
+struct DiffSelectionKey: Equatable {
+    let filePath: String?
+    let source: ChangeSource?
 }
 
 /// Identifies what's currently painted in a `DiffCodeContainerView` well enough to know when a
@@ -498,6 +545,7 @@ struct DiffContentKey: Equatable {
 /// `sizeThatFits` so it can be scrolled by a real SwiftUI `ScrollView` (see `DiffView.content`)
 /// instead of owning a private `NSScrollView`.
 struct DiffCodeScrollView: NSViewRepresentable {
+    @Bindable var appState: AppState
     let lines: [DiffLine]
     let highlightSnapshot: HighlightSnapshot?
     let diffText: String
@@ -509,13 +557,25 @@ struct DiffCodeScrollView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> DiffCodeContainerView {
         let container = DiffCodeContainerView(frame: .zero)
+        container.textView.appState = appState
         configure(textView: container.textView)
         updateContent(container: container)
+        container.resetScrollIfSelectionChanged(DiffSelectionKey(filePath: appState.selectedFile?.path, source: appState.selectedSource))
         return container
     }
 
     func updateNSView(_ container: DiffCodeContainerView, context: Context) {
+        container.textView.appState = appState
         updateContent(container: container)
+        container.resetScrollIfSelectionChanged(DiffSelectionKey(filePath: appState.selectedFile?.path, source: appState.selectedSource))
+
+        // Cross-column arrow-key navigation landed here from another column (`focusedColumn ==
+        // .diff`) — claim real AppKit keyboard focus to match, the same way
+        // `SidebarOutlineView.updateNSView` does for the repos column.
+        if appState.focusedColumn == .diff,
+           container.textView.window?.firstResponder !== container.textView {
+            container.textView.window?.makeFirstResponder(container.textView)
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: DiffCodeContainerView, context: Context) -> CGSize? {

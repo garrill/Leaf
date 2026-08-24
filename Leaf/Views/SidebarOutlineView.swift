@@ -28,7 +28,8 @@ struct SidebarOutlineView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let outlineView = NSOutlineView()
+        let outlineView = FocusableSidebarOutlineView()
+        outlineView.coordinator = context.coordinator
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         outlineView.addTableColumn(column)
         outlineView.headerView = nil
@@ -68,6 +69,36 @@ struct SidebarOutlineView: NSViewRepresentable {
         _ = appState.selectedRepoURL
 
         context.coordinator.reloadPreservingState()
+
+        // Left/right arrow navigation from another column landed here (`appState.focusedColumn
+        // == .repos`) — claim real AppKit keyboard focus to match. A click-driven selection
+        // already sets `focusedColumn` from `outlineViewSelectionDidChange` and doesn't need this,
+        // since clicking already makes the outline view first responder on its own.
+        if appState.focusedColumn == .repos,
+           let outlineView = context.coordinator.outlineView,
+           outlineView.window?.firstResponder !== outlineView {
+            outlineView.window?.makeFirstResponder(outlineView)
+        }
+    }
+}
+
+/// Intercepts left/right arrow keys for cross-column focus navigation (see
+/// `AppState.focusedColumn`) instead of letting `NSOutlineView`'s default outline-navigation
+/// keyDown handling run — repos aren't expandable and folders aren't selectable
+/// (`shouldSelectItem`), so there's no real expand/collapse/parent-navigation behavior here to
+/// preserve.
+private final class FocusableSidebarOutlineView: NSOutlineView {
+    weak var coordinator: SidebarOutlineCoordinator?
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 123: // Left arrow — already the leftmost column.
+            return
+        case 124: // Right arrow
+            coordinator?.appState.focusedColumn = .branches
+        default:
+            super.keyDown(with: event)
+        }
     }
 }
 
@@ -422,6 +453,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             return
         }
 
+        appState.focusedColumn = .repos
         appState.selectRepo(repo.url)
     }
 

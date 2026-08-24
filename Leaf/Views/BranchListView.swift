@@ -15,6 +15,7 @@ struct BranchListView: View {
     /// `appState.selectedSource` a step later, via `.onChange` below, keeps the hot path (a
     /// native table view committing its own selection) as cheap as possible.
     @State private var localSelection: ChangeSource?
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         ZStack {
@@ -67,6 +68,15 @@ struct BranchListView: View {
             .background(Color(nsColor: .controlBackgroundColor))
             .environment(\.controlActiveState, .key)
             .opacity(appState.selectedRepoURL == nil ? 0 : 1)
+            .focused($isFocused)
+            .onKeyPress(.leftArrow) {
+                appState.focusedColumn = .repos
+                return .handled
+            }
+            .onKeyPress(.rightArrow) {
+                appState.focusedColumn = .files
+                return .handled
+            }
 
             if appState.selectedRepoURL == nil {
                 Text("No Repository Selected")
@@ -101,6 +111,24 @@ struct BranchListView: View {
             withTransaction(transaction) {
                 localSelection = newValue
             }
+        }
+        // Cross-column arrow-key navigation landed here from another column — claim real
+        // keyboard focus to match (see `AppState.focusedColumn`). Only ever assigns `true`: when
+        // focus moves elsewhere, AppKit resigns this column's first-responder status on its own
+        // as soon as another view calls `makeFirstResponder`, and `@FocusState` mirrors that back
+        // down to `false` automatically. Explicitly assigning `false` here too raced against the
+        // neighboring column's own `true` assignment (both fire from the same `focusedColumn`
+        // change) — depending on NSHostingController update order, this column's `false` could
+        // land after the other column's `true` and steal focus back to nothing.
+        .onChange(of: appState.focusedColumn) { _, newValue in
+            guard newValue == .branches else { return }
+            isFocused = true
+        }
+        // The user tabbed/clicked into this column directly (not via arrow-key navigation) —
+        // claim focus ownership so the next left/right press starts from here.
+        .onChange(of: isFocused) { _, newValue in
+            guard newValue else { return }
+            appState.focusedColumn = .branches
         }
     }
 

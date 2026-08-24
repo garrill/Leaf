@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ChangedFilesView: View {
     @Bindable var appState: AppState
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         ZStack {
@@ -80,6 +81,15 @@ struct ChangedFilesView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
+            .focused($isFocused)
+            .onKeyPress(.leftArrow) {
+                appState.focusedColumn = .branches
+                return .handled
+            }
+            .onKeyPress(.rightArrow) {
+                appState.focusedColumn = .diff
+                return .handled
+            }
 
             if appState.selectedRepoURL == nil {
                 // Blank — column 2 already communicates "no repository selected".
@@ -104,6 +114,24 @@ struct ChangedFilesView: View {
         // clears it to up front.
         .task(id: ChangedFilesLoadKey(repoURL: appState.selectedRepoURL, source: appState.selectedSource)) {
             await appState.loadChangedFilesForCurrentSelection()
+        }
+        // Cross-column arrow-key navigation landed here from another column — claim real
+        // keyboard focus to match (see `AppState.focusedColumn`). Only ever assigns `true`: when
+        // focus moves elsewhere, AppKit resigns this column's first-responder status on its own
+        // as soon as another view calls `makeFirstResponder`, and `@FocusState` mirrors that back
+        // down to `false` automatically. Explicitly assigning `false` here too raced against the
+        // neighboring column's own `true` assignment (both fire from the same `focusedColumn`
+        // change) — depending on NSHostingController update order, this column's `false` could
+        // land after the other column's `true` and steal focus back to nothing.
+        .onChange(of: appState.focusedColumn) { _, newValue in
+            guard newValue == .files else { return }
+            isFocused = true
+        }
+        // The user tabbed/clicked into this column directly (not via arrow-key navigation) —
+        // claim focus ownership so the next left/right press starts from here.
+        .onChange(of: isFocused) { _, newValue in
+            guard newValue else { return }
+            appState.focusedColumn = .files
         }
     }
 
