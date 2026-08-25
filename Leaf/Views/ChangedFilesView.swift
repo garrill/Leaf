@@ -387,8 +387,8 @@ private struct CommitFooterView: View {
     /// Return as `insertNewline:` at the AppKit level before SwiftUI's key-press pipeline ever
     /// sees it (confirmed empirically — the modifier never fired). A local `NSEvent` monitor,
     /// installed only while this field holds focus, intercepts the key first and can suppress it
-    /// by returning `nil`. Shift+Return still passes through untouched so a multi-line message
-    /// stays possible.
+    /// by returning `nil`. Shift+Return is passed through unmodified — it doesn't submit, and
+    /// isn't given any newline-inserting behavior of its own either.
     @State private var returnKeyMonitor: Any?
 
     var body: some View {

@@ -13,10 +13,12 @@ import SwiftUI
 /// hidden `fixedSize()` copy, against the width actually available to the visible text.
 private struct TruncationTooltip: ViewModifier {
     let text: String
+    let isEnabled: Bool
     @State private var isTruncated = false
 
     func body(content: Content) -> some View {
-        content
+        guard isEnabled else { return AnyView(content) }
+        return AnyView(content
             .background(
                 GeometryReader { visibleGeo in
                     // Reuses `content` itself (not a fresh `Text`) so the ideal-width probe below
@@ -43,7 +45,7 @@ private struct TruncationTooltip: ViewModifier {
                         )
                 }
             )
-            .overlay(TooltipHoverProbe(text: text, isTruncated: isTruncated))
+            .overlay(TooltipHoverProbe(text: text, isTruncated: isTruncated)))
     }
 
     private func updateTruncated(idealWidth: CGFloat, visibleWidth: CGFloat) {
@@ -53,8 +55,10 @@ private struct TruncationTooltip: ViewModifier {
 
 extension View {
     /// Applies `TruncationTooltip` for `text`. Use on a single-line, truncating `Text` view.
-    func truncationTooltip(_ text: String) -> some View {
-        modifier(TruncationTooltip(text: text))
+    /// Pass `isEnabled: false` to skip entirely (e.g. when the caller isn't truncating the text
+    /// at all, so there's nothing to show a tooltip for).
+    func truncationTooltip(_ text: String, isEnabled: Bool = true) -> some View {
+        modifier(TruncationTooltip(text: text, isEnabled: isEnabled))
     }
 }
 

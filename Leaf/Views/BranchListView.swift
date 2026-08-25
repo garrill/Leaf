@@ -16,6 +16,7 @@ struct BranchListView: View {
     /// native table view committing its own selection) as cheap as possible.
     @State private var localSelection: ChangeSource?
     @FocusState private var isFocused: Bool
+    @AppStorage(LeafSettings.showFullCommitTitleKey, store: LeafSettings.store) private var showFullCommitTitle = LeafSettings.defaultShowFullCommitTitle
 
     var body: some View {
         ZStack {
@@ -41,21 +42,30 @@ struct BranchListView: View {
 
                 Section {
                     ForEach(appState.commits) { commit in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(commit.summary)
-                                .lineLimit(1)
-                                .truncationTooltip(commit.summary)
-                            Text("\(commit.author) · \(commit.relativeDate)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 6)
+                        let commitTags = appState.tagsByCommitSHA[commit.sha] ?? []
+                        CommitRowView(
+                            commit: commit,
+                            tags: commitTags,
+                            showFullCommitTitle: showFullCommitTitle
+                        )
                         .tag(ChangeSource.commit(commit))
                         .listRowSeparator(.visible)
                         .contextMenu {
                             Button("Copy SHA") {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(commit.sha, forType: .string)
+                            }
+                            Button("Tag Commit…") {
+                                appState.newTagTargetCommit = commit
+                                appState.isNewTagSheetPresented = true
+                            }
+                            if !commitTags.isEmpty {
+                                Divider()
+                                ForEach(commitTags) { tag in
+                                    Button("Delete Tag \"\(tag.name)\"", role: .destructive) {
+                                        appState.deleteTag(tag)
+                                    }
+                                }
                             }
                         }
                     }
@@ -87,6 +97,9 @@ struct BranchListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $appState.isNewBranchSheetPresented) {
             NewBranchSheet(appState: appState, isPresented: $appState.isNewBranchSheetPresented)
+        }
+        .sheet(isPresented: $appState.isNewTagSheetPresented) {
+            NewTagSheet(appState: appState, isPresented: $appState.isNewTagSheetPresented)
         }
         .task {
             localSelection = appState.selectedSource
@@ -173,4 +186,52 @@ struct BranchListView: View {
         .foregroundStyle(Color.primary.opacity(0.55))
     }
 
+}
+
+/// A single commit row, including its tag badges. Pulled out into its own `View` type only to
+/// keep the `ForEach` body readable.
+private struct CommitRowView: View {
+    let commit: GitCommit
+    let tags: [GitTag]
+    let showFullCommitTitle: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(commit.summary)
+                    .lineLimit(showFullCommitTitle ? nil : 1)
+                    .truncationTooltip(commit.summary, isEnabled: !showFullCommitTitle)
+                if !tags.isEmpty {
+                    Spacer(minLength: 6)
+                    HStack(spacing: 4) {
+                        ForEach(tags) { tag in
+                            tagBadge(tag)
+                        }
+                    }
+                }
+            }
+            Text("\(commit.author) · \(commit.relativeDate)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 6)
+    }
+
+    /// `.secondary` (rather than a literal color like `.accentColor`) is what lets this badge pick
+    /// up the same automatic white-on-selection flip macOS gives ordinary row text/labels for free
+    /// — no KVO/AppKit tracking needed, unlike `StatusIconView`'s status glyph (a colored icon, not
+    /// a semantic label color, so it doesn't participate in that automatic flip).
+    private func tagBadge(_ tag: GitTag) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "tag.fill")
+                .font(.system(size: 8))
+            Text(tag.name)
+                .font(.caption2)
+                .lineLimit(1)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+    }
 }

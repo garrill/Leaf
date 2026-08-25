@@ -7,6 +7,13 @@ struct GitBranch: Identifiable, Hashable {
     var id: String { name }
 }
 
+struct GitTag: Identifiable, Hashable {
+    let name: String
+    let sha: String
+
+    var id: String { name }
+}
+
 enum FileChangeStatus: String {
     case modified = "M"
     case added = "A"
@@ -346,6 +353,25 @@ nonisolated struct GitRepository {
                 let isCurrent = parts.count > 1 && parts[1] == "*"
                 return GitBranch(name: name, isCurrent: isCurrent)
             }
+    }
+
+    func tags() throws -> [GitTag] {
+        let output = try run(["for-each-ref", "--format=%(refname:short)|%(objectname)", "refs/tags/"])
+        return output
+            .split(separator: "\n")
+            .compactMap { line -> GitTag? in
+                let parts = line.split(separator: "|", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                return GitTag(name: String(parts[0]), sha: String(parts[1]))
+            }
+    }
+
+    func createTag(named name: String, at sha: String) throws {
+        try run(["tag", name, sha])
+    }
+
+    func deleteTag(named name: String) throws {
+        try run(["tag", "-d", name])
     }
 
     /// Two-letter porcelain codes git uses for unmerged (conflicted) paths — these don't fit the

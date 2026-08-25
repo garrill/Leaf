@@ -21,6 +21,14 @@ final class AppState {
     var commits: [GitCommit] = []
     var selectedSource: ChangeSource?
 
+    var tags: [GitTag] = []
+    /// Commit SHA -> tags pointing at it, recomputed whenever `tags` changes. `BranchListView`
+    /// looks this up per row, so a plain per-row linear scan over `tags` would redo the same
+    /// grouping work for every commit on screen.
+    var tagsByCommitSHA: [String: [GitTag]] {
+        Dictionary(grouping: tags, by: \.sha)
+    }
+
     var changedFiles: [ChangedFile] = []
     var uncommittedChangeCount: Int = 0
     var uncommittedLastModifiedDate: Date?
@@ -35,6 +43,12 @@ final class AppState {
     var selectedFilePaths: Set<String> = []
     var checkedFilePaths: Set<String> = []
     var commitMessage: String = ""
+    /// One in-progress commit message draft per repo, so switching repos doesn't carry text typed
+    /// for one repo over to another — saved/restored around `selectedRepoURL` changes in
+    /// `selectRepo`/`deselectRepo` rather than making `commitMessage` itself a computed property,
+    /// since plenty of call sites just assign into it directly (clearing it after a commit, the
+    /// merge-message prefill in `refreshRepositoryState`/`applySnapshot`).
+    private var commitMessageDrafts: [URL: String] = [:]
 
     var diffText: String = ""
     var imageDiffOld: Data?
@@ -89,6 +103,11 @@ final class AppState {
     var isCloneSheetPresented = false
     var isNewBranchSheetPresented = false
     var newBranchErrorMessage: String?
+    var isNewTagSheetPresented = false
+    var newTagErrorMessage: String?
+    /// Which commit "Tag Commit…" was invoked on — set right before presenting the sheet, since
+    /// tag creation targets whatever commit was right-clicked rather than always HEAD.
+    var newTagTargetCommit: GitCommit?
 
     /// GitHub owner (user/org) of the selected repo's `origin` remote, shown as the window
     /// subtitle. `nil` for non-GitHub remotes or repos with no `origin`.
@@ -126,6 +145,7 @@ final class AppState {
         let selectedBranch: GitBranch?
         let detachedHeadShortSHA: String?
         let commits: [GitCommit]
+        let tags: [GitTag]
         let aheadBehind: (ahead: Int, behind: Int)?
         let stashCount: Int
         let stashFileCount: Int
@@ -256,6 +276,10 @@ final class AppState {
         // confirmed-via-Instruments source of main-thread hangs completely unrelated to whatever
         // was actually being navigated at the time.
         guard url != selectedRepoURL else { return }
+        if let previousURL = selectedRepoURL {
+            commitMessageDrafts[previousURL] = commitMessage
+        }
+        commitMessage = commitMessageDrafts[url] ?? ""
         selectedRepoURL = url
         // Clear the previous repo's file list/diff immediately rather than leaving them on
         // screen until the new repo's debounced/detached loads complete — otherwise columns 3
@@ -275,6 +299,10 @@ final class AppState {
     }
 
     func deselectRepo() {
+        if let previousURL = selectedRepoURL {
+            commitMessageDrafts[previousURL] = commitMessage
+        }
+        commitMessage = ""
         selectedRepoURL = nil
         repoWatcher = nil
         invalidateSelectionCaches()
@@ -436,6 +464,33 @@ final class AppState {
         } catch {
             newBranchErrorMessage = error.localizedDescription
             completion(false)
+        }
+    }
+
+    /// Creates a lightweight tag at the given commit. `completion` reports success so the sheet
+    /// knows whether to dismiss itself, mirroring `createBranch`.
+    func createTag(named name: String, at sha: String, completion: @escaping (Bool) -> Void) {
+        guard let repo = currentRepository else { completion(false); return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { completion(false); return }
+        do {
+            try repo.createTag(named: trimmed, at: sha)
+            newTagErrorMessage = nil
+            refreshRepositoryState()
+            completion(true)
+        } catch {
+            newTagErrorMessage = error.localizedDescription
+            completion(false)
+        }
+    }
+
+    func deleteTag(_ tag: GitTag) {
+        guard let repo = currentRepository else { return }
+        do {
+            try repo.deleteTag(named: tag.name)
+            refreshRepositoryState()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -930,6 +985,7 @@ final class AppState {
         guard let repo = currentRepository else {
             branches = []
             commits = []
+            tags = []
             changedFiles = []
             stashCount = 0
             stashFileCount = 0
@@ -973,6 +1029,7 @@ final class AppState {
             self.isDetachedHead = snapshot.selectedBranch == nil && !snapshot.branches.isEmpty
             self.detachedHeadShortSHA = snapshot.detachedHeadShortSHA
             self.commits = snapshot.commits
+            self.tags = snapshot.tags
             self.errorMessage = snapshot.errorMessage
             self.stashCount = snapshot.stashCount
             self.stashFileCount = snapshot.stashFileCount
@@ -1056,6 +1113,7 @@ final class AppState {
                 selectedBranch: selectedBranch,
                 detachedHeadShortSHA: detachedHeadShortSHA,
                 commits: commits,
+                tags: (try? repo.tags()) ?? [],
                 aheadBehind: repo.aheadBehind(),
                 stashCount: stashCount,
                 stashFileCount: stashCount > 0 ? ((try? repo.filesChanged(inStash: "stash@{0}").count) ?? 0) : 0,
@@ -1064,7 +1122,7 @@ final class AppState {
                 hasOriginRemote: repo.hasOriginRemote()
             )
         } catch {
-            return RepositorySnapshot(owner: owner, isMergeInProgress: isMergeInProgress, mergeMessage: mergeMessage, branches: [], selectedBranch: nil, detachedHeadShortSHA: nil, commits: [], aheadBehind: repo.aheadBehind(), stashCount: repo.stashCount(), stashFileCount: 0, statusEntries: (try? repo.statusEntries()) ?? [], errorMessage: error.localizedDescription, hasOriginRemote: repo.hasOriginRemote())
+            return RepositorySnapshot(owner: owner, isMergeInProgress: isMergeInProgress, mergeMessage: mergeMessage, branches: [], selectedBranch: nil, detachedHeadShortSHA: nil, commits: [], tags: (try? repo.tags()) ?? [], aheadBehind: repo.aheadBehind(), stashCount: repo.stashCount(), stashFileCount: 0, statusEntries: (try? repo.statusEntries()) ?? [], errorMessage: error.localizedDescription, hasOriginRemote: repo.hasOriginRemote())
         }
     }
 
@@ -1086,6 +1144,7 @@ final class AppState {
         var detachedHeadShortSHA: String?
         var errorMessage: String?
         var commits: [GitCommit]
+        var tags: [GitTag]
         var aheadBehind: (ahead: Int, behind: Int)?
         var changedFiles: [ChangedFile]
         var statusEntries: [ChangedFile]
@@ -1137,6 +1196,7 @@ final class AppState {
                 }
 
                 let commits = selectedBranch.flatMap { try? repo.commitLog(branch: $0.name) } ?? []
+                let tags = (try? repo.tags()) ?? []
                 let aheadBehind = repo.aheadBehind()
 
                 var changedFiles: [ChangedFile] = []
@@ -1157,6 +1217,7 @@ final class AppState {
                     detachedHeadShortSHA: detachedHeadShortSHA,
                     errorMessage: errorMessage,
                     commits: commits,
+                    tags: tags,
                     aheadBehind: aheadBehind,
                     changedFiles: changedFiles,
                     statusEntries: statusEntries,
@@ -1182,6 +1243,7 @@ final class AppState {
             self.detachedHeadShortSHA = snapshot.detachedHeadShortSHA
             self.errorMessage = snapshot.errorMessage
             self.commits = snapshot.commits
+            self.tags = snapshot.tags
             self.stashCount = snapshot.stashCount
             self.stashFileCount = snapshot.stashFileCount
             if let aheadBehind = snapshot.aheadBehind {

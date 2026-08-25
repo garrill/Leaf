@@ -10,11 +10,13 @@ enum LeafSettings {
     static let syntaxHighlightingEnabledKey = "syntaxHighlightingEnabled"
     static let externalEditorPathKey = "externalEditorPath"
     static let showRepoStatusKey = "showRepoStatus"
+    static let showFullCommitTitleKey = "showFullCommitTitle"
 
     static let defaultDiffFontSize = Double(NSFont.systemFontSize)
     static let diffFontSizeRange: ClosedRange<Double> = 10...20
     static let defaultSyntaxHighlightingEnabled = true
     static let defaultShowRepoStatus = true
+    static let defaultShowFullCommitTitle = false
 
     /// Debug and Release builds of `Leaf` share one `PRODUCT_BUNDLE_IDENTIFIER` (`garrill.Leaf`),
     /// so they also share one `UserDefaults` domain — there's no separate "test build" for
@@ -49,12 +51,20 @@ struct SettingsView: View {
     @AppStorage(LeafSettings.syntaxHighlightingEnabledKey, store: LeafSettings.store) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
     @AppStorage(LeafSettings.externalEditorPathKey, store: LeafSettings.store) private var externalEditorPath = ""
     @AppStorage(LeafSettings.showRepoStatusKey, store: LeafSettings.store) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
+    @AppStorage(LeafSettings.showFullCommitTitleKey, store: LeafSettings.store) private var showFullCommitTitle = LeafSettings.defaultShowFullCommitTitle
 
     var body: some View {
         Form {
             Section("Repo") {
                 Toggle("Show repository status", isOn: $showRepoStatus)
                 Text("Shows an icon next to each sidebar repository for uncommitted changes and commits to pull or push.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("History") {
+                Toggle("Show full commit title", isOn: $showFullCommitTitle)
+                Text("Lets long commit titles wrap onto multiple lines instead of truncating, making each row taller.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
