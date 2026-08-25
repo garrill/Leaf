@@ -45,9 +45,24 @@ final class TestRepo {
         process.standardOutput = stdout
         process.standardError = stderr
         try process.run()
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+
+        // Drain stdout on a background queue concurrently with reading stderr on the calling
+        // thread below — reading either pipe fully before touching the other can deadlock: if the
+        // unread pipe's OS buffer (~64KB) fills up, git blocks trying to write to it, the process
+        // never exits/closes its pipes, and `readDataToEndOfFile()` on the pipe being read never
+        // sees EOF. Mirrors the same fix in `GitRepository.runRaw`.
+        let stdoutDrainGroup = DispatchGroup()
+        var outData = Data()
+        stdoutDrainGroup.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            outData = stdout.fileHandleForReading.readDataToEndOfFile()
+            stdoutDrainGroup.leave()
+        }
+
         let errData = stderr.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        stdoutDrainGroup.wait()
+
         guard process.terminationStatus == 0 else {
             throw GitError.commandFailed(String(data: errData, encoding: .utf8) ?? "")
         }

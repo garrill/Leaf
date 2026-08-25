@@ -21,8 +21,11 @@ struct NewBranchSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 TextField("Branch name", text: $name)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
                     .disableAutocorrection(true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .focused($isNameFieldFocused)
                     .onSubmit(createBranch)
             }
@@ -37,8 +40,12 @@ struct NewBranchSheet: View {
                 Spacer()
                 Button("Cancel") { isPresented = false }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                 Button("Create") { createBranch() }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.capsule)
                     .disabled(trimmedName.isEmpty)
             }
         }
