@@ -91,7 +91,7 @@ decisions.
 
 ### History / commits
 
-- [ ] **Tags.** Show git tags in the history/branch column (alongside commits, similar to
+- [x] **Tags.** Show git tags in the history/branch column (alongside commits, similar to
       how branch labels are likely already shown), and support right-clicking a commit to
       create a tag there (e.g. for marking a release). Needs both a `GitRepository`-level
       read (`git tag --list` w/ the commit each points at) and write ( `git tag <name>
@@ -106,14 +106,12 @@ decisions.
       completes, the changed-files shows a "no changes" empty state  rather than the files
       that have just been commited. Reproduce against `AppState`'s post-commit reload path
       (`loadChangedFilesForCurrentSelection`) before fixing.
-- [ ] **Discard changes should move the file to the Trash, not delete it outright.** Today
-      "Discard changes" on a tracked file's local edits presumably does a hard
-      `git checkout -- <file>` (reversible only via git reflog/stash if at all) and
-      untracked-file discard goes through `git clean -f` (irreversible, no Trash). At least
-      for the untracked/`git clean` path this should move the file to the Trash
-      (`NSWorkspace.recycle` / `FileManager.trashItem`) instead of deleting it outright, so
-      an accidental discard is recoverable. Decide whether this also applies to the
-      tracked-file discard path or just untracked files being cleaned.
+- [x] **Discard changes should move the file to the Trash, not delete it outright.**
+      `GitRepository.discardChanges(for:)` now moves each affected path's current on-disk
+      contents to the Trash (`FileManager.trashItem`) before running the actual discard —
+      `git checkout --` for tracked files, nothing further for untracked (trashing the file
+      *is* the discard, replacing the old `git clean -f`). Applies uniformly to both tracked
+      and untracked paths, so any accidental discard is recoverable from the Trash.
 
 ## 8. Explicitly deferred (not required for this beta)
 

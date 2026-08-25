@@ -835,21 +835,25 @@ nonisolated struct GitRepository {
     }
 
     func discardChanges(for file: ChangedFile) throws {
-        if file.status == .untracked {
-            try run(["clean", "-f", "--", file.path])
-        } else {
-            try run(["checkout", "--", file.path])
-        }
+        try discardChanges(for: [file])
     }
 
     /// Discards a batch of files in one pass, splitting into an untracked group (`clean`) and a
-    /// tracked group (`checkout`) since the two need different git subcommands.
+    /// tracked group (`checkout`) since the two need different git subcommands. Rather than
+    /// deleting/overwriting the pre-discard working-tree contents outright, each affected path's
+    /// current on-disk version (if any — a `.deleted` file has none) is first moved to the Trash,
+    /// so a discard is recoverable there instead of being unrecoverably gone.
     func discardChanges(for files: [ChangedFile]) throws {
-        let untracked = files.filter { $0.status == .untracked }.map(\.path)
-        let tracked = files.filter { $0.status != .untracked }.map(\.path)
-        if !untracked.isEmpty {
-            try run(["clean", "-f", "--"] + untracked)
+        for file in files {
+            let url = rootURL.appendingPathComponent(file.path)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            }
         }
+        // Untracked files needed no further action: they're already gone from disk, moved to
+        // the Trash above, with nothing in git's index to restore. Only tracked paths need
+        // `checkout` to repopulate the working tree from the index/HEAD.
+        let tracked = files.filter { $0.status != .untracked }.map(\.path)
         if !tracked.isEmpty {
             try run(["checkout", "--"] + tracked)
         }

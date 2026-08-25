@@ -554,16 +554,16 @@ final class AppState {
 
     func discardChanges(for files: [ChangedFile]) {
         guard let repo = currentRepository, !files.isEmpty else { return }
-        // Untracked files have no commit to fall back to — `git clean` deletes them outright,
-        // unlike tracked files (`git checkout`) which just revert to the last commit. Call that
-        // out explicitly rather than lumping both under one generic "discard" warning.
+        // Untracked files have no commit to fall back to — they're moved to the Bin outright,
+        // unlike tracked files which are also moved to the Bin but then revert to the last
+        // commit. Call that out explicitly rather than lumping both under one generic warning.
         let hasUntracked = files.contains { $0.status == .untracked }
         let title = files.count == 1
             ? "Discard changes to \u{201C}\((files[0].path as NSString).lastPathComponent)\u{201D}?"
             : "Discard changes to \(files.count) files?"
         let message = hasUntracked
-            ? "This cannot be undone. Untracked files will be permanently deleted; tracked files will revert to their last committed version."
-            : "This cannot be undone. Files will revert to their last committed version."
+            ? "Untracked files will be moved to the Bin; tracked files will be moved to the Bin and revert to their last committed version."
+            : "Files will be moved to the Bin and revert to their last committed version."
         guard Self.confirmDestructiveAction(title: title, message: message, confirmButtonTitle: "Discard") else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
