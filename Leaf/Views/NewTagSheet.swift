@@ -22,8 +22,11 @@ struct NewTagSheet: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 TextField("Tag name", text: $name)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
                     .disableAutocorrection(true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .focused($isNameFieldFocused)
                     .onSubmit(createTag)
             }
@@ -38,8 +41,12 @@ struct NewTagSheet: View {
                 Spacer()
                 Button("Cancel") { isPresented = false }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                 Button("Create") { createTag() }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.capsule)
                     .disabled(trimmedName.isEmpty || appState.newTagTargetCommit == nil)
             }
         }

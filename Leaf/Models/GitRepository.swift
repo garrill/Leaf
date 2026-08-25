@@ -725,7 +725,13 @@ nonisolated struct GitRepository {
         if !unstagePaths.isEmpty {
             try run(["reset", "--"] + unstagePaths)
         }
-        try run(["add", "--"] + paths)
+        // `-f`: `paths` only ever comes from `statusEntries()`, which never surfaces ignored
+        // *untracked* files (no `--ignored` flag) — so any path here that also matches a
+        // `.gitignore` pattern is necessarily already tracked (e.g. committed before the
+        // pattern existed). Plain `git add` refuses those with a nonzero exit even though the
+        // file is already tracked, which would otherwise abort the whole commit before
+        // `git commit` ever runs, leaving the file staged but nothing committed.
+        try run(["add", "-f", "--"] + paths)
         try run(["commit", "-m", message])
     }
 
@@ -861,11 +867,23 @@ nonisolated struct GitRepository {
             }
         }
         // Untracked files needed no further action: they're already gone from disk, moved to
-        // the Trash above, with nothing in git's index to restore. Only tracked paths need
-        // `checkout` to repopulate the working tree from the index/HEAD.
-        let tracked = files.filter { $0.status != .untracked }.map(\.path)
+        // the Trash above, with nothing in git's index to restore.
+        //
+        // `.added`/`.renamed` paths are staged but have no HEAD entry to check out from (a new
+        // path a plain `checkout HEAD --` would reject as unknown to git at HEAD) — `reset`
+        // unstages them, leaving them fully gone since the on-disk copy was already trashed above.
+        //
+        // Everything else needs restoring from HEAD, not just the index: a file can be modified
+        // *and* already staged (e.g. `git add`d outside Leaf, or left staged by a previous action
+        // in Leaf) — a plain `checkout -- path` only restores the worktree from the index, which
+        // is a no-op when the two already match, silently failing to discard the staged change.
+        let staged = files.filter { $0.status == .added || $0.status == .renamed }.map(\.path)
+        if !staged.isEmpty {
+            try run(["reset", "--"] + staged)
+        }
+        let tracked = files.filter { $0.status != .untracked && $0.status != .added && $0.status != .renamed }.map(\.path)
         if !tracked.isEmpty {
-            try run(["checkout", "--"] + tracked)
+            try run(["checkout", "HEAD", "--"] + tracked)
         }
     }
 

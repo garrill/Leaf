@@ -29,7 +29,7 @@ struct ChangedFilesView: View {
                             appState.markResolved(file)
                         }
                         .controlSize(.mini)
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
                     } else {
                         StatusIconView(status: file.status)
                             .frame(width: 14, height: 14)
@@ -245,6 +245,7 @@ struct ChangedFilesView: View {
                 appState.abortMerge()
             }
             .controlSize(.small)
+            .buttonStyle(.glass)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -527,7 +528,7 @@ private struct StashFooterView: View {
                 Button("Discard", role: .destructive) {
                     appState.discardStash()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 Button("Restore") {
                     appState.restoreStash()
                 }
