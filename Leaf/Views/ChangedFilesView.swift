@@ -398,14 +398,7 @@ private struct CommitFooterView: View {
                 .lineLimit(1...4)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(.white.opacity(0.25), lineWidth: 0.5)
-                )
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .focused(isMessageFocused)
 
             Button {
@@ -572,12 +565,9 @@ private struct UnpushedCommitFooterView: View {
     }
 }
 
-/// A floating "liquid glass" pill (frosted `.ultraThinMaterial` blur behind a translucent green
-/// tint, a hairline white edge highlight, and a soft drop shadow), styled after
-/// writetodisk.com/liquid-glass-toast/ — modulo that reference's actual `.glassEffect()`
-/// modifier, which doesn't exist in the macOS 26.5 SDK (see CLAUDE.md); a tinted material
-/// stand-in gets the same look. Centered rather than stretched full-width, so it reads as a
-/// floating toast and not another full-width footer row.
+/// A floating "liquid glass" pill, styled after writetodisk.com/liquid-glass-toast/ using the
+/// real `.glassEffect()` modifier with a green tint. Centered rather than stretched full-width,
+/// so it reads as a floating toast and not another full-width footer row.
 private struct PushSuccessToastView: View {
     var body: some View {
         HStack {
@@ -591,15 +581,22 @@ private struct PushSuccessToastView: View {
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 12)
-            .background {
-                Capsule().fill(.ultraThinMaterial)
-                Capsule().fill(Color.green.opacity(0.55))
-            }
-            .overlay {
-                Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 0.75)
-            }
-            .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
+            .glassEffect(.clear.tint(.green.opacity(0.8)), in: .capsule)
+            .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
             Spacer(minLength: 0)
         }
     }
+}
+
+#Preview("Push Success Toast") {
+    ZStack(alignment: .bottom) {
+        List {
+            ForEach(0..<12) { i in
+                Text("fileabcdefghijklmnopqrstuvwxyz_\(i).swift")
+            }
+        }
+        PushSuccessToastView()
+            .padding(.bottom, 16)
+    }
+    .frame(width: 420, height: 200)
 }

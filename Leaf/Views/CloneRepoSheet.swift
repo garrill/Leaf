@@ -38,14 +38,7 @@ struct CloneRepoSheet: View {
                         .focused($isURLFieldFocused)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(.white.opacity(0.25), lineWidth: 0.5)
-                        )
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .disabled(appState.isCloning)
                 }
 
