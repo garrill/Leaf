@@ -1,17 +1,13 @@
 import SwiftUI
 
-struct RepoListView: View {
+/// Shown in place of the sidebar's `NSOutlineView` when there are no repos yet — hosted directly
+/// by `SidebarViewController` as a plain overlay subview (not wrapping the outline view itself;
+/// see that file for why).
+struct SidebarEmptyStateView: View {
     @Bindable var appState: AppState
 
     var body: some View {
         ZStack {
-            SidebarOutlineView(
-                appState: appState,
-                renamingFolderID: $appState.renamingFolderID,
-                renamingRepoID: $appState.renamingRepoID
-            )
-            .opacity(appState.sidebarStore.repos.isEmpty ? 0 : 1)
-
             if appState.sidebarStore.repos.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "folder.badge.plus")

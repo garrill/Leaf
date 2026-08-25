@@ -14,71 +14,150 @@ enum SidebarLayout {
 /// drag-reorder with a system-drawn insertion line between rows, and a native highlight when
 /// dropping directly onto a folder to append into it. AppKit owns all of the hit-testing for this,
 /// so there's no custom SwiftUI drop-zone geometry to get wrong.
-struct SidebarOutlineView: NSViewRepresentable {
-    @Bindable var appState: AppState
-    @Binding var renamingFolderID: UUID?
-    @Binding var renamingRepoID: UUID?
+///
+/// A plain `NSViewController` that owns the `NSScrollView`/`NSOutlineView` directly as its own
+/// `view` — NOT an `NSHostingController` wrapping a SwiftUI tree around an `NSViewRepresentable`
+/// (which is what this used to be, and which permanently blocks the titlebar/traffic-light
+/// scroll-edge blur below: AppKit's overlap detection needs the scroll view to be a direct
+/// view-hierarchy descendant of the split item's own view controller, not nested several layers
+/// inside a SwiftUI-hosted subtree — the mirror image of the restriction already noted elsewhere
+/// in this codebase, where SwiftUI's own scroll-edge blur can't reach a scroll view wrapped the
+/// other way, inside an `NSViewRepresentable`).
+///
+/// Getting the progressive titlebar/traffic-light blur to actually render (confirmed against
+/// NetNewsWire's near-identical, code-free sidebar) needed every one of the following, together —
+/// each piece silently no-ops the effect on its own:
+///  1. This controller owning the scroll view directly, as above.
+///  2. The outline view's `.sourceList`-style background left alone (not overridden to `.clear`).
+///  3. `wantsLayer = true` on both this controller's root view and the split view
+///     (`MainSplitViewController`) — the effect is Core Animation-composited.
+///  4. A real (if auto-hiding) vertical `NSScroller`, not `hasVerticalScroller = false` — the
+///     scroll-edge-effect machinery is wired through the same scroll-position tracking that
+///     drives the scroller.
+///  5. A top-aligned `NSSplitViewItemAccessoryViewController` with
+///     `preferredScrollEdgeEffectStyle = .soft` on the sidebar's split item
+///     (`MainSplitViewController`), opting into the blurred variant — the default is a plain,
+///     unblurred pass-through.
+final class SidebarViewController: NSViewController {
+    private let appState: AppState
+    private let coordinator: SidebarOutlineCoordinator
+    private var outlineView: FocusableSidebarOutlineView!
+    private var scrollView: NSScrollView!
+    private var emptyStateHost: NSHostingView<SidebarEmptyStateView>!
 
-    func makeCoordinator() -> SidebarOutlineCoordinator {
-        SidebarOutlineCoordinator(
-            appState: appState,
-            renamingFolderID: $renamingFolderID,
-            renamingRepoID: $renamingRepoID
-        )
+    init(appState: AppState) {
+        self.appState = appState
+        self.coordinator = SidebarOutlineCoordinator(appState: appState)
+        super.init(nibName: nil, bundle: nil)
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
         let outlineView = FocusableSidebarOutlineView()
-        outlineView.coordinator = context.coordinator
+        outlineView.coordinator = coordinator
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         outlineView.addTableColumn(column)
         outlineView.headerView = nil
         outlineView.style = .sourceList
         outlineView.rowHeight = SidebarLayout.rowHeight
         outlineView.indentationPerLevel = 0
-        outlineView.backgroundColor = .clear
         outlineView.allowsMultipleSelection = false
-        outlineView.dataSource = context.coordinator
-        outlineView.delegate = context.coordinator
+        outlineView.dataSource = coordinator
+        outlineView.delegate = coordinator
         outlineView.registerForDraggedTypes([
             SidebarOutlineCoordinator.pasteboardType,
             .fileURL
         ])
         outlineView.setDraggingSourceOperationMask(.move, forLocal: true)
+        self.outlineView = outlineView
+        coordinator.outlineView = outlineView
 
         let scrollView = NSScrollView()
         scrollView.documentView = outlineView
-        scrollView.hasVerticalScroller = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        self.scrollView = scrollView
 
-        context.coordinator.outlineView = outlineView
-        context.coordinator.reloadPreservingState()
-        return scrollView
+        let emptyStateHost = NSHostingView(rootView: SidebarEmptyStateView(appState: appState))
+        emptyStateHost.translatesAutoresizingMaskIntoConstraints = false
+        self.emptyStateHost = emptyStateHost
+
+        let container = NSView()
+        container.wantsLayer = true
+        container.addSubview(scrollView)
+        container.addSubview(emptyStateHost)
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: container.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            emptyStateHost.topAnchor.constraint(equalTo: container.topAnchor),
+            emptyStateHost.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            emptyStateHost.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            emptyStateHost.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        ])
+        self.view = container
     }
 
-    func updateNSView(_ nsView: NSScrollView, context: Context) {
-        context.coordinator.appState = appState
-        context.coordinator.renamingFolderIDBinding = $renamingFolderID
-        context.coordinator.renamingRepoIDBinding = $renamingRepoID
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        coordinator.reloadPreservingState()
+        updateEmptyState()
+        observeState()
+    }
 
-        // Reading these establishes the @Observable dependency that re-invokes updateNSView.
-        _ = appState.sidebarStore.topLevelOrder
-        _ = appState.sidebarStore.repos
-        _ = appState.sidebarStore.folders
-        _ = appState.selectedRepoURL
+    /// Replaces the old `SidebarOutlineView.updateNSView` — that fired on every SwiftUI re-render
+    /// of the (now-removed) representable wrapper; this reproduces the same trigger set by hand
+    /// via `withObservationTracking`, re-armed on every fire (the standard `@Observable` pattern
+    /// used elsewhere in this codebase, e.g. `MainWindowController.observeTitle()`).
+    private func observeState() {
+        withObservationTracking {
+            _ = appState.sidebarStore.topLevelOrder
+            _ = appState.sidebarStore.repos
+            _ = appState.sidebarStore.folders
+            _ = appState.selectedRepoURL
+            _ = appState.focusedColumn
+            _ = appState.renamingFolderID
+            _ = appState.renamingRepoID
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                self?.handleStateChange()
+                self?.observeState()
+            }
+        }
+    }
 
-        context.coordinator.reloadPreservingState()
+    private func handleStateChange() {
+        coordinator.reloadPreservingState()
+        updateEmptyState()
 
         // Left/right arrow navigation from another column landed here (`appState.focusedColumn
         // == .repos`) — claim real AppKit keyboard focus to match. A click-driven selection
         // already sets `focusedColumn` from `outlineViewSelectionDidChange` and doesn't need this,
         // since clicking already makes the outline view first responder on its own.
         if appState.focusedColumn == .repos,
-           let outlineView = context.coordinator.outlineView,
            outlineView.window?.firstResponder !== outlineView {
             outlineView.window?.makeFirstResponder(outlineView)
         }
+    }
+
+    private func updateEmptyState() {
+        let isEmpty = appState.sidebarStore.repos.isEmpty
+        scrollView.isHidden = isEmpty
+        // `emptyStateHost` also carries the `.sheet(isPresented:)` for `CloneRepoSheet`, which
+        // needs to keep working via the "Clone Repository…" menu item regardless of whether the
+        // sidebar is empty. `isHidden` (rather than removing the view outright) keeps it mounted
+        // in the window's view hierarchy so the sheet can still present when triggered while
+        // hidden, while also making sure it doesn't sit on top of (and swallow clicks meant for)
+        // the outline view once repos exist.
+        emptyStateHost.isHidden = !isEmpty
     }
 }
 
@@ -189,8 +268,6 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     static let pasteboardType = NSPasteboard.PasteboardType("digital.pepper.current.sidebar-drag-item")
 
     var appState: AppState
-    var renamingFolderIDBinding: Binding<UUID?>
-    var renamingRepoIDBinding: Binding<UUID?>
     weak var outlineView: NSOutlineView?
 
     private var itemCache: [SidebarOutlineItem.Kind: SidebarOutlineItem] = [:]
@@ -214,14 +291,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         appState.sidebarStore
     }
 
-    init(
-        appState: AppState,
-        renamingFolderID: Binding<UUID?>,
-        renamingRepoID: Binding<UUID?>
-    ) {
+    init(appState: AppState) {
         self.appState = appState
-        self.renamingFolderIDBinding = renamingFolderID
-        self.renamingRepoIDBinding = renamingRepoID
     }
 
     // MARK: Item identity
@@ -739,10 +810,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             repo: repo,
             appState: appState,
             sidebarStore: sidebarStore,
-            isRenaming: renamingRepoIDBinding.wrappedValue == repo.id,
+            isRenaming: appState.renamingRepoID == repo.id,
             isLastInGroup: isLastRowOfGroup(item(forRepo: repo.id), in: outlineView),
             onStartRename: { [self] in
-                renamingRepoIDBinding.wrappedValue = repo.id
+                appState.renamingRepoID = repo.id
             },
             onCommitRename: { [self] newName in
                 let trimmed = newName.trimmingCharacters(
@@ -760,7 +831,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                     iconPath: repo.iconPath
                 )
 
-                renamingRepoIDBinding.wrappedValue = nil
+                appState.renamingRepoID = nil
             }
         )
 
@@ -792,7 +863,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             repoCount: sidebarStore.repos.count {
                 $0.folderID == folder.id
             },
-            isRenaming: renamingFolderIDBinding.wrappedValue == folder.id,
+            isRenaming: appState.renamingFolderID == folder.id,
             isHovering: isHovering,
             isLastInGroup: isLastInGroup,
 
@@ -811,7 +882,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             },
 
             onStartRename: { [self] in
-                renamingFolderIDBinding.wrappedValue = folder.id
+                appState.renamingFolderID = folder.id
             },
 
             onCommitRename: { [self] newName in
@@ -820,7 +891,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                     to: newName
                 )
 
-                renamingFolderIDBinding.wrappedValue = nil
+                appState.renamingFolderID = nil
             },
 
             onSort: { [self] in
