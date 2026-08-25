@@ -98,7 +98,7 @@ decisions.
       <commit>` ) path, plus a bit of UI in `BranchListView`'s context menu.
 - [ ] **Expand a truncated commit title.** When a commit is selected, in the
       top title bar area there should be a button to extend the title so it can go over 
-      multiple lines
+      multiple lines. Also allow copying of text in context menu. 
 
 ### Bugs
 
