@@ -12,6 +12,8 @@ enum LeafSettings {
     static let showRepoStatusKey = "showRepoStatus"
     static let showFullCommitTitleKey = "showFullCommitTitle"
     static let hideWhitespaceChangesKey = "hideWhitespaceChanges"
+    static let commitMessageStyleKey = "commitMessageStyle"
+    static let customCommitInstructionsKey = "customCommitInstructions"
 
     static let defaultDiffFontSize = Double(NSFont.systemFontSize)
     static let diffFontSizeRange: ClosedRange<Double> = 10...20
@@ -19,6 +21,7 @@ enum LeafSettings {
     static let defaultShowRepoStatus = true
     static let defaultShowFullCommitTitle = false
     static let defaultHideWhitespaceChanges = false
+    static let defaultCommitMessageStyle = CommitMessageStyle.conventional
 
     /// Debug and Release builds of `Leaf` share one `PRODUCT_BUNDLE_IDENTIFIER` (`garrill.Leaf`),
     /// so they also share one `UserDefaults` domain — there's no separate "test build" for
@@ -55,6 +58,19 @@ struct SettingsView: View {
     @AppStorage(LeafSettings.showRepoStatusKey, store: LeafSettings.store) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
     @AppStorage(LeafSettings.showFullCommitTitleKey, store: LeafSettings.store) private var showFullCommitTitle = LeafSettings.defaultShowFullCommitTitle
     @AppStorage(LeafSettings.hideWhitespaceChangesKey, store: LeafSettings.store) private var hideWhitespaceChanges = LeafSettings.defaultHideWhitespaceChanges
+    @AppStorage(LeafSettings.commitMessageStyleKey, store: LeafSettings.store) private var commitMessageStyleRawValue = LeafSettings.defaultCommitMessageStyle.rawValue
+    @AppStorage(LeafSettings.customCommitInstructionsKey, store: LeafSettings.store) private var customCommitInstructions = ""
+
+    private var commitMessageStyle: CommitMessageStyle {
+        CommitMessageStyle(rawValue: commitMessageStyleRawValue) ?? LeafSettings.defaultCommitMessageStyle
+    }
+
+    private var commitMessageStyleBinding: Binding<CommitMessageStyle> {
+        Binding(
+            get: { commitMessageStyle },
+            set: { commitMessageStyleRawValue = $0.rawValue }
+        )
+    }
 
     var body: some View {
         Form {
@@ -84,6 +100,30 @@ struct SettingsView: View {
                 }
                 Toggle("Syntax Highlighting", isOn: $syntaxHighlightingEnabled)
                 Toggle("Hide Whitespace Changes", isOn: $hideWhitespaceChanges)
+            }
+
+            Section("AI Commit Messages") {
+                Picker("Style", selection: commitMessageStyleBinding) {
+                    ForEach(CommitMessageStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                if commitMessageStyle == .custom {
+                    TextEditor(text: $customCommitInstructions)
+                        .font(.body)
+                        .frame(height: 80)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(.separator)
+                        )
+                } else {
+                    Text(commitMessageStyle.builtInInstructions ?? "")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Controls the message the \u{201C}Generate\u{201D} button in the commit box writes, using Apple Intelligence to read the uncommitted diff. Nothing leaves your Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("External Editor") {

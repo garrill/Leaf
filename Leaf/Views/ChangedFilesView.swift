@@ -437,13 +437,31 @@ private struct CommitFooterView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Commit message", text: $appState.commitMessage, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .focused(isMessageFocused)
+            ZStack(alignment: .trailing) {
+                TextField("Commit message", text: $appState.commitMessage, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...4)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .padding(.trailing, 28)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .focused(isMessageFocused)
+
+                Button {
+                    appState.generateCommitMessage()
+                } label: {
+                    if appState.isGeneratingCommitMessage {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles")
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(appState.isGeneratingCommitMessage || checkedCount == 0)
+                .help("Generate a commit message from the uncommitted changes")
+                .padding(.trailing, 12)
+            }
 
             Button {
                 appState.commitOrCompleteMerge()

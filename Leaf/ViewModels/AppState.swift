@@ -49,6 +49,9 @@ final class AppState {
     /// since plenty of call sites just assign into it directly (clearing it after a commit, the
     /// merge-message prefill in `refreshRepositoryState`/`applySnapshot`).
     private var commitMessageDrafts: [URL: String] = [:]
+    /// Drives the commit box's "Generate" button spinner/disabled state while
+    /// `generateCommitMessage()`'s on-device model call is in flight.
+    var isGeneratingCommitMessage = false
 
     var diffText: String = ""
     var imageDiffOld: Data?
@@ -753,6 +756,39 @@ final class AppState {
                 self.commitMessage = commit.summary
                 self.errorMessage = nil
                 self.refreshRepositoryState()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Fills `commitMessage` from an on-device model reading the diff of the uncommitted changes
+    /// (whichever files are checked, or every changed file if none are), following the style
+    /// configured in Settings (`LeafSettings.commitMessageStyleKey`/`customCommitInstructionsKey`).
+    /// Called from the commit box's "Generate" button (`CommitFooterView`).
+    func generateCommitMessage() {
+        guard let repo = currentRepository else { return }
+        let files = changedFiles.filter { checkedFilePaths.isEmpty || checkedFilePaths.contains($0.path) }
+        guard !files.isEmpty else {
+            errorMessage = "There are no uncommitted changes to summarize."
+            return
+        }
+
+        let styleRawValue = LeafSettings.store.string(forKey: LeafSettings.commitMessageStyleKey) ?? LeafSettings.defaultCommitMessageStyle.rawValue
+        let style = CommitMessageStyle(rawValue: styleRawValue) ?? LeafSettings.defaultCommitMessageStyle
+        let customInstructions = LeafSettings.store.string(forKey: LeafSettings.customCommitInstructionsKey) ?? ""
+
+        isGeneratingCommitMessage = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isGeneratingCommitMessage = false }
+            do {
+                let diff = try await Task.detached(priority: .userInitiated) {
+                    files.map { (try? repo.diff(for: $0)) ?? "" }.joined(separator: "\n\n")
+                }.value
+                let message = try await CommitMessageGenerator.generate(diff: diff, style: style, customInstructions: customInstructions)
+                self.commitMessage = message
+                self.errorMessage = nil
             } catch {
                 self.errorMessage = error.localizedDescription
             }
