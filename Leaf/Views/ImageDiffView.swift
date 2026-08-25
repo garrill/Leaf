@@ -150,6 +150,29 @@ private extension NSImage {
         guard let rep = representations.first else { return size }
         return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
     }
+
+}
+
+private func solidPNGData(color: NSColor, size: CGSize) -> Data {
+    let image = NSImage(size: size)
+    image.lockFocus()
+    color.setFill()
+    NSRect(origin: .zero, size: size).fill()
+    image.unlockFocus()
+    guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return Data() }
+    return rep.representation(using: .png, properties: [:]) ?? Data()
+}
+
+private func previewAppState() -> AppState {
+    let appState = AppState()
+    appState.imageDiffOld = solidPNGData(color: .systemRed, size: CGSize(width: 300, height: 200))
+    appState.imageDiffNew = solidPNGData(color: .systemGreen, size: CGSize(width: 300, height: 200))
+    return appState
+}
+
+#Preview {
+    ImageDiffView(appState: previewAppState())
+        .frame(width: 700, height: 420)
 }
 
 /// A draggable divider that reveals the "before" image on the left and "after" on the right.

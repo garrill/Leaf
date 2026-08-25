@@ -123,3 +123,7 @@ struct GitUnavailableView: View {
         }
     }
 }
+
+#Preview {
+    GitUnavailableView(onRetry: { false })
+}

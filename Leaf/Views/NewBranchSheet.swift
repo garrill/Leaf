@@ -57,3 +57,7 @@ struct NewBranchSheet: View {
         }
     }
 }
+
+#Preview {
+    NewBranchSheet(appState: AppState(), isPresented: .constant(true))
+}

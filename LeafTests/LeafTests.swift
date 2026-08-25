@@ -557,20 +557,20 @@ final class TestRepo {
     // ", done." text after the count) previously crashed: `formatProgressLine` sliced through
     // `closeParen.upperBound` with a *closed* range, and that upper bound is `endIndex` when ")"
     // is the line's last character — not a valid index to include in a closed range subscript.
-    @Test func formatProgressLineHandlesLineEndingAtCloseParen() {
-        #expect(AppState.formatProgressLine("Compressing objects: 100% (8/8)") == "Compressing objects (8/8)")
+    @Test(arguments: [
+        ("Compressing objects: 100% (8/8)", "Compressing objects (8/8)"),
+        ("Writing objects:  42% (5/12), 1.15 KiB | 1.15 MiB/s", "Writing objects (5/12)"),
+    ])
+    func formatProgressLineExtractsCounts(line: String, expected: String) {
+        #expect(AppState.formatProgressLine(line) == expected)
     }
 
-    @Test func formatProgressLineHandlesTrailingTextAfterCounts() {
-        #expect(AppState.formatProgressLine("Writing objects:  42% (5/12), 1.15 KiB | 1.15 MiB/s") == "Writing objects (5/12)")
-    }
-
-    @Test func formatProgressLineHandlesNoCounts() {
-        #expect(AppState.formatProgressLine("Delta compression using up to 8 threads") == nil)
-    }
-
-    @Test func formatProgressLineHandlesNoColon() {
-        #expect(AppState.formatProgressLine("done.") == nil)
+    @Test(arguments: [
+        "Delta compression using up to 8 threads",
+        "done.",
+    ])
+    func formatProgressLineReturnsNilWhenNothingToShow(line: String) {
+        #expect(AppState.formatProgressLine(line) == nil)
     }
 }
 
@@ -771,26 +771,123 @@ final class TestRepo {
     }
 }
 
+// MARK: - Ignore-whitespace diffs ("Hide Whitespace Changes" setting)
+
+@Suite struct WhitespaceDiffTests {
+    @Test func workingChangesDiffOmitsWhitespaceOnlyEdit() throws {
+        let t = TestRepo()
+        try t.write("a.txt", "line one\nline two\n")
+        _ = try t.commitAll("initial")
+        try t.write("a.txt", "line one   \nline two\n")
+
+        let file = try #require(try t.repo.statusEntries().first)
+        let normalDiff = try t.repo.diff(for: file)
+        #expect(normalDiff.contains("@@"))
+        let ignoredDiff = try t.repo.diff(for: file, ignoreWhitespace: true)
+        #expect(ignoredDiff.isEmpty)
+    }
+
+    @Test func workingChangesDiffStillShowsRealEditWhenIgnoringWhitespace() throws {
+        let t = TestRepo()
+        try t.write("a.txt", "line one\n")
+        _ = try t.commitAll("initial")
+        try t.write("a.txt", "line ONE\n")
+
+        let file = try #require(try t.repo.statusEntries().first)
+        let ignoredDiff = try t.repo.diff(for: file, ignoreWhitespace: true)
+        #expect(ignoredDiff.contains("@@"))
+    }
+
+    @Test func untrackedFileDiffIgnoresWhitespaceFlagButStillWorks() throws {
+        // Untracked files go through `diff --no-index`; -w just needs to not break that path.
+        let t = TestRepo()
+        try t.write("new.txt", "hello\n")
+        let file = try #require(try t.repo.statusEntries().first)
+        let diff = try t.repo.diff(for: file, ignoreWhitespace: true)
+        #expect(diff.contains("hello"))
+    }
+
+    @Test func commitDiffOmitsWhitespaceOnlyEdit() throws {
+        let t = TestRepo()
+        try t.write("a.txt", "line one\n")
+        _ = try t.commitAll("first")
+        try t.write("a.txt", "line one   \n")
+        _ = try t.commitAll("second")
+
+        let log = try t.repo.commitLog(branch: "main")
+        let files = try t.repo.filesChanged(in: log[0])
+        let file = try #require(files.first)
+
+        let normalDiff = try t.repo.diff(for: file, in: log[0])
+        #expect(normalDiff.contains("@@"))
+        let ignoredDiff = try t.repo.diff(for: file, in: log[0], ignoreWhitespace: true)
+        #expect(!ignoredDiff.contains("@@"))
+    }
+
+    @Test func stashDiffOmitsWhitespaceOnlyEdit() throws {
+        let t = TestRepo()
+        try t.write("a.txt", "line one\n")
+        _ = try t.commitAll("initial")
+        try t.write("a.txt", "line one  \n")
+        try t.repo.stashChanges(paths: [], includeUntracked: true)
+
+        let files = try t.repo.filesChanged(inStash: "stash@{0}")
+        let file = try #require(files.first)
+        let normalDiff = try t.repo.diff(for: file, inStash: "stash@{0}")
+        #expect(normalDiff.contains("@@"))
+        let ignoredDiff = try t.repo.diff(for: file, inStash: "stash@{0}", ignoreWhitespace: true)
+        #expect(!ignoredDiff.contains("@@"))
+    }
+
+    @Test func diffTextRoutesIgnoreWhitespaceThroughForEachSource() throws {
+        let t = TestRepo()
+        try t.write("a.txt", "line one\n")
+        _ = try t.commitAll("initial")
+        try t.write("a.txt", "line one \n")
+
+        let file = try #require(try t.repo.statusEntries().first)
+        let text = try t.repo.diffText(for: file, in: .workingChanges, ignoreWhitespace: true)
+        #expect(text.isEmpty)
+    }
+
+    @Test func conflictedFileDiffTextIgnoresWhitespaceFlagAndReturnsRawMarkers() throws {
+        // `diffText` special-cases `.conflicted` to return raw working-tree contents regardless
+        // of the diff source or whitespace flag — never a real `git diff`.
+        let t = TestRepo()
+        try t.write("a.txt", "base\n")
+        _ = try t.commitAll("initial")
+        try t.run(["checkout", "-b", "feature"])
+        try t.write("a.txt", "feature change\n")
+        _ = try t.commitAll("feature commit")
+        try t.run(["checkout", "main"])
+        try t.write("a.txt", "main change\n")
+        _ = try t.commitAll("main commit")
+        _ = try t.repo.merge(branch: "feature")
+
+        let entries = try t.repo.statusEntries()
+        let conflicted = try #require(entries.first { $0.status == .conflicted })
+        let text = try t.repo.diffText(for: conflicted, in: .workingChanges, ignoreWhitespace: true)
+        #expect(text.contains("<<<<<<<"))
+    }
+}
+
 // MARK: - GitHub remote parsing (pure functions, no repo needed)
 
 @Suite struct GitHubOwnerParsingTests {
-    @Test func sshStyleURL() {
-        #expect(GitRepository.githubOwner(fromRemoteURL: "git@github.com:owner/repo.git") == "owner")
+    @Test(arguments: [
+        ("git@github.com:owner/repo.git", "owner"),
+        ("https://github.com/owner/repo.git", "owner"),
+        ("https://gitlab.com/owner/repo.git", nil),
+    ])
+    func githubOwner(url: String, expected: String?) {
+        #expect(GitRepository.githubOwner(fromRemoteURL: url) == expected)
     }
 
-    @Test func httpsStyleURL() {
-        #expect(GitRepository.githubOwner(fromRemoteURL: "https://github.com/owner/repo.git") == "owner")
-    }
-
-    @Test func nonGitHubRemoteReturnsNil() {
-        #expect(GitRepository.githubOwner(fromRemoteURL: "https://gitlab.com/owner/repo.git") == nil)
-    }
-
-    @Test func repoNameDropsGitSuffix() {
-        #expect(GitRepository.repoName(fromURLString: "https://github.com/owner/repo.git") == "repo")
-    }
-
-    @Test func repoNameFallsBackWhenEmpty() {
-        #expect(GitRepository.repoName(fromURLString: "") == "repository")
+    @Test(arguments: [
+        ("https://github.com/owner/repo.git", "repo"),
+        ("", "repository"),
+    ])
+    func repoName(url: String, expected: String) {
+        #expect(GitRepository.repoName(fromURLString: url) == expected)
     }
 }

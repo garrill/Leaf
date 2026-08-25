@@ -58,3 +58,19 @@ struct NewTagSheet: View {
         }
     }
 }
+
+private func previewAppState() -> AppState {
+    let appState = AppState()
+    appState.newTagTargetCommit = GitCommit(
+        sha: "a1b2c3d4e5f6",
+        shortSha: "a1b2c3d",
+        summary: "Feature: add tag support",
+        date: .now,
+        author: "Jonny"
+    )
+    return appState
+}
+
+#Preview {
+    NewTagSheet(appState: previewAppState(), isPresented: .constant(true))
+}

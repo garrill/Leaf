@@ -129,3 +129,7 @@ struct SettingsView: View {
         externalEditorPath = url.path
     }
 }
+
+#Preview {
+    SettingsView()
+}

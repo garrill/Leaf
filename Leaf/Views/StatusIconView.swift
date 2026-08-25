@@ -110,3 +110,14 @@ final class StatusIconImageView: NSImageView {
         }
     }
 }
+
+#Preview {
+    let statuses: [FileChangeStatus] = [.modified, .added, .deleted, .renamed, .untracked, .conflicted, .unknown]
+    HStack(spacing: 12) {
+        ForEach(statuses, id: \.self) { status in
+            StatusIconView(status: status)
+                .frame(width: 14, height: 14)
+        }
+    }
+    .padding()
+}

@@ -16,36 +16,40 @@ private struct TruncationTooltip: ViewModifier {
     let isEnabled: Bool
     @State private var isTruncated = false
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        guard isEnabled else { return AnyView(content) }
-        return AnyView(content
-            .background(
-                GeometryReader { visibleGeo in
-                    // Reuses `content` itself (not a fresh `Text`) so the ideal-width probe below
-                    // carries the exact same font/weight/etc. as what's actually rendered —
-                    // otherwise a mismatched font here (e.g. a caller-applied `.font`/`.fontWeight`)
-                    // throws off the width comparison and reports truncation that isn't real.
-                    content
-                        .lineLimit(1)
-                        .fixedSize()
-                        .hidden()
-                        .background(
-                            GeometryReader { idealGeo in
-                                Color.clear
-                                    .onAppear {
-                                        updateTruncated(idealWidth: idealGeo.size.width, visibleWidth: visibleGeo.size.width)
-                                    }
-                                    .onChange(of: idealGeo.size.width) { _, newValue in
-                                        updateTruncated(idealWidth: newValue, visibleWidth: visibleGeo.size.width)
-                                    }
-                                    .onChange(of: visibleGeo.size.width) { _, newValue in
-                                        updateTruncated(idealWidth: idealGeo.size.width, visibleWidth: newValue)
-                                    }
-                            }
-                        )
-                }
-            )
-            .overlay(TooltipHoverProbe(text: text, isTruncated: isTruncated)))
+        if isEnabled {
+            content
+                .background(
+                    GeometryReader { visibleGeo in
+                        // Reuses `content` itself (not a fresh `Text`) so the ideal-width probe below
+                        // carries the exact same font/weight/etc. as what's actually rendered —
+                        // otherwise a mismatched font here (e.g. a caller-applied `.font`/`.fontWeight`)
+                        // throws off the width comparison and reports truncation that isn't real.
+                        content
+                            .lineLimit(1)
+                            .fixedSize()
+                            .hidden()
+                            .background(
+                                GeometryReader { idealGeo in
+                                    Color.clear
+                                        .onAppear {
+                                            updateTruncated(idealWidth: idealGeo.size.width, visibleWidth: visibleGeo.size.width)
+                                        }
+                                        .onChange(of: idealGeo.size.width) { _, newValue in
+                                            updateTruncated(idealWidth: newValue, visibleWidth: visibleGeo.size.width)
+                                        }
+                                        .onChange(of: visibleGeo.size.width) { _, newValue in
+                                            updateTruncated(idealWidth: idealGeo.size.width, visibleWidth: newValue)
+                                        }
+                                }
+                            )
+                    }
+                )
+                .overlay(TooltipHoverProbe(text: text, isTruncated: isTruncated))
+        } else {
+            content
+        }
     }
 
     private func updateTruncated(idealWidth: CGFloat, visibleWidth: CGFloat) {

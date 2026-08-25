@@ -139,3 +139,19 @@ struct CloneRepoSheet: View {
         destinationParent = url
     }
 }
+
+#Preview("Idle") {
+    CloneRepoSheet(appState: AppState(), isPresented: .constant(true))
+}
+
+private func cloningPreviewAppState() -> AppState {
+    let appState = AppState()
+    appState.isCloning = true
+    appState.cloneProgressFraction = 0.4
+    appState.cloneProgressText = "Receiving objects: 40%"
+    return appState
+}
+
+#Preview("Cloning") {
+    CloneRepoSheet(appState: cloningPreviewAppState(), isPresented: .constant(true))
+}
