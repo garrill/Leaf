@@ -33,6 +33,7 @@ struct DiffView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(LeafSettings.diffFontSizeKey, store: LeafSettings.store) private var diffFontSize = LeafSettings.defaultDiffFontSize
     @AppStorage(LeafSettings.syntaxHighlightingEnabledKey, store: LeafSettings.store) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
+    @AppStorage(LeafSettings.hideWhitespaceChangesKey, store: LeafSettings.store) private var hideWhitespaceChanges = LeafSettings.defaultHideWhitespaceChanges
     /// Tagged with the diff text it was computed for. Row rendering only trusts it when that tag
     /// still matches `appState.diffText`, so a still-running (or superseded) highlight task can
     /// never paint stale colors onto a newly-selected file's text — the text itself always comes
@@ -154,7 +155,7 @@ struct DiffView: View {
             // Keyed on both the file and the source (the same file can be selected across
             // different commits) — SwiftUI cancels/restarts this automatically on change, same
             // as `ChangedFilesView`'s load, so the file-list selection is never waiting on this.
-            .task(id: DiffLoadKey(filePath: appState.selectedFile?.path, source: appState.selectedSource, reloadToken: appState.diffReloadToken)) {
+            .task(id: DiffLoadKey(filePath: appState.selectedFile?.path, source: appState.selectedSource, reloadToken: appState.diffReloadToken, hideWhitespaceChanges: hideWhitespaceChanges)) {
                 await appState.loadDiffForCurrentSelection()
             }
             .onChange(of: DiffParseKey(diffText: appState.diffText, isConflicted: appState.selectedFile?.status == .conflicted), initial: true) { _, key in
@@ -166,6 +167,7 @@ struct DiffView: View {
         let filePath: String?
         let source: ChangeSource?
         let reloadToken: Int
+        let hideWhitespaceChanges: Bool
     }
 
     private struct DiffParseKey: Equatable {
@@ -202,6 +204,18 @@ struct DiffView: View {
                     .font(.title2)
                     .foregroundStyle(.secondary)
                 Text("Binary File Changed")
+                    .font(.callout.weight(.medium))
+                Text(fileName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        } else if appState.diffOnlyWhitespaceChanges {
+            VStack(spacing: 6) {
+                Image(systemName: "text.alignleft")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                Text("Only Whitespace Changes Found")
                     .font(.callout.weight(.medium))
                 Text(fileName)
                     .font(.caption)

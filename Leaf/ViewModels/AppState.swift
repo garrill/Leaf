@@ -57,6 +57,11 @@ final class AppState {
     /// render (see `GitRepository.isFileTooLargeToDiff`) — `DiffView` shows a placeholder instead
     /// of ever handing the text to `DiffCodeTextView`.
     var diffFileTooLarge = false
+    /// True when "Hide Whitespace Changes" is on and the current selection's diff came back empty
+    /// only because every change in it was whitespace-only — distinct from a genuinely empty diff
+    /// (`diffText.isEmpty` with this false), so `DiffView` can show an explanatory message instead
+    /// of a blank pane.
+    var diffOnlyWhitespaceChanges = false
     var errorMessage: String?
     /// Bumped whenever the currently-selected file's on-disk content may have changed out from
     /// under it (see `handleExternalChange`), without the file/source *selection* itself
@@ -135,6 +140,12 @@ final class AppState {
     private struct DiffCacheKey: Hashable {
         let source: ChangeSource
         let file: ChangedFile
+        let ignoreWhitespace: Bool
+    }
+
+    private struct DiffCacheValue {
+        let text: String
+        let onlyWhitespaceChanges: Bool
     }
 
     private struct RepositorySnapshot {
@@ -158,7 +169,7 @@ final class AppState {
     /// back/forward history navigation and revisiting a file instantaneous, while the watcher
     /// below clears it as soon as Git or the working tree changes.
     private var changedFilesCache: [ChangeSource: ChangedFilesCacheValue] = [:]
-    private var diffTextCache: [DiffCacheKey: String] = [:]
+    private var diffTextCache: [DiffCacheKey: DiffCacheValue] = [:]
     private var selectionCacheGeneration = 0
     private var repositoryRefreshGeneration = 0
     private var uncommittedSummaryGeneration = 0
@@ -1418,14 +1429,17 @@ final class AppState {
     func loadDiffForCurrentSelection() async {
         guard let repo = currentRepository, let file = selectedFile, let source = selectedSource else {
             diffText = ""
+            diffOnlyWhitespaceChanges = false
             imageDiffOld = nil
             imageDiffNew = nil
             diffFileTooLarge = false
             return
         }
-        let cacheKey = DiffCacheKey(source: source, file: file)
+        let ignoreWhitespace = LeafSettings.store.bool(forKey: LeafSettings.hideWhitespaceChangesKey)
+        let cacheKey = DiffCacheKey(source: source, file: file, ignoreWhitespace: ignoreWhitespace)
         if let cached = diffTextCache[cacheKey] {
-            diffText = cached
+            diffText = cached.text
+            diffOnlyWhitespaceChanges = cached.onlyWhitespaceChanges
             diffFileTooLarge = false
             errorMessage = nil
             return
@@ -1438,6 +1452,7 @@ final class AppState {
             }.value
             guard !Task.isCancelled else { return }
             diffText = ""
+            diffOnlyWhitespaceChanges = false
             diffFileTooLarge = false
             errorMessage = nil
             // Only touch these if the bytes actually changed — an unconditional nil-then-set
@@ -1464,22 +1479,35 @@ final class AppState {
         if tooLarge {
             diffFileTooLarge = true
             diffText = ""
+            diffOnlyWhitespaceChanges = false
             errorMessage = nil
             return
         }
         diffFileTooLarge = false
         let outcome = await Task.detached(priority: .userInitiated) {
-            Result { try repo.diffText(for: file, in: source) }
+            Result { () -> DiffCacheValue in
+                let text = try repo.diffText(for: file, in: source, ignoreWhitespace: ignoreWhitespace)
+                guard ignoreWhitespace, text.isEmpty else {
+                    return DiffCacheValue(text: text, onlyWhitespaceChanges: false)
+                }
+                // Empty only because whitespace-only changes were filtered out, vs. genuinely no
+                // diff — re-run unfiltered (only reached when the filtered result is already
+                // empty) to tell the two apart so the UI can explain why the pane is blank.
+                let rawText = try repo.diffText(for: file, in: source, ignoreWhitespace: false)
+                return DiffCacheValue(text: text, onlyWhitespaceChanges: !rawText.isEmpty)
+            }
         }.value
         guard !Task.isCancelled, cacheGeneration == selectionCacheGeneration else { return }
         switch outcome {
-        case .success(let text):
-            diffTextCache[cacheKey] = text
-            diffText = text
+        case .success(let value):
+            diffTextCache[cacheKey] = value
+            diffText = value.text
+            diffOnlyWhitespaceChanges = value.onlyWhitespaceChanges
             errorMessage = nil
         case .failure(let error):
             errorMessage = error.localizedDescription
             diffText = ""
+            diffOnlyWhitespaceChanges = false
         }
     }
 }

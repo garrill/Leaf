@@ -478,10 +478,11 @@ nonisolated struct GitRepository {
         return String(bytes: bytes, encoding: .utf8) ?? raw
     }
 
-    func diff(for file: ChangedFile) throws -> String {
+    func diff(for file: ChangedFile, ignoreWhitespace: Bool = false) throws -> String {
+        let whitespaceFlags = ignoreWhitespace ? ["-w"] : []
         if file.status == .untracked {
             // `--no-index` exits 1 when a diff is found (not an error) and 2 on a real failure.
-            let (stdout, stderr, exitCode) = try runRaw(["diff", "--no-index", "--", "/dev/null", file.path])
+            let (stdout, stderr, exitCode) = try runRaw(["diff", "--no-index"] + whitespaceFlags + ["--", "/dev/null", file.path])
             if exitCode == 2 {
                 throw GitError.commandFailed(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
             }
@@ -493,7 +494,7 @@ nonisolated struct GitRepository {
         // delta, so a plain `git diff` came back empty and the pane showed nothing even though
         // `statusEntries()` (which diffs against `HEAD` via porcelain status) correctly still
         // listed the file as changed.
-        return try run(["diff", "HEAD", "--", file.path])
+        return try run(["diff", "HEAD"] + whitespaceFlags + ["--", file.path])
     }
 
     /// Like `runRaw`, but returns raw `Data` instead of decoding as UTF-8 — needed for binary
@@ -687,17 +688,19 @@ nonisolated struct GitRepository {
         return files
     }
 
-    func diff(for file: ChangedFile, in commit: GitCommit) throws -> String {
-        try run(["show", commit.sha, "--", file.path])
+    func diff(for file: ChangedFile, in commit: GitCommit, ignoreWhitespace: Bool = false) throws -> String {
+        let whitespaceFlags = ignoreWhitespace ? ["-w"] : []
+        return try run(["show"] + whitespaceFlags + [commit.sha, "--", file.path])
     }
 
     /// See `filesChanged(inStash:)` for why a stash's tracked/untracked files need different
     /// bases: tracked changes diff against the base commit (`^1`); untracked files only exist
     /// under the separate `^3` parent, so they diff against that instead (base commit vs. `^3`
     /// reads as "file newly added," matching how untracked files show up everywhere else).
-    func diff(for file: ChangedFile, inStash ref: String = "stash@{0}") throws -> String {
+    func diff(for file: ChangedFile, inStash ref: String = "stash@{0}", ignoreWhitespace: Bool = false) throws -> String {
         let target = file.status == .untracked ? "\(ref)^3" : ref
-        return try run(["diff", "\(ref)^1", target, "--", file.path])
+        let whitespaceFlags = ignoreWhitespace ? ["-w"] : []
+        return try run(["diff", "\(ref)^1", target] + whitespaceFlags + ["--", file.path])
     }
 
     /// Whether an `origin` remote is configured at all — distinct from `hasUpstream`/`aheadBehind`
@@ -961,7 +964,7 @@ nonisolated struct GitRepository {
     }
 
     /// See `changedFilesWithStatus(for:)`.
-    func diffText(for file: ChangedFile, in source: ChangeSource) throws -> String {
+    func diffText(for file: ChangedFile, in source: ChangeSource, ignoreWhitespace: Bool = false) throws -> String {
         if file.status == .conflicted {
             // Raw working-tree contents (with git's own conflict markers), not a real diff —
             // `git diff` of a conflicted path isn't the useful thing to show here.
@@ -969,11 +972,11 @@ nonisolated struct GitRepository {
         }
         switch source {
         case .workingChanges:
-            return try diff(for: file)
+            return try diff(for: file, ignoreWhitespace: ignoreWhitespace)
         case .stash:
-            return try diff(for: file, inStash: "stash@{0}")
+            return try diff(for: file, inStash: "stash@{0}", ignoreWhitespace: ignoreWhitespace)
         case .commit(let commit):
-            return try diff(for: file, in: commit)
+            return try diff(for: file, in: commit, ignoreWhitespace: ignoreWhitespace)
         }
     }
 }
