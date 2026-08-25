@@ -55,6 +55,10 @@ struct BranchListView: View {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(commit.sha, forType: .string)
                             }
+                            Button("Copy Commit Title") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(commit.summary, forType: .string)
+                            }
                             Button("Tag Commit…") {
                                 appState.newTagTargetCommit = commit
                                 appState.isNewTagSheetPresented = true

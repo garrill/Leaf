@@ -562,6 +562,13 @@ nonisolated struct GitRepository {
         try run(["checkout", "-b", name])
     }
 
+    /// Deletes a local branch (`git branch -D`) — a force delete rather than `-d` since the
+    /// caller already shows its own "cannot be undone" confirmation, so there's no need for git's
+    /// separate "not fully merged" safety check to block it with a second, less clear error.
+    func deleteBranch(named name: String) throws {
+        try run(["branch", "-D", name])
+    }
+
     /// Short SHA of HEAD, used to label a detached-HEAD state since there's no branch name to show.
     func currentHEADShortSHA() -> String? {
         (try? run(["rev-parse", "--short", "HEAD"]))?.trimmingCharacters(in: .whitespacesAndNewlines)

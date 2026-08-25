@@ -163,6 +163,8 @@ private struct BranchMenuToolbarView: View {
                         Button("Checkout") { appState.selectBranch(branch) }
                         Button("Merge into \(branchLabelText)") { appState.mergeBranch(branch) }
                             .disabled(appState.isSyncing || appState.isMergeInProgress)
+                        Divider()
+                        Button("Delete", role: .destructive) { appState.deleteBranch(branch) }
                     }
                 }
             }

@@ -4,6 +4,8 @@ import SwiftUI
 struct ChangedFilesView: View {
     @Bindable var appState: AppState
     @FocusState private var isFocused: Bool
+    @State private var isTitleExpanded = false
+    @State private var isTitleTruncated = false
     /// Focus for the commit message field, tracked here (rather than solely inside
     /// `CommitFooterView`) so this view's own arrow-key/escape column-navigation handlers and its
     /// `isFocused` reclaim logic below can both check it and back off — see the comment on
@@ -165,16 +167,57 @@ struct ChangedFilesView: View {
     }
 
     private var header: some View {
-        HStack {
+        HStack(alignment: .top, spacing: 8) {
+            Text(headerTitle)
+                .font(.headline)
+                .lineLimit(isTitleExpanded ? nil : 1)
+                .textSelection(.enabled)
+                .truncationTooltip(headerTitle, isEnabled: !isTitleExpanded)
+                .background(isTitleExpanded ? nil : titleTruncationProbe)
+            Spacer(minLength: 0)
+            if isTitleTruncated || isTitleExpanded {
+                Button {
+                    isTitleExpanded.toggle()
+                } label: {
+                    Image(systemName: "arrow.up.and.down.text.horizontal")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Expand title")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, isTitleExpanded ? 8 : 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: ColumnLayout.headerHeight)
+        .onChange(of: headerTitle) { _, _ in isTitleExpanded = false }
+    }
+
+    /// Measures `headerTitle`'s ideal (untruncated) single-line width against the space actually
+    /// available to it, mirroring `TruncationTooltip`'s own detection approach, so the expand
+    /// button only appears when the title is genuinely being cut off.
+    private var titleTruncationProbe: some View {
+        GeometryReader { visibleGeo in
             Text(headerTitle)
                 .font(.headline)
                 .lineLimit(1)
-                .truncationTooltip(headerTitle)
-            Spacer()
+                .fixedSize()
+                .hidden()
+                .background(
+                    GeometryReader { idealGeo in
+                        Color.clear
+                            .onAppear {
+                                isTitleTruncated = idealGeo.size.width > visibleGeo.size.width + 0.5
+                            }
+                            .onChange(of: idealGeo.size.width) { _, newValue in
+                                isTitleTruncated = newValue > visibleGeo.size.width + 0.5
+                            }
+                            .onChange(of: visibleGeo.size.width) { _, newValue in
+                                isTitleTruncated = idealGeo.size.width > newValue + 0.5
+                            }
+                    }
+                )
         }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity)
-        .frame(height: ColumnLayout.headerHeight)
     }
 
     private var headerTitle: String {

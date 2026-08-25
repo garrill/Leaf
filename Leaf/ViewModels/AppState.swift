@@ -291,6 +291,7 @@ final class AppState {
         diffText = ""
         imageDiffOld = nil
         imageDiffNew = nil
+        errorMessage = nil
         invalidateSelectionCaches()
         refreshRepositoryState()
         repoWatcher = RepoWatcher(url: url) { [weak self] in
@@ -305,6 +306,7 @@ final class AppState {
         commitMessage = ""
         selectedRepoURL = nil
         repoWatcher = nil
+        errorMessage = nil
         invalidateSelectionCaches()
         refreshRepositoryState()
     }
@@ -381,6 +383,18 @@ final class AppState {
         // happens in `Task.detached`, same pattern as `fetchRemote`/`pullCurrentBranch`.
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // Re-read the branch list from git before attempting the checkout — `self.branches`
+            // can be stale (e.g. someone deleted the branch outside Leaf, or it was only removed
+            // on the remote and never refreshed locally), and there was previously no other way
+            // to refresh it short of switching repos. This also lets a deleted branch be reported
+            // with a clear message instead of a raw git pathspec error, and drops it from the menu
+            // immediately rather than leaving it clickable until the next unrelated refresh.
+            let freshBranches = await Task.detached(priority: .userInitiated) { (try? repo.branches()) ?? [] }.value
+            self.branches = freshBranches
+            guard freshBranches.contains(where: { $0.name == branch.name }) else {
+                self.errorMessage = "Branch \u{201C}\(branch.name)\u{201D} no longer exists. It may have been deleted."
+                return
+            }
             do {
                 try await Task.detached(priority: .userInitiated) { try repo.checkout(branch: branch.name) }.value
                 self.errorMessage = nil
@@ -415,6 +429,27 @@ final class AppState {
                 case .cancel:
                     break
                 }
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            self.refreshRepositoryState()
+        }
+    }
+
+    /// Deletes a local branch after confirming — this is a force delete (`git branch -D`), so the
+    /// confirmation alert is the only safety net; there's no separate "unmerged changes" warning.
+    func deleteBranch(_ branch: GitBranch) {
+        guard let repo = currentRepository, !branch.isCurrent else { return }
+        guard Self.confirmDestructiveAction(
+            title: "Delete branch \u{201C}\(branch.name)\u{201D}?",
+            message: "This action cannot be undone.",
+            confirmButtonTitle: "Delete"
+        ) else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.deleteBranch(named: branch.name) }.value
+                self.errorMessage = nil
             } catch {
                 self.errorMessage = error.localizedDescription
             }
@@ -488,6 +523,7 @@ final class AppState {
         guard let repo = currentRepository else { return }
         do {
             try repo.deleteTag(named: tag.name)
+            errorMessage = nil
             refreshRepositoryState()
         } catch {
             errorMessage = error.localizedDescription
@@ -1030,7 +1066,13 @@ final class AppState {
             self.detachedHeadShortSHA = snapshot.detachedHeadShortSHA
             self.commits = snapshot.commits
             self.tags = snapshot.tags
-            self.errorMessage = snapshot.errorMessage
+            // Only overwrite with the snapshot's own error (nil on a normal successful refresh) —
+            // never blindly clear an error a caller just set moments ago (e.g. `selectBranch`'s
+            // catch block setting a checkout failure) by unconditionally assigning `nil` here,
+            // which previously made failed checkouts look like they silently did nothing.
+            if let snapshotError = snapshot.errorMessage {
+                self.errorMessage = snapshotError
+            }
             self.stashCount = snapshot.stashCount
             self.stashFileCount = snapshot.stashFileCount
             self.updateUncommittedSummary(repo: repo, statusEntries: snapshot.statusEntries)
