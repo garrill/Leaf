@@ -399,6 +399,11 @@ nonisolated struct GitRepository {
                 let status: FileChangeStatus
                 if Self.conflictStatusCodes.contains(String(indexStatus) + String(workTreeStatus)) {
                     status = .conflicted
+                } else if indexStatus == "R" || workTreeStatus == "R" {
+                    // A rename can only be reported in the index column ("R "/"RM"/"RD") — never
+                    // let a worktree-column edit on top of it (e.g. "RM") fall through to
+                    // `.modified` below and lose the rename/oldPath split.
+                    status = .renamed
                 } else {
                     let statusChar = workTreeStatus != " " ? workTreeStatus : indexStatus
                     status = FileChangeStatus(rawValue: String(statusChar)) ?? .unknown

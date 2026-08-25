@@ -75,14 +75,14 @@ decisions.
 
 ### Chrome / window polish
 
-- [ ] **Progressive blur behind the traffic lights while scrolling.** Content scrolling
-      under the titlebar today has no blur effect — CLAUDE.md already notes the soft
-      scroll-edge blur (`.safeAreaBar` + `.scrollEdgeEffectStyle(.soft, for: .top)`) only
-      renders against a column's own `safeAreaBar`, and that a prior pure-SwiftUI attempt
-      to layer content under the titlebar via `.ignoresSafeArea(.top)` rendered but ate
-      clicks. Needs its own investigation into whether the working `safeAreaBar` approach
-      used elsewhere in the app can be extended up to the titlebar/traffic-light area, or
-      whether this needs an AppKit-level titlebar accessory view instead.
+- [x] **Progressive blur behind the traffic lights while scrolling.** Fixed by restructuring
+      the sidebar from an `NSHostingController`-wrapped SwiftUI tree into a plain
+      `NSViewController` (`SidebarViewController`) that owns the `NSOutlineView`/`NSScrollView`
+      directly — see that file's doc comment for the full recipe (found by comparing against
+      NetNewsWire's equivalent, code-free sidebar). SwiftUI's own scroll-edge blur was never in
+      play here; this is AppKit's native titlebar/traffic-light scroll-edge effect
+      (`NSSplitViewItemAccessoryViewController.preferredScrollEdgeEffectStyle`, macOS 26.1),
+      which needs the scroll view to be a direct AppKit descendant of the split item.
 - [ ] **Default repo icon.** Either let the user pick a custom icon per repo (there's
       already an `IconComposerRenderer`-based sidebar glyph system per CLAUDE.md — a picker
       would hang off that), or, if a picker is more than this deserves right now, just

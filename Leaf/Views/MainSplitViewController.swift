@@ -57,13 +57,26 @@ final class MainSplitViewController: NSSplitViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         splitView.dividerStyle = .thin
+        // Layer-backing is required for the sidebar's Core Animation-composited scroll-edge blur
+        // below to actually render (see `SidebarViewController`'s doc comment for the full recipe).
+        splitView.wantsLayer = true
 
-        let sidebarHost = NSHostingController(rootView: RepoListView(appState: appState))
-        sidebarHost.sizingOptions = []
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
+        let sidebarController = SidebarViewController(appState: appState)
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
         sidebarItem.minimumThickness = 160
         sidebarItem.maximumThickness = 400
         sidebarItem.canCollapse = true
+
+        // Opts the sidebar into the soft/blurred scroll-edge-effect variant (default is a plain,
+        // unblurred pass-through) — part of the recipe documented on `SidebarViewController`.
+        let sidebarScrollEdgeEffect = NSSplitViewItemAccessoryViewController()
+        let sidebarScrollEdgeEffectView = NSView()
+        sidebarScrollEdgeEffectView.translatesAutoresizingMaskIntoConstraints = false
+        sidebarScrollEdgeEffectView.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        sidebarScrollEdgeEffect.view = sidebarScrollEdgeEffectView
+        sidebarScrollEdgeEffect.automaticallyAppliesContentInsets = false
+        sidebarScrollEdgeEffect.preferredScrollEdgeEffectStyle = .soft
+        sidebarItem.addTopAlignedAccessoryViewController(sidebarScrollEdgeEffect)
 
         let branchesHost = NSHostingController(rootView: BranchListView(appState: appState))
         branchesHost.sizingOptions = []

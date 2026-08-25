@@ -571,7 +571,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
 
         // Cross-column arrow-key navigation landed here from another column (`focusedColumn ==
         // .diff`) — claim real AppKit keyboard focus to match, the same way
-        // `SidebarOutlineView.updateNSView` does for the repos column.
+        // `SidebarViewController.handleStateChange` does for the repos column.
         if appState.focusedColumn == .diff,
            container.textView.window?.firstResponder !== container.textView {
             container.textView.window?.makeFirstResponder(container.textView)

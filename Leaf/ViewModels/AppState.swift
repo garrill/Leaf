@@ -277,7 +277,7 @@ final class AppState {
     }
 
     func selectRepo(_ url: URL) {
-        // `SidebarOutlineView.updateNSView` unconditionally calls `reloadPreservingState()` on
+        // `SidebarViewController.handleStateChange` unconditionally calls `reloadPreservingState()` on
         // every re-render (including ones triggered by unrelated state, like a commit-history
         // selection settling), and `NSOutlineView.reloadData()` can itself fire a spurious
         // `outlineViewSelectionDidChange` for the row that's already selected, since its
@@ -360,7 +360,7 @@ final class AppState {
         LeafSettings.open(url)
     }
 
-    /// Puts the selected repo's sidebar row into rename mode — `SidebarOutlineView`/`RepoRowView`
+    /// Puts the selected repo's sidebar row into rename mode — `SidebarViewController`/`RepoRowView`
     /// watch `renamingRepoID` and do the actual text-field/commit work.
     func startRenamingSelectedRepo() {
         guard let repo = selectedSidebarRepo else { return }
