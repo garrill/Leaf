@@ -4,7 +4,7 @@
 
 <h1 align="center">Leaf</h1>
 
-<p align="center">A fast, native git client for macOS.</p>
+<p align="center">A lightweight, native git client for macOS.</p>
 
 Leaf is a free and open-source git client for MacOS. It is based on a four column layout to show repositories, branch history, changed files and file diffs all side-by-side. It talks to the git you have installed directly, so it has your config, credentials, and hooks.
 
