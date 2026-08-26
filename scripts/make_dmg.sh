@@ -40,6 +40,9 @@ rm -f "$DMG_PATH"
 
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING" -ov -format UDZO "$DMG_PATH"
 
+xcrun notarytool submit "$DMG_PATH" --keychain-profile "leaf-notary" --wait
+xcrun stapler staple "$DMG_PATH"
+
 rm -rf "$STAGING"
 
 echo "Created $DMG_PATH"
