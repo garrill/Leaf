@@ -1,12 +1,11 @@
 #!/bin/sh
-# Builds Leaf in Release configuration and packages it into a DMG under build/.
+# Builds Leaf in Release configuration, code-signs it with the Developer ID Application
+# identity, packages it into a DMG under build/, then notarizes and staples it.
 #
-# This produces an unsigned/ad-hoc DMG using whatever signing identity Xcode's Automatic
-# signing picks (currently a Development identity, not Developer ID — see ROADMAP.md #5).
-# Once a paid Apple Developer account + Developer ID Application certificate exist, this
-# script needs a notarization step added after DMG creation:
-#   xcrun notarytool submit "$DMG_PATH" --keychain-profile <profile> --wait
-#   xcrun stapler staple "$DMG_PATH"
+# Requires: a "Developer ID Application" certificate in this Mac's keychain (the identity
+# string below must match one from `security find-identity -v -p codesigning`), and a
+# notarytool keychain profile named "leaf-notary" (`xcrun notarytool store-credentials
+# leaf-notary --apple-id ... --team-id VL4Z3W8N24 --password <app-specific password>`).
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -28,6 +27,30 @@ if [ ! -d "$APP_PATH" ]; then
 fi
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+
+# Xcode's Automatic-signing "Embed Frameworks" phase does not reliably re-sign Sparkle's
+# prebuilt nested helper tools (they ship ad-hoc signed from the SPM binary artifact), and
+# separately bakes com.apple.security.get-task-allow into the main executable even for a
+# plain `xcodebuild build` — both fail notarization. Re-sign everything explicitly here,
+# innermost first, with the real Developer ID identity, hardened runtime, and a secure
+# timestamp; the outer app is re-signed last with no entitlements (drops get-task-allow).
+IDENTITY="Developer ID Application: Jonny Garrill (VL4Z3W8N24)"
+SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+
+codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+	"$SPARKLE_FW/Versions/B/Autoupdate"
+codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+	"$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"
+codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+	"$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
+codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+	"$SPARKLE_FW/Versions/B/Updater.app"
+codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+	"$SPARKLE_FW"
+codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+	"$APP_PATH"
+
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 STAGING="$BUILD_DIR/dmg-staging"
 rm -rf "$STAGING"
