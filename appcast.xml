@@ -29,9 +29,9 @@
 			</item>
 		-->
         <item>
-            <title>0.3.0</title>
-            <pubDate>Tue, 25 Aug 2026 14:47:32 +0100</pubDate>
-            <sparkle:version>3</sparkle:version>
+            <title>0.4.0</title>
+            <pubDate>Wed, 26 Aug 2026 15:08:53 +0100</pubDate>
+            <sparkle:version>4</sparkle:version>
             <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
@@ -45,7 +45,25 @@
 * Added code signing.
 
 ]]></description>
-            <enclosure url="https://github.com/garrill/Leaf/releases/download/v0.4.0/Leaf-0.4.0.dmg" length="4409992" type="application/octet-stream" sparkle:edSignature="QLFqxxIjux3zfw8oGInAW4xBmOLASeiMI8YBe1L4rei3viDLtasWk5/chGVrICxPpBP56xvzbgqvDZu5d+1+Bw=="/>
+            <enclosure url="https://github.com/garrill/Leaf/releases/download/v0.4.0/Leaf-0.4.0.dmg" length="4409943" type="application/octet-stream" sparkle:edSignature="bDSMc43FdZAI/zowd68I7SG0qcrjhLHrJvQBErHBurKIAjeoyUcdJc9oDgubJS3vqys8/A5QNkhqVSkpqXgpAg=="/>
+        </item>
+        <item>
+            <title>0.3.0</title>
+            <pubDate>Tue, 25 Aug 2026 14:47:32 +0100</pubDate>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[
+* Keyboard navigation: ← / → move left and right columns. Diff viewer is scrollable by keyboard. You can press ⏎ Enter to submit a commit. ␛ Escape undoes a commit.
+* Tags: Add / remove and view tags on a commit.
+* Discarding changes on a file now move that file to the Trash so it can be retrieved if needed.
+* Success toast: uses `.glassEffect` rather than trying to reproduce it.
+* Image comparison: images are correctly masked.
+* Optimisation: cleaned up concurrency & deprecation warnings.
+
+]]></description>
+            <enclosure url="https://github.com/garrill/Leaf/releases/download/v0.3.0/Leaf-0.3.0.dmg" length="4294510" type="application/octet-stream" sparkle:edSignature="TriQjOTG3AQtQpggnI7jlOf/kEXVKaS6zPIkFTyAHP4C8vcwVzGrMT0NI17yec8UPpwRSujCV/YuPWTRNlGMBg=="/>
         </item>
         <item>
             <title>0.1.0</title>
