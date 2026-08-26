@@ -9,14 +9,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         resetStateIfRequestedForUITesting()
         _ = UpdaterHolder.shared
 
+        showMainWindow()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Dock icon click when the window was closed (last-window-close no longer quits the app,
+    /// see above) — with no visible windows, AppKit still has nothing to bring forward on its
+    /// own, so build a fresh `MainWindowController` the same way launch does.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard !flag else { return true }
+        showMainWindow()
+        return true
+    }
+
+    /// Backs the File menu's "New Window" (⌘N) — same "no window to bring forward" gap as the
+    /// Dock reopen handler above, since with the last-window-close quit disabled there can be a
+    /// live app with zero windows for ⌘N to target.
+    func showMainWindow() {
+        if let window = mainWindowController?.window {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
         let controller = MainWindowController()
         mainWindowController = controller
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
-    }
-
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
     }
 
     /// UI tests launch with `-uiTestReset` so every run starts from a clean, repo-less sidebar

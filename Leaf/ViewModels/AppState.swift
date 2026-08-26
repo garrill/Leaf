@@ -6,7 +6,9 @@ final class AppState {
     let sidebarStore = SidebarStore()
     let repoStatusStore = RepoStatusStore()
 
-    var selectedRepoURL: URL?
+    var selectedRepoURL: URL? {
+        didSet { RepoSelectionObservable.shared.hasSelection = selectedRepoURL != nil }
+    }
     /// Which of the four columns currently holds keyboard focus, driving left/right arrow-key
     /// navigation between them (`MainColumn.repos`/`.branches`/`.files` — `.diff` isn't wired up
     /// yet). The source of truth each column's own local `@FocusState` syncs against, since a
