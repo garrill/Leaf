@@ -6,6 +6,16 @@ and follow [Keep a Changelog](https://keepachangelog.com/) conventions loosely.
 Each entry here should also become the `<description>` (release notes) of the matching
 `<item>` in `appcast.xml` when that version ships.
 
+## [0.4.0]
+
+* Branch menu: Delete branches.
+* History: Option to show full commit title, copy commit title.
+* Menu bar: Added 'File', more options to 'View'.
+* App doesn't quit when window is closed.
+* UI tweaks: More Liquid Glass and progressive blurs.
+* Fixed bug: a moved file was getting a malformed title and couldn't be committed.
+* Added code signing.
+
 ## [0.3.0]
 
 * Keyboard navigation: ← / → move left and right columns. Diff viewer is scrollable by keyboard. You can press ⏎ Enter to submit a commit. ␛ Escape undoes a commit.
