@@ -12,6 +12,15 @@ final class SidebarVisibility: ObservableObject {
     private init() {}
 }
 
+/// Backs the Repository menu's enabled state (`LeafApp`'s `.commands`) — same reasoning as
+/// `SidebarVisibility` above. Kept in sync from `AppState.selectedRepoURL`'s `didSet` rather than
+/// read directly, since `.commands` isn't itself an observer of `@Observable AppState`.
+final class RepoSelectionObservable: ObservableObject {
+    static let shared = RepoSelectionObservable()
+    @Published var hasSelection = false
+    private init() {}
+}
+
 /// Gives `LeafApp`'s `.commands` (the Repository menu) a way to reach the single running
 /// `AppState` — same reasoning as `SidebarVisibility` above: the `Scene`/`commands` in `LeafApp`
 /// are declared independently of `MainWindowController`, which is what actually owns `AppState`.

@@ -41,83 +41,17 @@ blocked on that; everything else in this section is unblocked and done or script
 
 ## 7. Post-beta feature & polish backlog
 
-Newly gathered list (2026-08-24), not yet started. Grouped where a few small items share
-one underlying change; expanded where a single line hides real design/implementation
-decisions.
-
-### Navigation & interaction
-
-- [x] **Cross-column keyboard navigation.** Left/right arrow keys move focus between all
-      four columns (sidebar → branches/history → changed files → diff), via
-      `AppState.focusedColumn` (a shared `MainColumn?`) that each hosting controller's root
-      view reads/writes, syncing its own local `@FocusState`/AppKit first-responder status
-      against it. The diff column claims real first-responder status on its underlying
-      `NSTextView` rather than a synthetic SwiftUI focus proxy, so up/down, page up/down,
-      home/end, etc. all come from `NSTextView`'s native key bindings instead of being
-      hand-rolled.
-- [x] **Commit box shortcuts:** Enter/Return triggers the Commit button (commit only, no
-      push) without requiring a mouse click; Escape undoes a commit.
-
-### Diff viewer
-
-- [ ] **Restyle syntax highlighting.** Current `HighlightSwift`/highlight.js theme is
-      generic — look at how Fork, Tower, GitHub Desktop, and Changes.app style diff syntax
-      (color choices, weight/contrast against the added/removed row backgrounds, how muted
-      vs. vivid they keep it) and bring the palette closer to one of those references
-      rather than a stock highlight.js theme.
-- [ ] **Hide whitespace-only changes.** Toggle (Settings, or a button directly on the diff
-      pane toolbar — pick whichever fits the existing diff-pane chrome better) to view a
-      diff with whitespace-only changes suppressed, likely `git diff -w`/`--ignore-all-space`
-      under the hood.
-- [ ] Reconsider the icon shown at the top of the diff viewer — possibly remove it
-      entirely; revisit once the syntax-highlighting restyle above has landed, since that
-      may change what the diff pane's header area needs to hold.
-
-### Chrome / window polish
-
-- [x] **Progressive blur behind the traffic lights while scrolling.** Fixed by restructuring
-      the sidebar from an `NSHostingController`-wrapped SwiftUI tree into a plain
-      `NSViewController` (`SidebarViewController`) that owns the `NSOutlineView`/`NSScrollView`
-      directly — see that file's doc comment for the full recipe (found by comparing against
-      NetNewsWire's equivalent, code-free sidebar). SwiftUI's own scroll-edge blur was never in
-      play here; this is AppKit's native titlebar/traffic-light scroll-edge effect
-      (`NSSplitViewItemAccessoryViewController.preferredScrollEdgeEffectStyle`, macOS 26.1),
-      which needs the scroll view to be a direct AppKit descendant of the split item.
-- [ ] **Default repo icon.** Either let the user pick a custom icon per repo (there's
-      already an `IconComposerRenderer`-based sidebar glyph system per CLAUDE.md — a picker
-      would hang off that), or, if a picker is more than this deserves right now, just
-      improve the current default glyph. Which of the two — ask me once you're looking at
-      the existing icon code, I'm not sure yet which is worth the effort.
-
-### History / commits
-
-- [x] **Tags.** Show git tags in the history/branch column (alongside commits, similar to
-      how branch labels are likely already shown), and support right-clicking a commit to
-      create a tag there (e.g. for marking a release). Needs both a `GitRepository`-level
-      read (`git tag --list` w/ the commit each points at) and write ( `git tag <name>
-      <commit>` ) path, plus a bit of UI in `BranchListView`'s context menu.
-- [ ] **Expand a truncated commit title.** When a commit is selected, in the
-      top title bar area there should be a button to extend the title so it can go over 
-      multiple lines. Also allow copying of text in context menu. 
-
-### Bugs
-
-- [x] **"No changes" message shown incorrectly after committing.** After a commit
-      completes, the changed-files shows a "no changes" empty state  rather than the files
-      that have just been commited. Reproduce against `AppState`'s post-commit reload path
-      (`loadChangedFilesForCurrentSelection`) before fixing.
-- [x] **Discard changes should move the file to the Trash, not delete it outright.**
-      `GitRepository.discardChanges(for:)` now moves each affected path's current on-disk
-      contents to the Trash (`FileManager.trashItem`) before running the actual discard —
-      `git checkout --` for tracked files, nothing further for untracked (trashing the file
-      *is* the discard, replacing the old `git clean -f`). Applies uniformly to both tracked
-      and untracked paths, so any accidental discard is recoverable from the Trash.
+- [ ] Restyle syntax highlighting.
+- [ ] Allow user to pick default repo icon (in settings)
+- [ ] **Better Settings window: organise into tabs.** Current Settings window is a single
+flat pane; split it into tabbed sections (the standard macOS `TabView`-backed
+Settings pattern — e.g. General, Diff/Appearance, Git, Advanced/Updates) so options
+are grouped logically as more of them accumulate, rather than one long list.
 
 ## 8. Explicitly deferred (not required for this beta)
 
 - Mac App Store distribution + App Sandbox (see decision note at top)
 - Multi-entry stash browsing (already tracked in CLAUDE.md's "Not yet implemented")
 - Real 3-way conflict diff view (already tracked)
-- Branch-list-as-real-branch-list promotion (already tracked)
 - Localization
 - Accessibility/VoiceOver pass

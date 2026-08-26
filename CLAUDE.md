@@ -55,4 +55,4 @@ open /path/to/DerivedData/.../Build/Products/Debug/Leaf.app
 
 ## Not yet implemented
 
-Multi-entry stash browsing (apply/drop/view a specific `stash@{n}`, not just the top of the stack). A real 3-way ours/theirs conflict diff view. Promoting `BranchListView` from a commit-history-only view into an actual branch list — branch creation has a dedicated sheet (`NewBranchSheet`) but merging still hangs off `MainToolbarDelegate`'s toolbar branch menu (`BranchMenuToolbarView`). (Branch merging itself — including conflict detection/resolution — is implemented; see `GitRepository.merge`/`mergeAbort`/`completeMerge`/`markResolved`.) Cross-column arrow-key focus navigation — each of the four columns is hosted in its own separate `NSHostingController` since the `MainSplitViewController` AppKit rewrite, so there's no shared `@FocusState` driving focus between them anymore (`DiffView` still takes a `FocusState<MainColumn?>.Binding` parameter, but it's a throwaway local one from `DiffPaneHost`, not connected to the other columns).
+Multi-entry stash browsing (apply/drop/view a specific `stash@{n}`, not just the top of the stack). A real 3-way ours/theirs conflict diff view.
