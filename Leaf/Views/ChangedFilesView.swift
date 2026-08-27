@@ -25,11 +25,16 @@ struct ChangedFilesView: View {
                     pathAndFileName(for: file)
                     Spacer()
                     if file.status == .conflicted {
+                        // The status icon sits to the button's right instead of sharing the same
+                        // trailing slot — otherwise the button fully covers it and there's no
+                        // visible conflict glyph on the row at all.
                         Button("Mark Resolved") {
                             appState.markResolved(file)
                         }
                         .controlSize(.mini)
                         .buttonStyle(.glass)
+                        StatusIconView(status: file.status)
+                            .frame(width: 14, height: 14)
                     } else {
                         StatusIconView(status: file.status)
                             .frame(width: 14, height: 14)
@@ -158,6 +163,87 @@ struct ChangedFilesView: View {
         .onChange(of: isFocused) { _, newValue in
             guard newValue else { return }
             appState.focusedColumn = .files
+        }
+        // Lives at the top level (not nested in a conditional footer) so it fires regardless of
+        // what's currently selected/shown — a commit or push can be triggered from the toolbar
+        // or menu bar as easily as from a footer button. See `AppState.gitFailureAlert`'s doc
+        // comment for why this replaced reading the generic `errorMessage` inline in `DiffView`.
+        .alert(
+            appState.gitFailureAlert?.title ?? "",
+            isPresented: Binding(
+                get: { appState.gitFailureAlert != nil },
+                set: { isPresented in if !isPresented { appState.gitFailureAlert = nil } }
+            ),
+            presenting: appState.gitFailureAlert
+        ) { alert in
+            Button("Cancel", role: .cancel) {}
+            ForEach(alert.blockingTrackedPaths, id: \.self) { path in
+                Button("Stash \(path)") {
+                    appState.stashAndRetryPull(path: path)
+                }
+            }
+            if alert.offerPullThenPush {
+                Button("Pull from Origin") {
+                    appState.pullThenPush()
+                }
+            }
+        } message: { alert in
+            // The rejected push's destination gets its own bold line rather than being spliced
+            // into the sentence — `Text` doesn't parse Markdown from a plain `String`, so
+            // backticks around it would render as literal characters, not a code span.
+            if let remote = alert.pushRemoteURL {
+                Text("Failed to push to:\n") + Text(remote).bold() + Text("\n\(alert.message)")
+            } else {
+                Text(alert.message)
+            }
+        }
+        // A conflicting stash restore (`AppState.restoreStash()`) — separate from
+        // `gitFailureAlert` above since it's not a failure to report so much as a choice about
+        // what happens to the now-redundant stash entry once its content is already merged
+        // (with conflict markers) into the working tree.
+        .alert(
+            "Restore Stash",
+            isPresented: Binding(
+                get: { appState.stashConflictAlert != nil },
+                set: { isPresented in if !isPresented { appState.cancelStashConflict() } }
+            ),
+            presenting: appState.stashConflictAlert
+        ) { alert in
+            Button("Restore Conflicted and Remove Stash") {
+                appState.keepStashConflictAndDropStash()
+            }
+            Button("Restore Conflicted and Keep Stash") {
+                appState.keepStashConflictAndKeepStash()
+            }
+            Button("Cancel", role: .cancel) {
+                appState.cancelStashConflict()
+            }
+        } message: { alert in
+            if alert.conflictedPaths.count == 1, let path = alert.conflictedPaths.first {
+                Text("\u{2018}\(path)\u{2019} will be conflicted if restored.")
+            } else {
+                Text("The following files will be conflicted if restored:\n" + alert.conflictedPaths.joined(separator: "\n"))
+            }
+        }
+        // Refuses a commit whose checked files still have conflict markers — `canCommit` already
+        // disables the button for this during a merge, but a conflict from a stash restore,
+        // cherry-pick or rebase isn't a merge, so the button stays live and the commit call is
+        // what has to stop it. Purely informational: the fix is per-file ("Mark Resolved").
+        .alert(
+            "Resolve Conflicts First",
+            isPresented: Binding(
+                get: { appState.conflictedCommitAlert != nil },
+                set: { isPresented in if !isPresented { appState.conflictedCommitAlert = nil } }
+            ),
+            presenting: appState.conflictedCommitAlert
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { alert in
+            if alert.conflictedPaths.count == 1, let path = alert.conflictedPaths.first {
+                Text("\u{2018}\(path)\u{2019} still has unresolved conflict markers. Fix the conflict and choose \u{201C}Mark Resolved\u{201D}, then commit again.")
+            } else {
+                Text("These files still have unresolved conflict markers. Fix each conflict and choose \u{201C}Mark Resolved\u{201D}, then commit again:\n" + alert.conflictedPaths.joined(separator: "\n"))
+            }
         }
     }
 
@@ -525,14 +611,25 @@ private struct StashFooterView: View {
         VStack(spacing: 8) {
             Divider()
             HStack(spacing: 8) {
-                Button("Discard", role: .destructive) {
+                Button(role: .destructive) {
                     appState.discardStash()
+                } label: {
+                    Label("Discard", systemImage: "xmark.bin")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                 }
                 .buttonStyle(.glass)
-                Button("Restore") {
+                .buttonBorderShape(.capsule)
+
+                Button {
                     appState.restoreStash()
+                } label: {
+                    Label("Restore", systemImage: "arrow.up.bin")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                 }
                 .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
             }
             .frame(maxWidth: .infinity)
         }
@@ -594,18 +691,6 @@ private struct UnpushedCommitFooterView: View {
         }
         .padding(10)
         .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
-        .alert(
-            "Push Failed",
-            isPresented: Binding(
-                get: { appState.pushErrorMessage != nil },
-                set: { isPresented in if !isPresented { appState.pushErrorMessage = nil } }
-            ),
-            presenting: appState.pushErrorMessage
-        ) { _ in
-            Button("OK", role: .cancel) {}
-        } message: { message in
-            Text(message)
-        }
     }
 }
 

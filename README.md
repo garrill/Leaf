@@ -10,10 +10,14 @@ Leaf is a free and open-source git client for MacOS. It is based on a four colum
 
 This is intentionally a bare-bones, simple to use git client, best for solo devs / small teams working on repositories with a few branches. It doesn't handle the more complex side of git and there are no plans to add more features.
 
+## Installation
+
+Download the latest `.dmg` from the [GitHub Releases page](https://github.com/garrill/Leaf/releases).
+
 ## Features
 
 - **Multi-repo sidebar** group repositories into folders, then reorder, rename and add icons to repos to help organisation
-- **Basic git workflow** — switch and merge branches; commit, stage and unstage files; fetch, pull and push
+- **Basic git workflow** — switch and merge branches; commit, stage and unstage files; fetch, pull and push; add and remove tags
 - **Rich diff viewer** — syntax-highlighted, word-level diffs, plus side by-side or swipe over image diffs
 
 <picture>
@@ -25,11 +29,11 @@ This is intentionally a bare-bones, simple to use git client, best for solo devs
 
 - macOS with Xcode (minimum MacOS 26)
 - git — Leaf will detect if it's missing and help you install it
-- No external dependencies to build — no `Package.swift`, no SPM packages
+- No `Package.swift` manifest — this is a plain Xcode project, not an SPM package
 
 ## Building & running
 
-There's no `Package.swift`; this is a plain Xcode project.
+There's no `Package.swift`; this is a plain Xcode project. It does pull in two SPM dependencies (`HighlightSwift`, `Sparkle`) via Xcode's own package resolution, which happens automatically on first build.
 
 ```sh
 xcodebuild -project Leaf.xcodeproj -scheme Leaf -configuration Debug build
@@ -64,3 +68,7 @@ Leaf runs entirely on your Mac. It talks only to the git you already have instal
 ```sh
 xcodebuild -project Leaf.xcodeproj -scheme Leaf test
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

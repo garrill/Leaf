@@ -16,26 +16,13 @@ possibly a libgit2/SwiftGit2 rewrite of `GitRepository`).
 
 ## 3. Destructive-action safety audit ✅
 
-## 4. Auto-update: Sparkle
+## 4. Auto-update: Sparkle ✅
 
-- [ ] Confirm notarization + Sparkle interact correctly (notarized builds, Sparkle's own
-      code-signature verification of downloaded updates) — blocked on the paid Apple Developer
-      account (needed for a Developer ID Application certificate); see #5
+Confirmed 2026-08-26: notarized builds + Sparkle's own code-signature verification of
+downloaded updates work end to end — v0.4.0 was released this way and Sparkle pulled and
+installed it as an in-app update on the developer's own machine.
 
-## 5. Release engineering
-
-`CODE_SIGN_STYLE = Automatic` (Development signing), `DEVELOPMENT_TEAM` set, no entitlements
-file. Paid Apple Developer account not active yet — Developer ID signing and notarization stay
-blocked on that; everything else in this section is unblocked and done or scripted.
-
-- [ ] Developer ID Application signing (distinct from the current automatic Development
-      signing) for direct distribution — blocked on paid Apple Developer account
-- [ ] Notarization pipeline (`notarytool submit` + staple), scripted so it's repeatable —
-      blocked on paid Apple Developer account (needs a Developer ID cert + app-specific
-      password/keychain profile); `scripts/make_dmg.sh` has a comment marking exactly
-      where the `notarytool submit ... --wait` + `stapler staple` steps go once unblocked
-- [ ] `README.md` refresh with real screenshots for outside readers (text content is
-      renamed to Leaf already; still needs actual screenshots and outward-facing polish)
+## 5. Release engineering ✅
 
 ## 6. Beta-readiness polish ✅
 
@@ -47,6 +34,8 @@ blocked on that; everything else in this section is unblocked and done or script
 flat pane; split it into tabbed sections (the standard macOS `TabView`-backed
 Settings pattern — e.g. General, Diff/Appearance, Git, Advanced/Updates) so options
 are grouped logically as more of them accumulate, rather than one long list.
+- [ ] If changes are made to files, 'no uncommitted changes' doesn't switch over to 'uncommitted changes'
+- [ ] Fix git bugs and error messages showing for a split second. Trying to push when there are changes upstream. sometimes an untracked file gets in the list. sometimes currently selected file gets out of sync with what is displayed in diff checker.
 
 ## 8. Explicitly deferred (not required for this beta)
 

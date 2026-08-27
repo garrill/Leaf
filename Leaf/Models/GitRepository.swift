@@ -584,8 +584,13 @@ nonisolated struct GitRepository {
         try run(["fetch"])
     }
 
+    /// `--no-rebase`: a plain `git pull` on a repo/user with no `pull.rebase`/`pull.ff` config set
+    /// (git 2.27+) refuses outright with "fatal: Need to specify how to reconcile divergent
+    /// branches" instead of pulling — Leaf has no rebase UI, so it always resolves divergence the
+    /// traditional way (a merge commit) regardless of what's configured globally, rather than
+    /// surfacing that fatal error and asking the user to go set a config value themselves.
     func pull() throws {
-        try run(["pull"])
+        try run(["pull", "--no-rebase"])
     }
 
     /// Pushes the current branch, setting up its upstream on the first push if none exists yet.
@@ -831,28 +836,57 @@ nonisolated struct GitRepository {
         try run(arguments)
     }
 
-    enum StashRestoreResult {
+    enum StashApplyOutcome {
         case success
-        case conflicts
+        /// Paths git reported conflicted (`UU`/etc. — see `FileChangeStatus.conflicted`) after
+        /// the apply.
+        case conflicts(paths: [String])
     }
 
-    /// Applies and drops the top-of-stack stash (`git stash pop`). A conflicting pop exits
-    /// nonzero but, unlike a conflicting merge, leaves no `.git/MERGE_HEAD` marker — the only
-    /// ground truth available afterward is `git status` itself reporting conflicted paths, which
-    /// is what distinguishes a real conflict (stash left in place, working tree gets conflict
-    /// markers) from a plain pre-check failure (stash left in place, nothing on disk changed).
-    func restoreStash() throws -> StashRestoreResult {
-        let (_, stderr, exitCode) = try runRaw(["stash", "pop"])
+    /// Applies the top-of-stack stash *without* deciding whether to drop it — that's left to the
+    /// caller via `dropStash()`/`undoStashApply(conflictedPaths:)`, so an interactive caller can
+    /// ask the user what to do about a conflicting apply before committing to anything, rather
+    /// than a non-interactive caller's blanket "drop regardless" (`restoreStash()`, below).
+    /// A conflicting apply exits nonzero but, unlike a conflicting merge, leaves no
+    /// `.git/MERGE_HEAD` marker — the only ground truth available afterward is `git status`
+    /// itself reporting conflicted paths, which is what distinguishes a real conflict (working
+    /// tree gets conflict markers) from a plain pre-check failure (nothing on disk changed).
+    func applyStash() throws -> StashApplyOutcome {
+        let (_, stderr, exitCode) = try runRaw(["stash", "apply"])
         if exitCode == 0 { return .success }
-        if let entries = try? statusEntries(), entries.contains(where: { $0.status == .conflicted }) {
-            return .conflicts
+        let conflictedPaths = (try? statusEntries())?.filter { $0.status == .conflicted }.map(\.path) ?? []
+        guard !conflictedPaths.isEmpty else {
+            throw GitError.commandFailed(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        throw GitError.commandFailed(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        return .conflicts(paths: conflictedPaths)
     }
 
-    /// Drops the top-of-stack stash without applying it.
-    func discardStash() throws {
+    /// Drops the top-of-stack stash without applying it — also the "keep the conflict I just
+    /// applied, but remove the now-redundant stash entry" half of resolving `applyStash()`.
+    func dropStash() throws {
         try run(["stash", "drop"])
+    }
+
+    /// Reverts a conflicting `applyStash()` attempt without dropping the stash: restores the
+    /// given paths to their pre-apply `HEAD` contents, discarding the conflict markers
+    /// `applyStash()` just wrote, so the working tree ends up exactly as if `applyStash()` had
+    /// never been called — the "cancel this restore" half of resolving `applyStash()`.
+    func undoStashApply(conflictedPaths: [String]) throws {
+        try run(["checkout", "HEAD", "--"] + conflictedPaths)
+    }
+
+    /// Applies the top-of-stack stash and drops it regardless of outcome (`applyStash()` +
+    /// always `dropStash()`) — for a non-interactive caller (the auto-stash-before-checkout path
+    /// in `AppState.selectBranch`) that has nowhere to surface `applyStash()`'s three-way
+    /// keep/drop/undo choice and just needs *a* answer: by the time a conflict happens, its
+    /// content is already materialized into the working tree as `<<<<<<<`/`>>>>>>>` markers (the
+    /// same place `Uncommitted Changes`' own "Mark Resolved" flow expects to find it), so leaving
+    /// a stale copy behind in `Stashed Changes` too would just double up the same change with
+    /// nothing left to "try again" from.
+    func restoreStash() throws -> StashApplyOutcome {
+        let outcome = try applyStash()
+        try dropStash()
+        return outcome
     }
 
     func discardChanges(for file: ChangedFile) throws {
@@ -899,12 +933,16 @@ nonisolated struct GitRepository {
 
     /// Appends multiple paths to the repo's top-level `.gitignore` in one write, creating it if needed.
     func ignoreFiles(_ files: [ChangedFile]) throws {
+        try appendToGitignore(files.map(\.path))
+    }
+
+    private func appendToGitignore(_ paths: [String]) throws {
         let gitignoreURL = rootURL.appendingPathComponent(".gitignore")
         var existing = (try? String(contentsOf: gitignoreURL, encoding: .utf8)) ?? ""
         if !existing.isEmpty && !existing.hasSuffix("\n") {
             existing += "\n"
         }
-        existing += files.map(\.path).joined(separator: "\n") + "\n"
+        existing += paths.joined(separator: "\n") + "\n"
         try existing.write(to: gitignoreURL, atomically: true, encoding: .utf8)
     }
 

@@ -1,6 +1,62 @@
 import AppKit
 import Foundation
 
+/// A commit/pull/push failure, plus whichever one-click fixes `AppState.parseGitFailure(_:operation:)`
+/// was able to infer from git's own stderr text (`GitError.commandFailed`'s message). Only ever
+/// constructed by that parser, which owns the raw-text heuristics.
+struct GitFailureAlert: Identifiable {
+    enum Operation {
+        case commit, push, pull
+
+        var title: String {
+            switch self {
+            case .commit: return "Commit Failed"
+            case .push: return "Push Failed"
+            case .pull: return "Pull Failed"
+            }
+        }
+    }
+
+    let id = UUID()
+    var operation: Operation
+    /// A user-facing rewording of git's raw stderr when `AppState.parseGitFailure(_:operation:)`
+    /// recognized the failure; falls back to that raw text (trimmed) otherwise.
+    var message: String
+    /// The rejected push's destination, pulled out of git's stderr separately from `message` so
+    /// `ChangedFilesView` can lay it out on its own line instead of splicing a raw path into a
+    /// sentence. Only set alongside `offerPullThenPush`.
+    var pushRemoteURL: String?
+    /// Tracked file paths git named as blocking the operation (its "would be overwritten by
+    /// merge/checkout" error) — each offered its own "Stash" fix.
+    var blockingTrackedPaths: [String] = []
+    /// Whichever of git's two wordings applied ("would be overwritten by merge" vs. "...by
+    /// checkout"), used to phrase `message` correctly. Only meaningful when
+    /// `blockingTrackedPaths` is non-empty.
+    var overwriteVerb = "merge"
+    /// The failure looks like a non-fast-forward push rejection — offered a "Pull from Origin" fix.
+    var offerPullThenPush = false
+
+    var title: String { operation.title }
+}
+
+/// A conflicting `applyStash()` while restoring the top-of-stack stash — the working tree
+/// already has conflict markers in `conflictedPaths` by the time this exists, and the three
+/// choices it offers (`AppState.keepStashConflictAndDropStash/AndKeepStash/cancelStashConflict`)
+/// only decide what happens to the now-otherwise-redundant stash entry itself.
+struct StashConflictAlert: Identifiable {
+    let id = UUID()
+    var conflictedPaths: [String]
+}
+
+/// A commit attempt (`AppState.commitCheckedChanges()` / `completeMerge()`) that was refused
+/// because one or more checked files still carry unresolved conflict markers — committing them
+/// as-is would write `<<<<<<<`/`=======`/`>>>>>>>` straight into history. The user resolves each
+/// file (edit it, then "Mark Resolved") and commits again.
+struct ConflictedCommitAlert: Identifiable {
+    let id = UUID()
+    var conflictedPaths: [String]
+}
+
 @Observable
 final class AppState {
     let sidebarStore = SidebarStore()
@@ -85,13 +141,24 @@ final class AppState {
     /// `isSyncing` (which also covers fetch/pull and just disables buttons). `pushProgressText`
     /// is git's own `--progress` meter (e.g. "Writing objects (5/12)"), reformatted by
     /// `AppState.formatPushProgress(_:)`. `pushSucceeded` briefly flips true after a successful
-    /// push so the footer can show a checkmark before it animates away; `pushErrorMessage` is
-    /// separate from the generic `errorMessage` (which `DiffView` also reads inline) so a push
-    /// failure always surfaces as its own alert instead.
+    /// push so the footer can show a checkmark before it animates away.
     var isPushingCommit = false
     var pushProgressText: String?
     var pushSucceeded = false
-    var pushErrorMessage: String?
+
+    /// A commit/pull/push failure, surfaced as its own alert (`ChangedFilesView`) rather than
+    /// through the generic `errorMessage` — that property is read inline by `DiffView` and gets
+    /// silently clobbered moments later by the next debounced diff/status reload (including the
+    /// FSEvents-driven `handleExternalChange()`, which our own git calls can retrigger), so a
+    /// commit/push failure shown that way used to flash and vanish before it could be read. An
+    /// alert isn't touched by any of that background refresh machinery, so it stays up until the
+    /// user dismisses it — and unlike `errorMessage` it can carry actionable fixes (see
+    /// `GitFailureAlert`).
+    var gitFailureAlert: GitFailureAlert?
+    /// A conflicting stash restore — see `StashConflictAlert`.
+    var stashConflictAlert: StashConflictAlert?
+    /// A commit blocked by still-unresolved conflict markers — see `ConflictedCommitAlert`.
+    var conflictedCommitAlert: ConflictedCommitAlert?
 
     var isMergeInProgress = false
     var mergeMessage: String?
@@ -418,14 +485,16 @@ final class AppState {
                 switch Self.promptForDirtyCheckout(to: branch.name) {
                 case .bringChanges:
                     do {
-                        let result = try await Task.detached(priority: .userInitiated) { () throws -> GitRepository.StashRestoreResult in
+                        let outcome = try await Task.detached(priority: .userInitiated) { () throws -> GitRepository.StashApplyOutcome in
                             try repo.stashChanges(paths: [], includeUntracked: true)
                             try repo.checkout(branch: branch.name)
                             return try repo.restoreStash()
                         }.value
-                        self.errorMessage = result == .conflicts
-                            ? "Bringing your changes to \(branch.name) caused conflicts. Resolve them in Working Changes."
-                            : nil
+                        if case .conflicts = outcome {
+                            self.errorMessage = "Bringing your changes to \(branch.name) caused conflicts. Resolve them in Working Changes."
+                        } else {
+                            self.errorMessage = nil
+                        }
                     } catch {
                         self.errorMessage = error.localizedDescription
                     }
@@ -648,21 +717,68 @@ final class AppState {
         }
     }
 
-    /// Applies and drops the top-of-stack stash. On a conflicting pop, the stash is left in
-    /// place by git and the working tree gets conflict markers with no `MERGE_HEAD` — landing on
-    /// Uncommitted Changes lets the existing per-row "Mark Resolved" flow handle it like any
-    /// other on-disk conflict, rather than needing a separate stash-conflict UI.
+    /// Applies the top-of-stack stash (without deciding yet whether to drop it — see
+    /// `GitFailureAlert`'s sibling, `StashConflictAlert`). A clean apply is dropped immediately;
+    /// a conflicting one instead surfaces `stashConflictAlert` so the user picks what happens to
+    /// the now-redundant stash entry, since unlike the branch-switch auto-stash path
+    /// (`GitRepository.restoreStash()`) this is an explicit action with somewhere to ask.
     func restoreStash() {
         guard let repo = currentRepository else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let result = try await Task.detached(priority: .userInitiated) { try repo.restoreStash() }.value
+                let outcome = try await Task.detached(priority: .userInitiated) { try repo.applyStash() }.value
                 self.errorMessage = nil
-                self.refreshRepositoryState()
-                if result == .conflicts {
+                switch outcome {
+                case .success:
+                    self.refreshRepositoryState()
+                case .conflicts(let paths):
+                    self.refreshRepositoryState()
                     self.selectSource(.workingChanges)
+                    self.stashConflictAlert = StashConflictAlert(conflictedPaths: paths)
                 }
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// The "Restore Conflicted and Remove Stash" choice on `stashConflictAlert` — keeps the
+    /// conflict markers `restoreStash()`'s `applyStash()` call already wrote (for the usual
+    /// "Mark Resolved" flow) and drops the now-redundant stash entry.
+    func keepStashConflictAndDropStash() {
+        guard let repo = currentRepository else { return }
+        stashConflictAlert = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.dropStash() }.value
+                self.refreshRepositoryState()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// The "Restore Conflicted and Keep Stash" choice on `stashConflictAlert` — leaves both the
+    /// conflict markers and the stash entry in place (e.g. as a backup of the original edit, or
+    /// to try reconciling it some other way later).
+    func keepStashConflictAndKeepStash() {
+        stashConflictAlert = nil
+    }
+
+    /// The "Cancel" choice on `stashConflictAlert` — undoes `restoreStash()`'s `applyStash()`
+    /// call entirely (`GitRepository.undoStashApply(conflictedPaths:)`), leaving the working tree
+    /// and the stash exactly as they were before "Restore" was clicked.
+    func cancelStashConflict() {
+        guard let repo = currentRepository, let alert = stashConflictAlert else { return }
+        let paths = alert.conflictedPaths
+        stashConflictAlert = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.undoStashApply(conflictedPaths: paths) }.value
+                self.refreshRepositoryState()
             } catch {
                 self.errorMessage = error.localizedDescription
             }
@@ -679,7 +795,7 @@ final class AppState {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await Task.detached(priority: .userInitiated) { try repo.discardStash() }.value
+                try await Task.detached(priority: .userInitiated) { try repo.dropStash() }.value
                 self.errorMessage = nil
                 self.refreshRepositoryState()
             } catch {
@@ -714,12 +830,25 @@ final class AppState {
         }
     }
 
+    /// Checked files that git still reports as `.conflicted` — committing while any of these
+    /// remain would bake conflict markers into history, so both commit paths refuse and raise
+    /// `conflictedCommitAlert` instead.
+    private var checkedConflictedPaths: [String] {
+        changedFiles.filter { checkedFilePaths.contains($0.path) && $0.status == .conflicted }.map(\.path)
+    }
+
     func commitCheckedChanges() {
         guard let repo = currentRepository else { return }
         let paths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
         let unstagePaths = changedFiles.filter { !checkedFilePaths.contains($0.path) }.map(\.path)
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !paths.isEmpty, !message.isEmpty else { return }
+
+        let conflictedPaths = checkedConflictedPaths
+        guard conflictedPaths.isEmpty else {
+            conflictedCommitAlert = ConflictedCommitAlert(conflictedPaths: conflictedPaths)
+            return
+        }
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -731,7 +860,7 @@ final class AppState {
                 self.errorMessage = nil
                 self.refreshRepositoryState()
             } catch {
-                self.errorMessage = error.localizedDescription
+                self.gitFailureAlert = Self.parseGitFailure(error.localizedDescription, operation: .commit)
             }
         }
     }
@@ -834,6 +963,12 @@ final class AppState {
         let resolvedPaths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
+
+        let conflictedPaths = checkedConflictedPaths
+        guard conflictedPaths.isEmpty else {
+            conflictedCommitAlert = ConflictedCommitAlert(conflictedPaths: conflictedPaths)
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -882,8 +1017,8 @@ final class AppState {
                 }
             } catch {
                 await MainActor.run {
-                    self.errorMessage = error.localizedDescription
                     self.isSyncing = false
+                    self.gitFailureAlert = Self.parseGitFailure(error.localizedDescription, operation: .pull)
                 }
             }
         }
@@ -895,7 +1030,7 @@ final class AppState {
         isPushingCommit = true
         pushProgressText = nil
         pushSucceeded = false
-        pushErrorMessage = nil
+        gitFailureAlert = nil
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
@@ -922,10 +1057,119 @@ final class AppState {
                     self.isSyncing = false
                     self.isPushingCommit = false
                     self.pushProgressText = nil
-                    self.pushErrorMessage = error.localizedDescription
+                    self.gitFailureAlert = Self.parseGitFailure(error.localizedDescription, operation: .push)
                 }
             }
         }
+    }
+
+    /// The "Pull from Origin" fix on a non-fast-forward push rejection — pulls, then retries the
+    /// push automatically once it succeeds.
+    func pullThenPush() {
+        guard let repo = currentRepository, !isSyncing else { return }
+        gitFailureAlert = nil
+        isSyncing = true
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.pull() }.value
+                await MainActor.run {
+                    self.isSyncing = false
+                    self.refreshRepositoryState()
+                    self.pushCurrentBranch()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isSyncing = false
+                    self.gitFailureAlert = Self.parseGitFailure(error.localizedDescription, operation: .pull)
+                }
+            }
+        }
+    }
+
+    /// The "Stash" fix on a tracked file git named as blocking a pull ("would be overwritten by
+    /// merge/checkout" is only ever a `pull`/`checkout` error, and this button is only ever
+    /// offered on a `.pull` alert). Stashes just that file's local changes — leaving the working
+    /// copy clean, so the pull applies upstream's version outright rather than attempting any
+    /// merge — then retries the pull. The stash is deliberately left in place afterward rather
+    /// than auto-restored: popping it back is exactly what would reintroduce the conflict this
+    /// was meant to unblock, so that stays a separate, explicit step the user takes (from the
+    /// sidebar's "Stashed Changes" row) whenever they're ready to reconcile their edit with
+    /// upstream's, with `restoreStash()`'s usual conflict-marker handling if the two collide.
+    func stashAndRetryPull(path: String) {
+        guard let repo = currentRepository, !isSyncing else { return }
+        gitFailureAlert = nil
+        isSyncing = true
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try repo.stashChanges(paths: [path], includeUntracked: false)
+                    try repo.pull()
+                }.value
+                await MainActor.run {
+                    self.isSyncing = false
+                    self.refreshRepositoryState()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isSyncing = false
+                    self.gitFailureAlert = Self.parseGitFailure(error.localizedDescription, operation: .pull)
+                }
+            }
+        }
+    }
+
+    /// Best-effort classification of git's raw stderr text (`GitError.commandFailed`'s message)
+    /// into a friendlier message plus one-click fixes `ChangedFilesView`'s alert can offer.
+    /// Unrecognized text is shown verbatim (trimmed) with no extra buttons beyond Cancel.
+    static func parseGitFailure(_ rawMessage: String, operation: GitFailureAlert.Operation) -> GitFailureAlert {
+        let trimmed = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        var alert = GitFailureAlert(operation: operation, message: trimmed)
+
+        for verb in ["merge", "checkout"] where trimmed.contains("would be overwritten by \(verb)") {
+            // git's own format: an "error: ... would be overwritten by <verb>:" header line, one
+            // tab-indented path per line, then a "Please commit/stash ..." / "Aborting" footer.
+            let paths = trimmed
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { line in
+                    !line.isEmpty
+                        && !line.hasPrefix("error:")
+                        && !line.hasPrefix("hint:")
+                        && !line.hasPrefix("Please")
+                        && !line.hasPrefix("Aborting")
+                }
+            alert.blockingTrackedPaths = paths
+            alert.overwriteVerb = verb
+            alert.message = "Your local changes to the following files would be overwritten by \(verb):\n"
+                + paths.joined(separator: "\n")
+                + "\nPlease commit your changes or stash them before you \(verb)."
+            break
+        }
+
+        if operation == .push
+            && (trimmed.contains("[rejected]") || trimmed.contains("Updates were rejected") || trimmed.contains("fetch first")) {
+            alert.offerPullThenPush = true
+            alert.pushRemoteURL = extractPushRemoteURL(from: trimmed)
+            alert.message = "Updates were rejected because the remote contains work that you do not have locally.\n"
+                + "Try pulling the repo before pushing again"
+        }
+
+        return alert
+    }
+
+    /// Pulls the destination path out of git's push-rejection stderr — either the `To <url>`
+    /// header line every `git push` failure starts with, or the quoted url in "failed to push
+    /// some refs to '<url>'" (preferred when present since it's on a single line with nothing
+    /// else to trim).
+    private static func extractPushRemoteURL(from message: String) -> String? {
+        if let range = message.range(of: #"failed to push some refs to '([^']+)'"#, options: .regularExpression),
+           let urlRange = message[range].range(of: #"'([^']+)'"#, options: .regularExpression) {
+            return message[range][urlRange].trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+        }
+        if let firstLine = message.split(separator: "\n").first, firstLine.hasPrefix("To ") {
+            return String(firstLine.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+        }
+        return nil
     }
 
     /// Reformats one line of git's `--progress` meter, e.g. "Writing objects:  42% (5/12)", into
@@ -1203,6 +1447,7 @@ final class AppState {
         var aheadBehind: (ahead: Int, behind: Int)?
         var changedFiles: [ChangedFile]
         var statusEntries: [ChangedFile]
+        var workingTreeStatusEntries: [ChangedFile]
         var stashCount: Int
         var stashFileCount: Int
         var hasOriginRemote: Bool
@@ -1221,7 +1466,6 @@ final class AppState {
         // slightly conservative cache clear to ever presenting an old Git snapshot.
         invalidateSelectionCaches()
         let source = selectedSource
-        let previousSelectedFile = selectedFile
         let previousCheckedFilePaths = checkedFilePaths
         let previousChangedFilePaths = Set(changedFiles.map(\.path))
         externalChangeGeneration += 1
@@ -1254,11 +1498,22 @@ final class AppState {
                 let tags = (try? repo.tags()) ?? []
                 let aheadBehind = repo.aheadBehind()
 
+                // Fetched unconditionally (not just while `.workingChanges` is selected) so the
+                // sidebar's "Uncommitted Changes" row keeps up with the working tree even while
+                // the user is browsing history or the stash — see `updateUncommittedSummary`'s
+                // caller below.
+                let workingTreeStatusEntries = (try? repo.statusEntries()) ?? []
+
                 var changedFiles: [ChangedFile] = []
                 var statusEntries: [ChangedFile] = []
-                if let source, let result = try? repo.changedFilesWithStatus(for: source) {
-                    changedFiles = result.files
-                    statusEntries = result.statusEntries
+                if let source {
+                    if case .workingChanges = source {
+                        changedFiles = workingTreeStatusEntries
+                        statusEntries = workingTreeStatusEntries
+                    } else if let result = try? repo.changedFilesWithStatus(for: source) {
+                        changedFiles = result.files
+                        statusEntries = result.statusEntries
+                    }
                 }
                 let stashCount = repo.stashCount()
                 let stashFileCount = stashCount > 0 ? ((try? repo.filesChanged(inStash: "stash@{0}").count) ?? 0) : 0
@@ -1276,6 +1531,7 @@ final class AppState {
                     aheadBehind: aheadBehind,
                     changedFiles: changedFiles,
                     statusEntries: statusEntries,
+                    workingTreeStatusEntries: workingTreeStatusEntries,
                     stashCount: stashCount,
                     stashFileCount: stashFileCount,
                     hasOriginRemote: repo.hasOriginRemote()
@@ -1316,27 +1572,28 @@ final class AppState {
             // triggers this very external-change notification via `.git`'s FSEvents) — applying
             // a result fetched for the *old* `source` would stomp the newly selected source's
             // freshly loaded files with stale (often empty) ones.
+            // Refreshed regardless of the current selection so the sidebar's "Uncommitted
+            // Changes" row (and its `.tag`, which is what makes it clickable — see
+            // `BranchListView`) keeps up with the working tree even while browsing history or
+            // the stash, not just while `.workingChanges` is selected.
+            self.updateUncommittedSummary(repo: repo, statusEntries: snapshot.workingTreeStatusEntries)
             if source != nil, source == self.selectedSource {
                 self.changedFiles = snapshot.changedFiles
-                // Only `.workingChanges` populates real `statusEntries` (see
-                // `GitRepository.changedFilesWithStatus(for:)`) — for `.stash`/`.commit` it's
-                // always `[]`, so applying it unconditionally here would zero out the sidebar's
-                // "Uncommitted Changes" count (and, via `BranchListView`'s row losing its `.tag`,
-                // make that row unclickable) any time an external-change notification fires while
-                // browsing history or the stash.
-                if case .workingChanges = source {
-                    self.updateUncommittedSummary(repo: repo, statusEntries: snapshot.statusEntries)
-                }
                 let currentPaths = Set(snapshot.changedFiles.map(\.path))
                 self.checkedFilePaths = previousCheckedFilePaths.intersection(currentPaths)
                     .union(currentPaths.subtracting(previousChangedFilePaths))
             }
-            if let previousSelectedFile, self.changedFiles.contains(previousSelectedFile) {
-                // Same file still selected, but its on-disk content may have changed — the
-                // `.task(id:)` that normally loads the diff only reacts to the *selection*
-                // changing, so bump this token to make it re-fire instead of calling the loader
-                // directly here (which could otherwise race a load `DiffView`'s own `.task(id:)`
-                // starts concurrently for the same file).
+            // Checked against `self.selectedFile` — the *live* selection at apply time — rather
+            // than whatever was selected back when this snapshot fetch started: the user can
+            // click a different file while the detached git calls above are still in flight, and
+            // comparing against a stale pre-fetch snapshot would stomp that click back to
+            // `changedFiles.first` the moment the old selection happened to drop out of the list.
+            if let currentSelectedFile = self.selectedFile, self.changedFiles.contains(currentSelectedFile) {
+                // Still selected, but its on-disk content may have changed — the `.task(id:)`
+                // that normally loads the diff only reacts to the *selection* changing, so bump
+                // this token to make it re-fire instead of calling the loader directly here
+                // (which could otherwise race a load `DiffView`'s own `.task(id:)` starts
+                // concurrently for the same file).
                 self.diffReloadToken += 1
             } else {
                 self.selectFile(self.changedFiles.first)
@@ -1423,6 +1680,20 @@ final class AppState {
         errorMessage = nil
         if resetSelection {
             selectFile(changedFiles.first)
+        } else if let selectedPath = selectedFile?.path {
+            // Refreshes `selectedFile` to the new `ChangedFile` value for the same path (e.g.
+            // `markResolved`'s status flip from `.conflicted` to whatever staging leaves it as)
+            // rather than leaving it pointing at a now-stale value. Left stale, a `.conflicted`
+            // `selectedFile` would keep routing `loadDiffForCurrentSelection()` through
+            // `conflictedFileContents` instead of a real diff, and — since `ChangedFile`'s
+            // equality includes `status` — would also read as no longer present in
+            // `changedFiles` to `handleExternalChange()`'s `.contains(selectedFile)` check,
+            // which would then silently reselect `changedFiles.first` and swap the diff pane to
+            // a different file entirely the next time an FSEvents notification fires (which the
+            // `git add` inside `markResolved` itself triggers, so effectively immediately).
+            if let refreshed = changedFiles.first(where: { $0.path == selectedPath }) {
+                selectFile(refreshed)
+            }
         }
     }
 
