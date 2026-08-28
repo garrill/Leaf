@@ -252,6 +252,13 @@ struct ChangedFilesView: View {
         let source: ChangeSource?
     }
 
+    /// Top inset for the header title's first line. Chosen to sit where a single centred line
+    /// of `.font(.headline)` lands inside `ColumnLayout.headerHeight`, so the first line stays
+    /// put whether or not the title is expanded — top-aligning both states (rather than letting
+    /// `minHeight` centre the collapsed line) is what keeps it from jumping a couple of px up
+    /// when the extra lines appear and eat the centring slack.
+    private static let headerTitleTopInset: CGFloat = 11
+
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
             Text(headerTitle)
@@ -273,9 +280,9 @@ struct ChangedFilesView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, isTitleExpanded ? 8 : 0)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: ColumnLayout.headerHeight)
+        .padding(.top, Self.headerTitleTopInset)
+        .padding(.bottom, isTitleExpanded ? 8 : 0)
+        .frame(maxWidth: .infinity, minHeight: ColumnLayout.headerHeight, alignment: .topLeading)
         .onChange(of: headerTitle) { _, _ in isTitleExpanded = false }
     }
 

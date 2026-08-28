@@ -35,7 +35,10 @@
             <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:fullReleaseNotesLink>https://github.com/garrill/Leaf/releases</sparkle:fullReleaseNotesLink>
             <description sparkle:format="markdown"><![CDATA[
+### v0.4.0 (August 26 2026)
+
 * Branch menu: Delete branches.
 * History: Option to show full commit title, copy commit title.
 * Menu bar: Added 'File', more options to 'View'.
@@ -54,7 +57,10 @@
             <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:fullReleaseNotesLink>https://github.com/garrill/Leaf/releases</sparkle:fullReleaseNotesLink>
             <description sparkle:format="markdown"><![CDATA[
+### v0.3.0 (August 25 2026)
+
 * Keyboard navigation: ← / → move left and right columns. Diff viewer is scrollable by keyboard. You can press ⏎ Enter to submit a commit. ␛ Escape undoes a commit.
 * Tags: Add / remove and view tags on a commit.
 * Discarding changes on a file now move that file to the Trash so it can be retrieved if needed.
@@ -72,7 +78,10 @@
             <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:fullReleaseNotesLink>https://github.com/garrill/Leaf/releases</sparkle:fullReleaseNotesLink>
             <description sparkle:format="markdown"><![CDATA[
+### v0.2.0 (August 19 2026)
+
 * Sidebar updates: 'Add repo to group' option, 'Remove and delete repo' option
 * Feedback: push to origin shows progress and success message, clone repo shows progress bar
 * Error handling: show alerts for push failures

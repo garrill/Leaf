@@ -52,6 +52,14 @@ if [ ! -s "$NOTES_FILE" ]; then
 	rm -f "$NOTES_FILE"
 fi
 
+# Prepend a "### vX.Y.Z (Month D YYYY)" heading so the update panel shows the release
+# number and date above the bullets. The date is taken from the DMG's mtime, which is
+# also what generate_appcast uses for this item's <pubDate>.
+if [ -f "$NOTES_FILE" ]; then
+	RELEASE_DATE=$(date -r "$DMG_PATH" "+%B %-d %Y")
+	printf '### v%s (%s)\n\n%s\n' "$VERSION" "$RELEASE_DATE" "$(cat "$NOTES_FILE")" > "$NOTES_FILE"
+fi
+
 # generate_appcast merges into an existing appcast.xml if one is already present in the
 # target directory, so seed it with the repo's current feed before running.
 cp appcast.xml "$STAGING/appcast.xml"
@@ -60,8 +68,12 @@ cp appcast.xml "$STAGING/appcast.xml"
 # (the raw.githubusercontent.com feed URL) — wrong, since the DMG itself is hosted as a
 # GitHub Release asset, not alongside the feed file. Point it at the release tag this DMG
 # will actually be attached to instead.
+# --full-release-notes-url adds a <sparkle:fullReleaseNotesLink> to each item. Sparkle's
+# standard UI uses it to show a "Version History" button (next to OK) on the "You're up to
+# date!" alert, and a "Version History" link in the update-available dialog.
 "$GENERATE_APPCAST" --embed-release-notes \
 	--download-url-prefix "https://github.com/garrill/Leaf/releases/download/v$VERSION/" \
+	--full-release-notes-url "https://github.com/garrill/Leaf/releases" \
 	"$STAGING"
 
 cp "$STAGING/appcast.xml" appcast.xml
