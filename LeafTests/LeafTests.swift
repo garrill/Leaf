@@ -46,22 +46,34 @@ final class TestRepo {
         process.standardError = stderr
         try process.run()
 
-        // Drain stdout on a background queue concurrently with reading stderr on the calling
-        // thread below — reading either pipe fully before touching the other can deadlock: if the
-        // unread pipe's OS buffer (~64KB) fills up, git blocks trying to write to it, the process
-        // never exits/closes its pipes, and `readDataToEndOfFile()` on the pipe being read never
-        // sees EOF. Mirrors the same fix in `GitRepository.runRaw`.
-        let stdoutDrainGroup = DispatchGroup()
+        // Drain stdout on a dedicated background thread concurrently with reading stderr on the
+        // calling thread below — reading either pipe fully before touching the other can deadlock:
+        // if the unread pipe's OS buffer (~64KB) fills up, git blocks trying to write to it, the
+        // process never exits/closes its pipes, and `readDataToEndOfFile()` on the pipe being read
+        // never sees EOF.
+        //
+        // This uses a raw `Thread`, not `DispatchQueue.global`, on purpose. Swift Testing runs
+        // suites in parallel on the Swift concurrency cooperative pool, whose worker threads share
+        // the same capped workqueue that backs `DispatchQueue.global`. When every cooperative
+        // thread is parked here in a blocking wait (one per in-flight test), the workqueue is at
+        // its ceiling and never schedules the drain block, so `leave()` is never called and the
+        // whole test run wedges on the first `git init`. A dedicated `Thread` is always scheduled.
         var outData = Data()
-        stdoutDrainGroup.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
+        let stdoutDrainDone = DispatchSemaphore(value: 0)
+        let drainThread = Thread {
             outData = stdout.fileHandleForReading.readDataToEndOfFile()
-            stdoutDrainGroup.leave()
+            stdoutDrainDone.signal()
         }
+        // Match the caller's QoS — a raw `Thread` defaults to `.default`, and the calling test
+        // worker runs at `.userInitiated`, so a mismatch trips the Thread Performance Checker's
+        // priority-inversion warning while the caller blocks on the semaphore below.
+        drainThread.qualityOfService = .userInitiated
+        drainThread.stackSize = 1 << 20
+        drainThread.start()
 
         let errData = stderr.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        stdoutDrainGroup.wait()
+        stdoutDrainDone.wait()
 
         guard process.terminationStatus == 0 else {
             throw GitError.commandFailed(String(data: errData, encoding: .utf8) ?? "")
@@ -207,6 +219,11 @@ final class TestRepo {
 
 // MARK: - Stash
 
+private extension GitRepository.StashApplyOutcome {
+    var isSuccess: Bool { if case .success = self { true } else { false } }
+    var isConflicts: Bool { if case .conflicts = self { true } else { false } }
+}
+
 @Suite struct StashTests {
     @Test func pushListApplySingleSlot() throws {
         let t = TestRepo()
@@ -220,7 +237,7 @@ final class TestRepo {
         #expect(try t.repo.statusEntries().isEmpty)
 
         let result = try t.repo.restoreStash()
-        #expect(result == .success)
+        #expect(result.isSuccess)
         #expect(t.repo.stashCount() == 0)
         let contents = try String(contentsOf: t.url.appendingPathComponent("a.txt"), encoding: .utf8)
         #expect(contents == "2")
@@ -232,7 +249,7 @@ final class TestRepo {
         _ = try t.commitAll("initial")
         try t.write("a.txt", "2")
         try t.repo.stashChanges(paths: [], includeUntracked: true)
-        try t.repo.discardStash()
+        try t.repo.dropStash()
         #expect(t.repo.stashCount() == 0)
     }
 
@@ -252,7 +269,7 @@ final class TestRepo {
         let files = try t.repo.filesChanged(inStash: "stash@{0}")
         #expect(files.contains { $0.path == "a.txt" })
         let result = try t.repo.restoreStash()
-        #expect(result == .success)
+        #expect(result.isSuccess)
         #expect(t.repo.stashCount() == 1)
     }
 
@@ -281,7 +298,7 @@ final class TestRepo {
         try t.write("a.txt", "3\n")
         _ = try t.commitAll("diverging commit")
         let result = try t.repo.restoreStash()
-        #expect(result == .conflicts)
+        #expect(result.isConflicts)
     }
 }
 

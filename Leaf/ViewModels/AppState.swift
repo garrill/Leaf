@@ -57,6 +57,15 @@ struct ConflictedCommitAlert: Identifiable {
     var conflictedPaths: [String]
 }
 
+/// A "Mark Resolved" click on a file whose working-tree contents still contain `<<<<<<<`
+/// conflict markers — `markResolved` only runs `git add`, so staging it as-is would carry
+/// the markers toward history. The user confirms or cancels.
+struct UnresolvedConflictAlert: Identifiable {
+    let id = UUID()
+    var file: ChangedFile
+    var fileName: String
+}
+
 @Observable
 final class AppState {
     let sidebarStore = SidebarStore()
@@ -159,6 +168,12 @@ final class AppState {
     var stashConflictAlert: StashConflictAlert?
     /// A commit blocked by still-unresolved conflict markers — see `ConflictedCommitAlert`.
     var conflictedCommitAlert: ConflictedCommitAlert?
+    /// A "Mark Resolved" click on a file that still has conflict markers — see
+    /// `UnresolvedConflictAlert`.
+    var unresolvedConflictAlert: UnresolvedConflictAlert?
+    /// Path of the file that was just marked resolved, held for ~1s so its row can show a
+    /// green confirmation checkmark before settling to its normal staged status glyph.
+    var justResolvedPath: String?
 
     var isMergeInProgress = false
     var mergeMessage: String?
@@ -920,6 +935,31 @@ final class AppState {
         }
     }
 
+    /// Entry point for the per-row "mark resolved" button: checks the working-tree file for
+    /// leftover `<<<<<<<` conflict markers first, and only stages it straight away if there
+    /// are none — otherwise it raises `unresolvedConflictAlert` so the user can confirm.
+    func requestMarkResolved(_ file: ChangedFile) {
+        guard let repo = currentRepository else { return }
+        justResolvedPath = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let stillHasMarkers = await Task.detached(priority: .userInitiated) { () -> Bool in
+                guard let contents = try? repo.conflictedFileContents(file) else { return false }
+                return contents
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .contains { $0.hasPrefix("<<<<<<<") }
+            }.value
+            if stillHasMarkers {
+                self.unresolvedConflictAlert = UnresolvedConflictAlert(
+                    file: file,
+                    fileName: (file.path as NSString).lastPathComponent
+                )
+            } else {
+                self.markResolved(file)
+            }
+        }
+    }
+
     /// Stages a hand-edited conflicted file, which is what actually flips its status away from
     /// `.conflicted` — editing the file alone doesn't change what `git status` reports.
     func markResolved(_ file: ChangedFile) {
@@ -929,9 +969,24 @@ final class AppState {
             do {
                 try await Task.detached(priority: .userInitiated) { try repo.markResolved(file) }.value
                 self.errorMessage = nil
+                // Brief green confirmation on the row before the reload flips its status
+                // away from `.conflicted` and it settles to its normal staged glyph.
+                self.justResolvedPath = file.path
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(1))
+                    if self?.justResolvedPath == file.path { self?.justResolvedPath = nil }
+                }
                 await self.loadChangedFilesForCurrentSelection(preserveChecks: true, resetSelection: false)
                 if self.selectedFile?.path == file.path {
-                    await self.loadDiffForCurrentSelection()
+                    // The selection's path is unchanged (only its status flipped, `.conflicted`
+                    // → staged), so `DiffView`'s `.task(id:)` — keyed on the path — won't
+                    // re-fire. Bump the reload token to drive one clean reload through that
+                    // task rather than calling `loadDiffForCurrentSelection()` directly here,
+                    // which races the `handleExternalChange()` the `git add` also triggers
+                    // (that call's cache invalidation makes the direct load bail at its
+                    // generation guard, leaving the diff pane blank). Same mechanism
+                    // `handleExternalChange()` itself uses for a surviving selection.
+                    self.diffReloadToken += 1
                 }
             } catch {
                 self.errorMessage = error.localizedDescription
@@ -946,6 +1001,7 @@ final class AppState {
             message: "This cannot be undone. Any conflict resolutions you've made so far will be discarded, and the branch will return to its state before the merge.",
             confirmButtonTitle: "Abort Merge"
         ) else { return }
+        justResolvedPath = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -1588,12 +1644,22 @@ final class AppState {
             // click a different file while the detached git calls above are still in flight, and
             // comparing against a stale pre-fetch snapshot would stomp that click back to
             // `changedFiles.first` the moment the old selection happened to drop out of the list.
-            if let currentSelectedFile = self.selectedFile, self.changedFiles.contains(currentSelectedFile) {
-                // Still selected, but its on-disk content may have changed — the `.task(id:)`
-                // that normally loads the diff only reacts to the *selection* changing, so bump
-                // this token to make it re-fire instead of calling the loader directly here
-                // (which could otherwise race a load `DiffView`'s own `.task(id:)` starts
-                // concurrently for the same file).
+            // Match by *path*, not full `ChangedFile` value: a `git add` that resolves a
+            // conflict (our own "Mark Resolved", which triggers this very FSEvents callback)
+            // flips the file's status `.conflicted` → staged while its path is unchanged. A
+            // value-equality check reads that as "selection went away" and reselects
+            // `changedFiles.first`; worse, the stale `.conflicted` reference then keeps
+            // `DiffView` parsing the raw conflict-marker text as a unified diff (yielding
+            // nothing) with no reload, because its `.task(id:)` is keyed on the path.
+            if let selectedPath = self.selectedFile?.path,
+               let refreshed = self.changedFiles.first(where: { $0.path == selectedPath }) {
+                if refreshed != self.selectedFile {
+                    self.selectFile(refreshed)
+                }
+                // Content and/or status may have changed — the `.task(id:)` that normally
+                // loads the diff only reacts to the *path* changing, so bump this token to
+                // make it re-fire (rather than calling the loader directly here and racing a
+                // load `DiffView`'s own `.task(id:)` starts concurrently).
                 self.diffReloadToken += 1
             } else {
                 self.selectFile(self.changedFiles.first)
@@ -1685,12 +1751,8 @@ final class AppState {
             // `markResolved`'s status flip from `.conflicted` to whatever staging leaves it as)
             // rather than leaving it pointing at a now-stale value. Left stale, a `.conflicted`
             // `selectedFile` would keep routing `loadDiffForCurrentSelection()` through
-            // `conflictedFileContents` instead of a real diff, and — since `ChangedFile`'s
-            // equality includes `status` — would also read as no longer present in
-            // `changedFiles` to `handleExternalChange()`'s `.contains(selectedFile)` check,
-            // which would then silently reselect `changedFiles.first` and swap the diff pane to
-            // a different file entirely the next time an FSEvents notification fires (which the
-            // `git add` inside `markResolved` itself triggers, so effectively immediately).
+            // `conflictedFileContents` instead of a real diff. (`handleExternalChange()` does
+            // its own path-based refresh for the same reason.)
             if let refreshed = changedFiles.first(where: { $0.path == selectedPath }) {
                 selectFile(refreshed)
             }

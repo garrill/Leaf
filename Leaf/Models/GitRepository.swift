@@ -98,16 +98,14 @@ enum GitError: Error, LocalizedError {
     }
 }
 
-/// Buffers a live process's stderr for `runRaw(_:progress:)`, splitting into lines as chunks arrive
-/// so a caller can render git's progress meter (e.g. `push`'s "Writing objects: 42% (5/12)") as it
-/// updates rather than only after the process exits. git repaints that meter in place via `\r`, not
-/// `\n`, so lines are split on either. `readabilityHandler` fires on a private dispatch queue, so
-/// access to the buffers is serialized with a lock; `@unchecked Sendable` reflects that the lock,
-/// not the compiler, is what makes this safe to share across that queue and the process's own thread.
+/// Splits a live process's stderr into lines as chunks arrive so a caller can render git's progress
+/// meter (e.g. `push`'s "Writing objects: 42% (5/12)") as it updates rather than only after the
+/// process exits. git repaints that meter in place via `\r`, not `\n`, so lines are split on either.
+/// `append(_:)` is called from the stderr drain thread only, but `@unchecked Sendable` + the lock
+/// keep it safe even if that ever changes; the raw bytes are collected separately by the caller.
 private nonisolated final class ProgressLineAccumulator: @unchecked Sendable {
     private let lock = NSLock()
     private var lineBuffer = Data()
-    private var fullData = Data()
     private let handler: @Sendable (String) -> Void
 
     init(handler: @escaping @Sendable (String) -> Void) {
@@ -116,7 +114,6 @@ private nonisolated final class ProgressLineAccumulator: @unchecked Sendable {
 
     func append(_ chunk: Data) {
         lock.lock()
-        fullData.append(chunk)
         lineBuffer.append(chunk)
         var lines: [String] = []
         while let index = lineBuffer.firstIndex(where: { $0 == 0x0d || $0 == 0x0a }) {
@@ -129,12 +126,6 @@ private nonisolated final class ProgressLineAccumulator: @unchecked Sendable {
         }
         lock.unlock()
         for line in lines { handler(line) }
-    }
-
-    var finalData: Data {
-        lock.lock()
-        defer { lock.unlock() }
-        return fullData
     }
 }
 
@@ -178,50 +169,57 @@ nonisolated struct GitRepository {
         process.standardError = stderr
 
         let accumulator = progress.map { ProgressLineAccumulator(handler: $0) }
-        if let accumulator {
-            stderr.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty {
-                    handle.readabilityHandler = nil
-                } else {
-                    accumulator.append(chunk)
-                }
-            }
-        }
 
         try process.run()
 
-        // Drain stdout on a background queue concurrently with reading stderr on the calling
-        // thread below — reading either pipe fully before touching the other can deadlock: if the
-        // unread pipe's OS buffer (~64KB) fills up, git blocks trying to write to it, the process
-        // never exits/closes its pipes, and `readDataToEndOfFile()` on the pipe being read never
-        // sees EOF. A verbose command with large output on both streams (e.g. a noisy merge/push)
-        // could hang the app indefinitely without this.
-        let stdoutDrainGroup = DispatchGroup()
+        // Drain both pipes on dedicated background threads concurrently — reading either pipe
+        // fully before touching the other can deadlock: if the unread pipe's OS buffer (~64KB)
+        // fills up, git blocks trying to write to it, the process never exits/closes its pipes,
+        // and the read on the other pipe never sees EOF. A verbose command with large output on
+        // both streams (e.g. a noisy merge/push) could hang the app indefinitely without this.
+        //
+        // These are raw `Thread`s, not `DispatchQueue.global`. `runRaw` is called synchronously
+        // from `Task.detached` closures, which run on the Swift concurrency cooperative pool —
+        // the same capped workqueue that backs `DispatchQueue.global`. If enough of those tasks
+        // are parked here in a blocking wait at once, the workqueue is at its thread ceiling and
+        // never schedules the drain blocks, so they never run and every caller wedges. (Swift
+        // Testing's parallel suites hit exactly this.) A dedicated `Thread` is always scheduled
+        // regardless of pool pressure. QoS is pinned to match the (typically `.userInitiated`)
+        // caller blocking on the semaphores below, so the Thread Performance Checker doesn't
+        // flag the wait as a priority inversion.
+        //
+        // stderr is drained the same way whether or not `progress` is set (rather than via a
+        // `FileHandle.readabilityHandler`): a readability handler fires on a private GCD queue
+        // that races the teardown read on the calling thread, and clearing it doesn't wait for
+        // an in-flight block — so the handler could read git's final "fatal: …" chunk off the
+        // pipe (making the teardown read see only EOF) but not yet have appended it to the
+        // accumulator when `finalData` is read, surfacing as a bogus `commandFailed("")`.
         var outData = Data()
-        stdoutDrainGroup.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
+        var errData = Data()
+        let stdoutDone = DispatchSemaphore(value: 0)
+        let stderrDone = DispatchSemaphore(value: 0)
+
+        let stdoutThread = Thread {
             outData = stdout.fileHandleForReading.readDataToEndOfFile()
-            stdoutDrainGroup.leave()
+            stdoutDone.signal()
+        }
+        let stderrThread = Thread {
+            let handle = stderr.fileHandleForReading
+            while case let chunk = handle.availableData, !chunk.isEmpty {
+                errData.append(chunk)
+                accumulator?.append(chunk)
+            }
+            stderrDone.signal()
+        }
+        for thread in [stdoutThread, stderrThread] {
+            thread.qualityOfService = .userInitiated
+            thread.stackSize = 1 << 20
+            thread.start()
         }
 
-        let errData: Data
-        if let accumulator {
-            // `readabilityHandler` fires asynchronously off a GCD dispatch source — for a fast
-            // command (e.g. pushing to a local remote), the process can exit before that source
-            // ever gets scheduled, silently dropping whatever stderr it wrote. Clearing the
-            // handler only stops *future* callbacks; it doesn't guarantee past ones ran. A final
-            // synchronous `readDataToEndOfFile()` drains anything still sitting unread in the pipe.
-            process.waitUntilExit()
-            stderr.fileHandleForReading.readabilityHandler = nil
-            let remainder = stderr.fileHandleForReading.readDataToEndOfFile()
-            if !remainder.isEmpty { accumulator.append(remainder) }
-            errData = accumulator.finalData
-        } else {
-            errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-        }
-        stdoutDrainGroup.wait()
+        process.waitUntilExit()
+        stdoutDone.wait()
+        stderrDone.wait()
 
         let output = String(data: outData, encoding: .utf8) ?? ""
         let errorOutput = String(data: errData, encoding: .utf8) ?? ""
@@ -309,33 +307,40 @@ nonisolated struct GitRepository {
         process.standardError = stderr
 
         let accumulator = progress.map { ProgressLineAccumulator(handler: $0) }
-        if let accumulator {
-            stderr.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty {
-                    handle.readabilityHandler = nil
-                } else {
-                    accumulator.append(chunk)
-                }
-            }
-        }
 
         try process.run()
-        _ = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errData: Data
-        if let accumulator {
-            // See `runRaw(_:progress:)` for why a final synchronous drain is needed even after
-            // clearing the handler — a fast clone can exit before the async readability source
-            // ever fires, silently dropping whatever stderr it wrote.
-            process.waitUntilExit()
-            stderr.fileHandleForReading.readabilityHandler = nil
-            let remainder = stderr.fileHandleForReading.readDataToEndOfFile()
-            if !remainder.isEmpty { accumulator.append(remainder) }
-            errData = accumulator.finalData
-        } else {
-            errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+
+        // Drain both pipes on dedicated background threads — see `runRaw(_:progress:)` for the
+        // full rationale: reading one pipe fully before the other can deadlock a chatty clone,
+        // a raw `Thread` (not `DispatchQueue.global`) stays clear of cooperative-pool starvation,
+        // and looping `availableData` into the accumulator avoids the readability-handler race
+        // where git's final stderr chunk is read off the pipe but not yet appended when the
+        // result is inspected.
+        var errData = Data()
+        let stdoutDone = DispatchSemaphore(value: 0)
+        let stderrDone = DispatchSemaphore(value: 0)
+
+        let stdoutThread = Thread {
+            _ = stdout.fileHandleForReading.readDataToEndOfFile()
+            stdoutDone.signal()
         }
+        let stderrThread = Thread {
+            let handle = stderr.fileHandleForReading
+            while case let chunk = handle.availableData, !chunk.isEmpty {
+                errData.append(chunk)
+                accumulator?.append(chunk)
+            }
+            stderrDone.signal()
+        }
+        for thread in [stdoutThread, stderrThread] {
+            thread.qualityOfService = .userInitiated
+            thread.stackSize = 1 << 20
+            thread.start()
+        }
+
+        process.waitUntilExit()
+        stdoutDone.wait()
+        stderrDone.wait()
 
         if process.terminationStatus != 0 {
             let errorOutput = String(data: errData, encoding: .utf8) ?? ""

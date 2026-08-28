@@ -24,15 +24,21 @@ struct ChangedFilesView: View {
                     }
                     pathAndFileName(for: file)
                     Spacer()
-                    if file.status == .conflicted {
-                        // The status icon sits to the button's right instead of sharing the same
-                        // trailing slot — otherwise the button fully covers it and there's no
-                        // visible conflict glyph on the row at all.
-                        Button("Mark Resolved") {
-                            appState.markResolved(file)
+                    if file.status == .conflicted || appState.justResolvedPath == file.path {
+                        // The orange conflict glyph stays alongside the resolve button (to its
+                        // right) — the button is now just a `checkmark.circle` icon, so the
+                        // row still needs the status glyph to read as conflicted. During the
+                        // brief post-resolve window `file.status` has already flipped to the
+                        // staged glyph while the green `checkmark.circle.fill` confirms.
+                        Button {
+                            appState.requestMarkResolved(file)
+                        } label: {
+                            ResolveIconView(isResolved: appState.justResolvedPath == file.path)
+                                .frame(width: 15, height: 15)
+                                .contentShape(Rectangle())
                         }
-                        .controlSize(.mini)
-                        .buttonStyle(.glass)
+                        .buttonStyle(.borderless)
+                        .help("Mark as resolved")
                         StatusIconView(status: file.status)
                             .frame(width: 14, height: 14)
                     } else {
@@ -42,7 +48,7 @@ struct ChangedFilesView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // Every row's content is single-line regardless of which conditional branch
-                // above applies (toggle vs. not, "Mark Resolved" button vs. status glyph) — an
+                // above applies (toggle vs. not, resolve-button icon vs. status glyph) — an
                 // explicit fixed height lets List treat every row as uniform instead of having
                 // to measure each one individually. Without it, a commit touching hundreds of
                 // files spent a large chunk of selection time (confirmed via Instruments' Time
@@ -244,6 +250,23 @@ struct ChangedFilesView: View {
             } else {
                 Text("These files still have unresolved conflict markers. Fix each conflict and choose \u{201C}Mark Resolved\u{201D}, then commit again:\n" + alert.conflictedPaths.joined(separator: "\n"))
             }
+        }
+        // Raised when the resolve-button icon is clicked on a file whose contents still
+        // contain `<<<<<<<` markers — staging it anyway is allowed, but confirmed first.
+        .alert(
+            "Mark as resolved?",
+            isPresented: Binding(
+                get: { appState.unresolvedConflictAlert != nil },
+                set: { isPresented in if !isPresented { appState.unresolvedConflictAlert = nil } }
+            ),
+            presenting: appState.unresolvedConflictAlert
+        ) { alert in
+            Button("Cancel", role: .cancel) {}
+            Button("Mark resolved") {
+                appState.markResolved(alert.file)
+            }
+        } message: { alert in
+            Text("The file \u{201C}\(alert.fileName)\u{201D} does not appear to be resolved. Are you sure you want to mark it resolved?")
         }
     }
 
