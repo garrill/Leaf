@@ -218,6 +218,59 @@ final class DiffCodeTextView: NSTextView {
     }
 }
 
+/// `NSTextFinder` (see `DiffFinderController`) needs a client to search. `NSTextView` already
+/// implements most of `NSTextFinderClient` — `string`, `selectedRanges`, `scrollRangeToVisible(_:)`,
+/// `isEditable` — but macOS never declares the conformance, so a bare text view can't be a client
+/// without this. Only the members `NSTextView` doesn't already respond to are added here: the
+/// string length, the first selection, and the four geometry hooks incremental find uses to place
+/// its match highlights, clip to the visible region, and redraw matched glyphs at full brightness
+/// through the "dim everything else" overlay (`incrementalSearchingShouldDimContentView`).
+extension DiffCodeTextView: NSTextFinderClient {
+    @objc func stringLength() -> Int {
+        (string as NSString).length
+    }
+
+    @objc var firstSelectedRange: NSRange {
+        selectedRange()
+    }
+
+    @objc func contentView(at index: Int, effectiveCharacterRange outRange: NSRangePointer) -> NSView {
+        outRange.pointee = NSRange(location: 0, length: (string as NSString).length)
+        return self
+    }
+
+    @objc func rects(forCharacterRange range: NSRange) -> [NSValue]? {
+        guard let layoutManager, let textContainer else { return nil }
+        let origin = textContainerOrigin
+        var rects: [NSValue] = []
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        layoutManager.enumerateEnclosingRects(
+            forGlyphRange: glyphRange,
+            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+            in: textContainer
+        ) { rect, _ in
+            rects.append(NSValue(rect: rect.offsetBy(dx: origin.x, dy: origin.y)))
+        }
+        return rects
+    }
+
+    @objc var visibleCharacterRanges: [NSValue] {
+        guard let layoutManager, let textContainer else { return [] }
+        let origin = textContainerOrigin
+        let region = visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+        guard !region.isEmpty else { return [] }
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: region, in: textContainer)
+        let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        return [NSValue(range: charRange)]
+    }
+
+    @objc func drawCharacters(in range: NSRange, forContentView view: NSView) {
+        guard view === self, let layoutManager else { return }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: textContainerOrigin)
+    }
+}
+
 /// Dual old/new line-number gutter, drawn in its own plain `NSView` to the left of the code text
 /// view — entirely outside the text view's own bounds and text storage, exactly like Xcode's or
 /// BBEdit's gutters, so numbers can never get swept into a text selection or a copy. Previously
@@ -454,6 +507,9 @@ final class DiffCodeContainerView: NSView {
     /// highlighting finishes arriving late for the *same* file, which must not reset scroll
     /// position out from under someone already reading further down.
     private var lastSelectionKey: DiffSelectionKey?
+    /// The diff pane's `NSTextFinder` (see `DiffFinderController`), so `setContent` can tell it
+    /// the client string is about to change out from under any in-progress search.
+    weak var finder: NSTextFinder?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -491,6 +547,8 @@ final class DiffCodeContainerView: NSView {
 
     func setContent(attributedString: NSAttributedString, metadata: [DiffLineMetadata], key: DiffContentKey) {
         lastContentKey = key
+        // Let any in-progress find drop its cached match ranges before the text underneath changes.
+        finder?.noteClientStringWillChange()
         textView.setContent(attributedString: attributedString, metadata: metadata, bodyFontSize: key.fontSize)
         needsLayout = true
         gutterView.needsDisplay = true
@@ -550,6 +608,8 @@ struct DiffCodeScrollView: NSViewRepresentable {
     let highlightSnapshot: HighlightSnapshot?
     let diffText: String
     var fontSize: CGFloat = NSFont.systemFontSize
+    /// Wired to the text view in `makeNSView` so Edit ▸ Find in Diff / ⌘F can search it.
+    let finderController: DiffFinderController
 
     /// The gap painted between consecutive hunks — shared with `HunkSeparatorOverlayView`, which
     /// has to correct for this same amount when locating a hunk's top boundary rule.
@@ -559,6 +619,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
         let container = DiffCodeContainerView(frame: .zero)
         container.textView.appState = appState
         configure(textView: container.textView)
+        finderController.attach(to: container)
         updateContent(container: container)
         container.resetScrollIfSelectionChanged(DiffSelectionKey(filePath: appState.selectedFile?.path, source: appState.selectedSource))
         return container

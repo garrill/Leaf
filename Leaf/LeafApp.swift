@@ -55,6 +55,14 @@ struct LeafApp: App {
                     .keyboardShortcut("w", modifiers: [.command])
             }
             CommandGroup(replacing: .saveItem) { }
+            CommandGroup(after: .textEditing) {
+                Button("Find in Diff") { AppStateHolder.shared?.diffFinder?.show() }
+                    .keyboardShortcut("f", modifiers: [.command])
+                Button("Find Next in Diff") { AppStateHolder.shared?.diffFinder?.next() }
+                    .keyboardShortcut("g", modifiers: [.command])
+                Button("Find Previous in Diff") { AppStateHolder.shared?.diffFinder?.previous() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+            }
             CommandGroup(replacing: .sidebar) {
                 Button(sidebarVisibility.isCollapsed ? "Show Sidebar" : "Hide Sidebar") {
                     NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)

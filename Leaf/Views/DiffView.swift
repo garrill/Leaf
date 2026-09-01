@@ -45,6 +45,12 @@ struct DiffView: View {
     /// `header`'s `addedCount`/`removedCount` and `content`'s `DiffCodeScrollView` construction
     /// each independently re-parsed the same text on every single render.
     @State private var diffLines: [DiffLine] = []
+    /// Owns the `NSTextFinder` backing Edit ▸ Find in Diff / ⌘F. Registered on `AppState` while
+    /// this view is on screen so the menu commands can reach it.
+    @State private var finderController = DiffFinderController()
+    /// Bumped whenever the finder swaps its bar view or reports a height change, forcing
+    /// `DiffFindBarHost` to re-attach / re-measure.
+    @State private var findBarToken = 0
 
     static let paneBackgroundNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -134,10 +140,36 @@ struct DiffView: View {
 
     var body: some View {
         content
-            .scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
             .safeAreaBar(edge: .top, spacing: 0) { header }
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                if appState.diffFindBarVisible {
+                    DiffFindBarHost(controller: finderController, invalidationToken: findBarToken)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 19)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: appState.diffFindBarVisible)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Self.paneBackgroundColor)
+            .onAppear {
+                finderController.onVisibilityChanged = { visible in
+                    DispatchQueue.main.async {
+                        appState.diffFindBarVisible = visible
+                        if !visible { appState.focusedColumn = .diff }
+                    }
+                }
+                finderController.onBarInvalidated = {
+                    DispatchQueue.main.async { findBarToken &+= 1 }
+                }
+                appState.diffFinder = finderController
+            }
+            .onDisappear {
+                if appState.diffFinder === finderController {
+                    appState.diffFinder = nil
+                }
+            }
             // Cross-column focus (`AppState.focusedColumn`) is tracked here purely for the visual
             // outline — real AppKit keyboard focus lives on the actual `DiffCodeTextView` instead
             // (see `DiffCodeScrollView.updateNSView`/`DiffCodeTextView.becomeFirstResponder`), so
@@ -227,7 +259,7 @@ struct DiffView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ScrollView {
-                DiffCodeScrollView(appState: appState, lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText, fontSize: CGFloat(diffFontSize))
+                DiffCodeScrollView(appState: appState, lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText, fontSize: CGFloat(diffFontSize), finderController: finderController)
                     .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

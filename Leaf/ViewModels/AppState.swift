@@ -187,6 +187,14 @@ final class AppState {
     var cloneProgressText: String?
     var cloneProgressFraction: Double?
 
+    /// The diff pane's `NSTextFinder` controller, registered by `DiffView` while it's on screen
+    /// so the Edit ▸ Find in Diff menu items (which can't observe SwiftUI view state) can drive
+    /// it. `@ObservationIgnored` — menus poll it on click, nothing renders off it.
+    @ObservationIgnored var diffFinder: DiffFinderController?
+    /// Mirrors the `NSTextFinder` find bar's visibility so `DiffView`'s bottom `.safeAreaBar`
+    /// can show/hide the host for it.
+    var diffFindBarVisible = false
+
     var renamingFolderID: UUID?
     var renamingRepoID: UUID?
     var isCloneSheetPresented = false
