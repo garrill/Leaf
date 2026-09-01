@@ -56,11 +56,11 @@ struct LeafApp: App {
             }
             CommandGroup(replacing: .saveItem) { }
             CommandGroup(after: .textEditing) {
-                Button("Find in Diff") { AppStateHolder.shared?.diffFinder?.show() }
+                Button("Find in Diff") { AppStateHolder.shared?.showDiffFind() }
                     .keyboardShortcut("f", modifiers: [.command])
-                Button("Find Next in Diff") { AppStateHolder.shared?.diffFinder?.next() }
+                Button("Find Next in Diff") { AppStateHolder.shared?.diffFindNext() }
                     .keyboardShortcut("g", modifiers: [.command])
-                Button("Find Previous in Diff") { AppStateHolder.shared?.diffFinder?.previous() }
+                Button("Find Previous in Diff") { AppStateHolder.shared?.diffFindPrevious() }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .sidebar) {

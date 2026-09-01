@@ -187,13 +187,28 @@ final class AppState {
     var cloneProgressText: String?
     var cloneProgressFraction: Double?
 
-    /// The diff pane's `NSTextFinder` controller, registered by `DiffView` while it's on screen
-    /// so the Edit ▸ Find in Diff menu items (which can't observe SwiftUI view state) can drive
-    /// it. `@ObservationIgnored` — menus poll it on click, nothing renders off it.
-    @ObservationIgnored var diffFinder: DiffFinderController?
-    /// Mirrors the `NSTextFinder` find bar's visibility so `DiffView`'s bottom `.safeAreaBar`
-    /// can show/hide the host for it.
+    /// Find-in-diff (`DiffSearchBar` + the Edit ▸ Find in Diff menu items). `DiffView` owns the
+    /// match scan — it has the parsed lines — and writes `diffFindMatchCount` / clamps
+    /// `diffFindCurrentIndex` back here. See the `showDiffFind()` etc. helpers at the bottom of
+    /// this file.
     var diffFindBarVisible = false
+    var diffFindQuery = ""
+    var diffFindMatchCount = 0
+    var diffFindCurrentIndex = 0
+    /// Bumped by ⌘F so `DiffSearchBar` re-focuses its field even when the bar is already open.
+    var diffFindFocusRequest = 0
+    var diffFindIgnoreCase = (LeafSettings.store.object(forKey: "diffFindIgnoreCase") as? Bool) ?? true {
+        didSet { LeafSettings.store.set(diffFindIgnoreCase, forKey: "diffFindIgnoreCase") }
+    }
+    var diffFindWrapAround = (LeafSettings.store.object(forKey: "diffFindWrapAround") as? Bool) ?? true {
+        didSet { LeafSettings.store.set(diffFindWrapAround, forKey: "diffFindWrapAround") }
+    }
+    var diffFindMode = DiffFindMode(rawValue: LeafSettings.store.string(forKey: "diffFindMode") ?? "") ?? .contains {
+        didSet { LeafSettings.store.set(diffFindMode.rawValue, forKey: "diffFindMode") }
+    }
+    var diffFindRecents: [String] = LeafSettings.store.stringArray(forKey: "diffFindRecentSearches") ?? [] {
+        didSet { LeafSettings.store.set(diffFindRecents, forKey: "diffFindRecentSearches") }
+    }
 
     var renamingFolderID: UUID?
     var renamingRepoID: UUID?
@@ -1852,5 +1867,49 @@ final class AppState {
             diffText = ""
             diffOnlyWhitespaceChanges = false
         }
+    }
+}
+
+// MARK: - Find in diff
+
+/// How a query is matched against the diff text, mirroring Xcode's find-options menu.
+enum DiffFindMode: String, CaseIterable {
+    case contains, startsWith, fullWord
+}
+
+extension AppState {
+    /// Reveal the find bar and (re-)focus its field. No-op with nothing to search.
+    func showDiffFind() {
+        guard selectedFile != nil else { return }
+        diffFindBarVisible = true
+        diffFindFocusRequest &+= 1
+    }
+
+    /// Hide the find bar and hand keyboard focus back to the diff text. The query is kept so
+    /// reopening resumes the same search.
+    func hideDiffFind() {
+        diffFindBarVisible = false
+        focusedColumn = .diff
+    }
+
+    func diffFindNext() {
+        guard diffFindMatchCount > 0 else { return }
+        let next = diffFindCurrentIndex + 1
+        diffFindCurrentIndex = diffFindWrapAround ? next % diffFindMatchCount : min(next, diffFindMatchCount - 1)
+    }
+
+    func diffFindPrevious() {
+        guard diffFindMatchCount > 0 else { return }
+        let previous = diffFindCurrentIndex - 1
+        diffFindCurrentIndex = diffFindWrapAround ? (previous + diffFindMatchCount) % diffFindMatchCount : max(previous, 0)
+    }
+
+    /// Push the current query to the front of the recents list (delimited, deduped, capped).
+    func recordDiffFindRecent() {
+        let query = diffFindQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        var list = diffFindRecents.filter { $0.caseInsensitiveCompare(query) != .orderedSame }
+        list.insert(query, at: 0)
+        diffFindRecents = Array(list.prefix(10))
     }
 }
