@@ -740,13 +740,30 @@ nonisolated struct GitRepository {
         if !unstagePaths.isEmpty {
             try run(["reset", "--"] + unstagePaths)
         }
+        // A path that's already fully staged with nothing left in the working tree — most often
+        // a deletion staged outside Leaf, or left staged by an earlier aborted commit — exists
+        // in neither the working tree nor the index, so `git add <path>` (even `-A`) aborts the
+        // whole commit with "pathspec '…' did not match any files". It's already staged exactly
+        // as the diff shows, and the pathspec-less `git commit` below sweeps in the whole index,
+        // so the fix is simply not to re-add it.
+        let pathsToStage = paths.filter { path in
+            if FileManager.default.fileExists(atPath: rootURL.appendingPathComponent(path).path) {
+                return true
+            }
+            // Absent from the working tree: only worth an `add` if it's still in the index with
+            // an unstaged change to pick up (a `git rm` that wasn't staged). If it's not even in
+            // the index, it's an already-staged removal — skip it.
+            return (try? run(["ls-files", "--error-unmatch", "--", path])) != nil
+        }
         // `-f`: `paths` only ever comes from `statusEntries()`, which never surfaces ignored
         // *untracked* files (no `--ignored` flag) — so any path here that also matches a
         // `.gitignore` pattern is necessarily already tracked (e.g. committed before the
         // pattern existed). Plain `git add` refuses those with a nonzero exit even though the
         // file is already tracked, which would otherwise abort the whole commit before
         // `git commit` ever runs, leaving the file staged but nothing committed.
-        try run(["add", "-f", "--"] + paths)
+        if !pathsToStage.isEmpty {
+            try run(["add", "-f", "--"] + pathsToStage)
+        }
         try run(["commit", "-m", message])
     }
 
