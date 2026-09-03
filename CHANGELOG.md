@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0]
+
+* Failures / error messages show as actionable alerts
+* Added search to diff checker
+* Improved conflicted files UI and flow
+* Allow tags to be pushed to origin
+* Tidied up branch menu and added options to prune / see remote 
+* Make changelog look a bit nicer
+* Fixed commit title moving on expand / retract
+* Reduced app size
+
 ## [0.4.0]
 
 * Branch menu: Delete branches.
