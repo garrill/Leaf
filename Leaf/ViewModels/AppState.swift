@@ -81,6 +81,14 @@ final class AppState {
     /// single shared `@FocusState` that could drive this directly.
     var focusedColumn: MainColumn?
     var branches: [GitBranch] = []
+    /// Branches that exist on the remote but have no local counterpart yet — surfaced in the
+    /// branch menu so a remote-only branch can be checked out (which creates the local tracking
+    /// branch). Refreshed alongside `branches`.
+    var remoteOnlyBranches: [GitRemoteBranch] = []
+    /// The remote's default branch (`origin/HEAD`), shown pinned at the top of the branch menu.
+    /// nil when there's no remote or `origin/HEAD` was never resolved. Refreshed alongside
+    /// `branches`.
+    var defaultBranchName: String?
     var selectedBranch: GitBranch?
     var isDetachedHead = false
     var detachedHeadShortSHA: String?
@@ -237,6 +245,8 @@ final class AppState {
         let isMergeInProgress: Bool
         let mergeMessage: String?
         let branches: [GitBranch]
+        let remoteOnlyBranches: [GitRemoteBranch]
+        let defaultBranchName: String?
         let selectedBranch: GitBranch?
         let detachedHeadShortSHA: String?
         let commits: [GitCommit]
@@ -554,6 +564,87 @@ final class AppState {
         }
     }
 
+    /// Fetches from the remote with `--prune` (clearing stale `origin/*` refs), then offers to
+    /// delete every local branch whose upstream is now gone — branches deleted or renamed on the
+    /// remote. A rename looks exactly like a delete from git's side, so a renamed branch shows up
+    /// here too; the fix for that case is to let this remove the stale local name and then check
+    /// out the new one from the branch menu. The current branch is never touched (git won't delete
+    /// a checked-out branch), so it's dropped from the list even if its own upstream is gone.
+    func pruneGoneBranches() {
+        guard let repo = currentRepository, !isSyncing else { return }
+        isSyncing = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let goneResult: Result<[String], Error>
+            do {
+                let gone = try await Task.detached(priority: .userInitiated) { () throws -> [String] in
+                    try repo.fetch()
+                    return try repo.branchesWithGoneUpstream()
+                }.value
+                goneResult = .success(gone)
+            } catch {
+                goneResult = .failure(error)
+            }
+
+            switch goneResult {
+            case .failure(let error):
+                self.isSyncing = false
+                self.errorMessage = error.localizedDescription
+                return
+            case .success(let allGone):
+                self.errorMessage = nil
+                self.refreshSyncStatus()
+                self.isSyncing = false
+
+                let currentName = self.selectedBranch?.name
+                let gone = allGone.filter { $0 != currentName }
+                guard !gone.isEmpty else {
+                    Self.showInformationalAlert(
+                        title: "No branches to prune",
+                        message: "Every local branch still has a matching branch on the remote."
+                    )
+                    return
+                }
+                let title = gone.count == 1
+                    ? "Delete branch \u{201C}\(gone[0])\u{201D}?"
+                    : "Delete \(gone.count) branches?"
+                let message = "These local branches no longer exist on the remote — deleted or "
+                    + "renamed:\n\n\(gone.joined(separator: "\n"))\n\nThis cannot be undone."
+                guard Self.confirmDestructiveAction(
+                    title: title, message: message, confirmButtonTitle: "Delete"
+                ) else { return }
+
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        try repo.deleteBranches(named: gone)
+                    }.value
+                    self.errorMessage = nil
+                } catch {
+                    self.errorMessage = error.localizedDescription
+                }
+                self.refreshRepositoryState()
+            }
+        }
+    }
+
+    /// Checks out a branch that only exists on the remote, creating the local branch that tracks
+    /// it (`git checkout -b <name> --track <origin/name>`). Unlike `selectBranch`, there's no
+    /// dirty-working-tree prompt here — creating a branch at the remote ref's commit rarely
+    /// collides with local edits, and if it does, git's own error is surfaced as-is.
+    func checkoutRemoteBranch(_ branch: GitRemoteBranch) {
+        guard let repo = currentRepository, !isSyncing else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.checkoutRemoteBranch(branch) }.value
+                self.errorMessage = nil
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            self.refreshRepositoryState()
+        }
+    }
+
     /// Matches git's checkout-blocked-by-local-changes wording (both the tracked- and
     /// untracked-file variants) so the dirty-checkout prompt only fires for that specific
     /// failure, not any other reason `checkout` might fail (bad ref, detached HEAD oddities, etc).
@@ -679,6 +770,14 @@ final class AppState {
         alert.addButton(withTitle: "Cancel")
         alert.buttons[0].hasDestructiveAction = true
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private static func showInformationalAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     func discardChanges(for file: ChangedFile) {
@@ -1333,6 +1432,8 @@ final class AppState {
         invalidateSelectionCaches()
         guard let repo = currentRepository else {
             branches = []
+            remoteOnlyBranches = []
+            defaultBranchName = nil
             commits = []
             tags = []
             changedFiles = []
@@ -1374,6 +1475,8 @@ final class AppState {
                 self.commitMessage = snapshot.mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             }
             self.branches = snapshot.branches
+            self.remoteOnlyBranches = snapshot.remoteOnlyBranches
+            self.defaultBranchName = snapshot.defaultBranchName
             self.selectedBranch = snapshot.selectedBranch
             self.isDetachedHead = snapshot.selectedBranch == nil && !snapshot.branches.isEmpty
             self.detachedHeadShortSHA = snapshot.detachedHeadShortSHA
@@ -1451,6 +1554,8 @@ final class AppState {
         let mergeMessage = repo.mergeMessage()
         do {
             let branches = try repo.branches()
+            let remoteOnlyBranches = (try? repo.remoteBranchesWithoutLocalCounterpart()) ?? []
+            let defaultBranchName = repo.defaultBranch()
             let selectedBranch = branches.first(where: { $0.isCurrent })
             let commits = selectedBranch.flatMap { try? repo.commitLog(branch: $0.name) } ?? []
             let detachedHeadShortSHA: String?
@@ -1465,6 +1570,8 @@ final class AppState {
                 isMergeInProgress: isMergeInProgress,
                 mergeMessage: mergeMessage,
                 branches: branches,
+                remoteOnlyBranches: remoteOnlyBranches,
+                defaultBranchName: defaultBranchName,
                 selectedBranch: selectedBranch,
                 detachedHeadShortSHA: detachedHeadShortSHA,
                 commits: commits,
@@ -1477,7 +1584,7 @@ final class AppState {
                 hasOriginRemote: repo.hasOriginRemote()
             )
         } catch {
-            return RepositorySnapshot(owner: owner, isMergeInProgress: isMergeInProgress, mergeMessage: mergeMessage, branches: [], selectedBranch: nil, detachedHeadShortSHA: nil, commits: [], tags: (try? repo.tags()) ?? [], aheadBehind: repo.aheadBehind(), stashCount: repo.stashCount(), stashFileCount: 0, statusEntries: (try? repo.statusEntries()) ?? [], errorMessage: error.localizedDescription, hasOriginRemote: repo.hasOriginRemote())
+            return RepositorySnapshot(owner: owner, isMergeInProgress: isMergeInProgress, mergeMessage: mergeMessage, branches: [], remoteOnlyBranches: [], defaultBranchName: repo.defaultBranch(), selectedBranch: nil, detachedHeadShortSHA: nil, commits: [], tags: (try? repo.tags()) ?? [], aheadBehind: repo.aheadBehind(), stashCount: repo.stashCount(), stashFileCount: 0, statusEntries: (try? repo.statusEntries()) ?? [], errorMessage: error.localizedDescription, hasOriginRemote: repo.hasOriginRemote())
         }
     }
 
@@ -1494,6 +1601,8 @@ final class AppState {
         var isMergeInProgress: Bool
         var mergeMessage: String?
         var branches: [GitBranch]
+        var remoteOnlyBranches: [GitRemoteBranch]
+        var defaultBranchName: String?
         var selectedBranch: GitBranch?
         var isDetachedHead: Bool
         var detachedHeadShortSHA: String?
@@ -1536,6 +1645,8 @@ final class AppState {
                 var branches: [GitBranch] = []
                 var selectedBranch: GitBranch?
                 var isDetachedHead = false
+                let remoteOnlyBranches = (try? repo.remoteBranchesWithoutLocalCounterpart()) ?? []
+                let defaultBranchName = repo.defaultBranch()
                 var detachedHeadShortSHA: String?
                 var errorMessage: String?
                 do {
@@ -1578,6 +1689,8 @@ final class AppState {
                     isMergeInProgress: isMergeInProgress,
                     mergeMessage: mergeMessage,
                     branches: branches,
+                    remoteOnlyBranches: remoteOnlyBranches,
+                    defaultBranchName: defaultBranchName,
                     selectedBranch: selectedBranch,
                     isDetachedHead: isDetachedHead,
                     detachedHeadShortSHA: detachedHeadShortSHA,
@@ -1605,6 +1718,8 @@ final class AppState {
                 self.commitMessage = snapshot.mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             }
             self.branches = snapshot.branches
+            self.remoteOnlyBranches = snapshot.remoteOnlyBranches
+            self.defaultBranchName = snapshot.defaultBranchName
             self.selectedBranch = snapshot.selectedBranch
             self.isDetachedHead = snapshot.isDetachedHead
             self.detachedHeadShortSHA = snapshot.detachedHeadShortSHA

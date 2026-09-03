@@ -544,6 +544,93 @@ private extension GitRepository.StashApplyOutcome {
         #expect(FileManager.default.fileExists(atPath: clone.url.appendingPathComponent("c.txt").path))
     }
 
+    @Test func fetchPrunesGoneUpstreamAndListsOrphanedLocals() throws {
+        let (origin, clone) = try makeRemoteSetup()
+        // Branch off, push it (so it gets an upstream), then delete it on the remote.
+        try clone.run(["checkout", "-b", "feature"])
+        try clone.write("f.txt", "1")
+        _ = try clone.commitAll("feature work")
+        try clone.run(["push", "-u", "origin", "feature"])
+        try clone.run(["checkout", "main"])
+        try TestRepo.run(["-C", origin.url.path, "branch", "-D", "feature"])
+
+        // Before fetch --prune, git still thinks origin/feature exists.
+        #expect(try clone.repo.branchesWithGoneUpstream().isEmpty)
+
+        try clone.repo.fetch()
+
+        #expect(try clone.repo.branchesWithGoneUpstream() == ["feature"])
+        // main still tracks a live origin/main, so it must not be flagged.
+        #expect(!(try clone.repo.branchesWithGoneUpstream().contains("main")))
+
+        try clone.repo.deleteBranches(named: ["feature"])
+        #expect(!(try clone.repo.branches().contains { $0.name == "feature" }))
+        #expect(try clone.repo.branchesWithGoneUpstream().isEmpty)
+    }
+
+    @Test func branchWithNoUpstreamIsNotFlaggedAsGone() throws {
+        let (_, clone) = try makeRemoteSetup()
+        // A purely local branch that was never pushed has no upstream at all — not "gone".
+        try clone.run(["branch", "local-only"])
+        #expect(try clone.repo.branchesWithGoneUpstream().isEmpty)
+    }
+
+    @Test func listsAndChecksOutRemoteOnlyBranches() throws {
+        let (origin, clone) = try makeRemoteSetup()
+        // A second clone creates two branches and pushes them; the first clone only sees them
+        // as remote-tracking refs after a fetch.
+        let secondClone = TestRepo()
+        try secondClone.run(["remote", "add", "origin", origin.url.path])
+        try secondClone.run(["fetch", "origin"])
+        try secondClone.run(["checkout", "main"])
+        try secondClone.run(["checkout", "-b", "craft-4/production"])
+        try secondClone.write("p.txt", "1")
+        _ = try secondClone.commitAll("prod")
+        try secondClone.run(["push", "-u", "origin", "craft-4/production"])
+        try secondClone.run(["checkout", "-b", "craft-4/staging", "main"])
+        try secondClone.run(["push", "-u", "origin", "craft-4/staging"])
+
+        try clone.repo.fetch()
+
+        let remoteOnly = try clone.repo.remoteBranchesWithoutLocalCounterpart()
+        #expect(remoteOnly.map(\.name) == ["craft-4/production", "craft-4/staging"])
+        #expect(remoteOnly.first?.upstreamRef == "origin/craft-4/production")
+        // `main` already has a local branch, so it must not appear; nor `origin/HEAD`.
+        #expect(!remoteOnly.contains { $0.name == "main" || $0.name == "HEAD" })
+
+        try clone.repo.checkoutRemoteBranch(remoteOnly[0])
+        let branches = try clone.repo.branches()
+        #expect(branches.first { $0.name == "craft-4/production" }?.isCurrent == true)
+        // Upstream is wired up so pull/push know where to go.
+        let upstream = try clone.run(["rev-parse", "--abbrev-ref", "craft-4/production@{upstream}"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(upstream == "origin/craft-4/production")
+        // It's no longer "remote only" now that a local branch exists.
+        #expect(!(try clone.repo.remoteBranchesWithoutLocalCounterpart().contains { $0.name == "craft-4/production" }))
+    }
+
+    @Test func defaultBranchReadsOriginHead() throws {
+        let (origin, clone) = try makeRemoteSetup()
+        // makeRemoteSetup pushes `main`; point the bare remote's HEAD at it, then re-resolve.
+        try TestRepo.run(["-C", origin.url.path, "symbolic-ref", "HEAD", "refs/heads/main"])
+        try clone.repo.fetch() // runs `git remote set-head origin --auto`
+        #expect(clone.repo.defaultBranch() == "main")
+
+        // Change the default on the remote to a different branch — a plain fetch won't notice,
+        // but fetch() re-runs set-head so Leaf keeps up.
+        try TestRepo.run(["-C", origin.url.path, "branch", "release", "refs/heads/main"])
+        try TestRepo.run(["-C", origin.url.path, "symbolic-ref", "HEAD", "refs/heads/release"])
+        try clone.repo.fetch()
+        #expect(clone.repo.defaultBranch() == "release")
+    }
+
+    @Test func defaultBranchNilWithoutRemote() throws {
+        let t = TestRepo()
+        try t.write("a.txt", "1")
+        _ = try t.commitAll("initial")
+        #expect(t.repo.defaultBranch() == nil)
+    }
+
     @Test func pushSetsUpstreamOnFirstPush() throws {
         let origin = TestRepo(bare: true)
         let local = TestRepo()

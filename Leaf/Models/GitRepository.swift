@@ -7,6 +7,16 @@ struct GitBranch: Identifiable, Hashable {
     var id: String { name }
 }
 
+/// A branch that exists on a remote but has no local branch of the same name yet. `name` is the
+/// bare branch name (`craft-4/production`); `upstreamRef` is the remote-tracking ref it would
+/// track (`origin/craft-4/production`).
+struct GitRemoteBranch: Identifiable, Hashable {
+    let name: String
+    let upstreamRef: String
+
+    var id: String { upstreamRef }
+}
+
 struct GitTag: Identifiable, Hashable {
     let name: String
     let sha: String
@@ -360,6 +370,57 @@ nonisolated struct GitRepository {
             }
     }
 
+    /// Remote branches that don't have a matching local branch yet — the candidates for "check out
+    /// a branch that only exists on the remote". `lstrip=2` drops the `refs/remotes/` prefix,
+    /// leaving `origin/craft-4/production`; the first path component is the remote name, the rest is
+    /// the branch name. `origin/HEAD` (the remote's default-branch symref) is skipped. Sorted by
+    /// branch name for a stable menu order.
+    func remoteBranchesWithoutLocalCounterpart() throws -> [GitRemoteBranch] {
+        let localNames = Set(try branches().map(\.name))
+        let output = try run(["for-each-ref", "--format=%(refname:lstrip=2)", "refs/remotes/"])
+        var seen = Set<String>()
+        return output
+            .split(separator: "\n")
+            .compactMap { line -> GitRemoteBranch? in
+                let ref = String(line)
+                let parts = ref.split(separator: "/", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                let name = String(parts[1])
+                guard name != "HEAD", !localNames.contains(name), seen.insert(name).inserted else { return nil }
+                return GitRemoteBranch(name: name, upstreamRef: ref)
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Creates a local branch tracking a remote-tracking ref and switches to it in one step
+    /// (`git checkout -b <name> --track <upstreamRef>`) — the "check out a remote-only branch"
+    /// path. `--track` is git's default when branching off a remote-tracking ref, but stating it
+    /// keeps the intent explicit and independent of `branch.autoSetupMerge` config.
+    func checkoutRemoteBranch(_ branch: GitRemoteBranch) throws {
+        try run(["checkout", "-b", branch.name, "--track", branch.upstreamRef])
+    }
+
+    /// Local branches whose configured upstream no longer exists on the remote — the remote branch
+    /// was deleted, or renamed (which git can't tell apart from a delete). `git fetch --prune`
+    /// clears the stale `origin/*` tracking ref; the local branch that pointed at it stays behind
+    /// until removed explicitly. `nobracket` makes `%(upstream:track)` emit `gone` rather than
+    /// `[gone]`. The current branch is included if it qualifies — the caller decides what to do
+    /// with it (it can't be deleted while checked out).
+    func branchesWithGoneUpstream() throws -> [String] {
+        let output = try run([
+            "for-each-ref",
+            "--format=%(refname:short)|%(upstream:track,nobracket)",
+            "refs/heads/",
+        ])
+        return output
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                let parts = line.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2, parts[1] == "gone" else { return nil }
+                return String(parts[0])
+            }
+    }
+
     func tags() throws -> [GitTag] {
         let output = try run(["for-each-ref", "--format=%(refname:short)|%(objectname)", "refs/tags/"])
         return output
@@ -580,13 +641,46 @@ nonisolated struct GitRepository {
         try run(["branch", "-D", name])
     }
 
+    /// Force-deletes several local branches in one `git branch -D`. Backs the prune-gone-branches
+    /// flow, which shows its own confirmation listing every name first. `git branch -D` reports a
+    /// per-branch error but carries on for the rest, then exits non-zero — so a partial failure
+    /// still throws, with the failing branch named in the message.
+    func deleteBranches(named names: [String]) throws {
+        guard !names.isEmpty else { return }
+        try run(["branch", "-D"] + names)
+    }
+
     /// Short SHA of HEAD, used to label a detached-HEAD state since there's no branch name to show.
     func currentHEADShortSHA() -> String? {
         (try? run(["rev-parse", "--short", "HEAD"]))?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// `--prune`: drop remote-tracking refs (`origin/*`) for branches that no longer exist on the
+    /// remote, so a branch deleted or renamed on the server stops lingering in Leaf's lists. Local
+    /// branches that were tracking a now-pruned ref are left alone (git never deletes those on a
+    /// fetch) — `branchesWithGoneUpstream()` surfaces them for the prune-branches menu action.
     func fetch() throws {
-        try run(["fetch"])
+        try run(["fetch", "--prune"])
+        // Refresh `origin/HEAD` (the remote's default-branch pointer) — a plain fetch never
+        // corrects it once it's set, so a default-branch change on the server would otherwise go
+        // unnoticed. Best effort: needs its own network round trip and silently no-ops on a
+        // remote that doesn't advertise HEAD.
+        _ = try? runRaw(["remote", "set-head", "origin", "--auto"])
+    }
+
+    /// The remote's default branch, read from the local `origin/HEAD` symref. This is git's own
+    /// host-agnostic mechanism: `git clone` seeds `origin/HEAD` from whatever the remote advertises
+    /// as its HEAD, and GitHub, GitLab, Bitbucket, Gitea and a plain bare repo all expose that.
+    /// `fetch()` runs `git remote set-head origin --auto` to keep it current. Returns the short
+    /// branch name (`main`), or nil when `origin/HEAD` isn't set (no `origin`, or never resolved).
+    func defaultBranch() -> String? {
+        guard let ref = try? run(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]) else {
+            return nil
+        }
+        let prefix = "refs/remotes/origin/"
+        let trimmed = ref.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix(prefix) else { return nil }
+        return String(trimmed.dropFirst(prefix.count))
     }
 
     /// `--no-rebase`: a plain `git pull` on a repo/user with no `pull.rebase`/`pull.ff` config set

@@ -148,25 +148,59 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
 private struct BranchMenuToolbarView: View {
     @Bindable var appState: AppState
 
+    /// The default branch (`origin/HEAD`) resolved against the local branch list — nil when it
+    /// isn't known or has no local branch, in which case every local branch just goes in the
+    /// main section.
+    private var defaultBranch: GitBranch? {
+        guard let name = appState.defaultBranchName else { return nil }
+        return appState.branches.first { $0.name == name }
+    }
+
+    private var otherLocalBranches: [GitBranch] {
+        guard let defaultName = defaultBranch?.name else { return appState.branches }
+        return appState.branches.filter { $0.name != defaultName }
+    }
+
     var body: some View {
         Menu {
-            Button("New Branch…") { appState.isNewBranchSheetPresented = true }
-                .disabled(appState.selectedRepoURL == nil)
+            if let defaultBranch {
+                Section("Default Branch") {
+                    branchRow(defaultBranch)
+                }
+                Section {
+                    ForEach(otherLocalBranches) { branchRow($0) }
+                }
+            } else {
+                Section {
+                    ForEach(appState.branches) { branchRow($0) }
+                }
+            }
 
-            Divider()
-
-            ForEach(appState.branches) { branch in
-                if branch.isCurrent {
-                    Label(branch.name, systemImage: "checkmark")
-                } else {
-                    Menu(branch.name) {
-                        Button("Checkout") { appState.selectBranch(branch) }
-                        Button("Merge into \(branchLabelText)") { appState.mergeBranch(branch) }
-                            .disabled(appState.isSyncing || appState.isMergeInProgress)
-                        Divider()
-                        Button("Delete", role: .destructive) { appState.deleteBranch(branch) }
+            if !appState.remoteOnlyBranches.isEmpty {
+                Section {
+                    Menu("Remote Branches") {
+                        ForEach(appState.remoteOnlyBranches) { branch in
+                            Button(branch.name) { appState.checkoutRemoteBranch(branch) }
+                        }
                     }
                 }
+            }
+
+            Section {
+                Button {
+                    appState.isNewBranchSheetPresented = true
+                } label: {
+                    Label("New Branch…", systemImage: "plus")
+                }
+                .disabled(appState.selectedRepoURL == nil)
+
+                Button {
+                    appState.pruneGoneBranches()
+                } label: {
+                    Label("Prune Deleted Branches…", systemImage: "trash")
+                }
+                .disabled(appState.selectedRepoURL == nil || appState.isSyncing)
+                .help("Fetch from the remote, then delete local branches that no longer exist there")
             }
         } label: {
             HStack(spacing: 4) {
@@ -183,6 +217,24 @@ private struct BranchMenuToolbarView: View {
         .menuStyle(.button)
         .buttonStyle(.glass)
         .disabled(appState.branches.isEmpty)
+    }
+
+    /// One branch entry: a checkmark label when it's the checked-out branch, otherwise a submenu
+    /// with the checkout/merge/delete actions. Shared by the default-branch and other-branches
+    /// sections so both behave identically.
+    @ViewBuilder
+    private func branchRow(_ branch: GitBranch) -> some View {
+        if branch.isCurrent {
+            Label(branch.name, systemImage: "checkmark")
+        } else {
+            Menu(branch.name) {
+                Button("Checkout") { appState.selectBranch(branch) }
+                Button("Merge into \(branchLabelText)") { appState.mergeBranch(branch) }
+                    .disabled(appState.isSyncing || appState.isMergeInProgress)
+                Divider()
+                Button("Delete", role: .destructive) { appState.deleteBranch(branch) }
+            }
+        }
     }
 
     private var branchLabelText: String {
