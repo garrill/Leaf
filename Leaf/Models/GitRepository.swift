@@ -601,12 +601,18 @@ nonisolated struct GitRepository {
     /// Pushes the current branch, setting up its upstream on the first push if none exists yet.
     /// `--progress` forces git to emit its normal progress meter even though stderr here is a pipe,
     /// not a tty (git otherwise suppresses it), which `progress` receives one line at a time.
-    func push(branch: String, progress: (@Sendable (String) -> Void)? = nil) throws {
+    func push(branch: String, includeTags: Bool = false, progress: (@Sendable (String) -> Void)? = nil) throws {
         do {
             try run(["push", "--progress"], progress: progress)
         } catch let GitError.commandFailed(message) where message.contains("has no upstream branch") {
             try run(["push", "--progress", "--set-upstream", "origin", branch], progress: progress)
         }
+        // Tags are a separate push: Leaf makes *lightweight* tags, which `--follow-tags` skips,
+        // so the only way to carry them is an explicit `--tags`. Run it after the branch push
+        // (a no-op "Everything up-to-date" when nothing's new) and only when local tags exist,
+        // to skip a pointless second round-trip on repos that don't use tags.
+        guard includeTags, let tags = try? tags(), !tags.isEmpty else { return }
+        try run(["push", "--progress", "origin", "--tags"], progress: progress)
     }
 
     /// Combined status for the sidebar's per-repo status icon — count of files with uncommitted

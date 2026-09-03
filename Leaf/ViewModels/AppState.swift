@@ -1090,7 +1090,7 @@ final class AppState {
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try repo.push(branch: branch) { [weak self] line in
+                    try repo.push(branch: branch, includeTags: true) { [weak self] line in
                         Task { @MainActor [weak self] in
                             self?.pushProgressText = Self.formatProgressLine(line)
                         }
