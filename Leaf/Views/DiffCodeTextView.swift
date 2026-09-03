@@ -51,6 +51,28 @@ final class DiffCodeTextView: NSTextView {
     /// view's own attributed string (see the "Diff pane" gotcha in CLAUDE.md).
     private(set) var bodyFontSize: CGFloat = NSFont.systemFontSize
 
+    /// Find-in-diff render state, pushed in by `DiffCodeContainerView.updateSearch`. When
+    /// `isSearchActive`, `draw(_:)` fills a rounded rect behind every match, dims everything
+    /// outside the matches, and paints the current match a stronger colour with forced-dark text.
+    private(set) var isSearchActive = false
+    private(set) var searchMatchRanges: [NSRange] = []
+    private(set) var searchCurrentMatchIndex = 0
+    /// 0→1 progress of the current match's "found" flash, replayed whenever the *range* it points
+    /// at changes — a new query, ⌘G/⌘⇧G, or the bar just opening — so it plays once per actual
+    /// jump rather than once per keystroke that leaves it in place. The fill fades in over this;
+    /// the ~1.2x scale "pop" is a `sin` bump over it, rendered by `DiffSearchDimOverlayView` (on
+    /// top of the dim) so the yellow box and text scale together and neither gets dimmed.
+    private(set) var searchAnimationProgress: CGFloat = 1
+    private var searchAnimationTimer: Timer?
+    private var lastAnimatedMatchRange: NSRange?
+    private static let searchAnimationDuration: CGFloat = 0.22
+    /// Called ~60×/s while the flash animates, so the overlay can redraw the scaled pop in step.
+    var onSearchAnimationFrame: (() -> Void)?
+
+    deinit {
+        searchAnimationTimer?.invalidate()
+    }
+
     /// Floor for the text container's wrap width. `NSTextContainer` treats a width of 0 (or
     /// close to it) as effectively unbounded — each line lays out as one long fragment instead of
     /// wrapping — so as the diff column is squeezed down to nothing, wrapping would silently stop
@@ -214,7 +236,245 @@ final class DiffCodeTextView: NSTextView {
                 fillRect.fill()
             }
         }
+
+        // Only the current match's settled fill is drawn here (behind the glyphs). The dim +
+        // non-current outlines + the scale "pop" are a separate top-most overlay
+        // (`DiffSearchDimOverlayView`) spanning the gutter too, so there's no seam at the
+        // gutter/text boundary and the pop is never dimmed.
+        drawSearchMatchFills(dirtyRect)
         super.draw(dirtyRect)
+    }
+
+    /// The strong rounded fill behind the *current* match, at rest — painted before the glyphs so
+    /// the (forced-dark) text sits on top of it. Fades in over `searchAnimationProgress`. During
+    /// the pop this is hidden under the overlay's scaled copy; once settled it's what shows.
+    private func drawSearchMatchFills(_ dirtyRect: NSRect) {
+        guard isSearchActive, searchMatchRanges.indices.contains(searchCurrentMatchIndex) else { return }
+        let eased = Self.easeOut(searchAnimationProgress)
+        DiffView.searchCurrentMatchNSColor.withAlphaComponent(DiffView.searchCurrentMatchNSColor.alphaComponent * eased).setFill()
+        for rect in searchMatchBoundingRects(for: searchMatchRanges[searchCurrentMatchIndex]) where rect.intersects(dirtyRect) {
+            NSBezierPath(roundedRect: rect.insetBy(dx: -3, dy: -2), xRadius: 4, yRadius: 4).fill()
+        }
+    }
+
+    static func easeOut(_ t: CGFloat) -> CGFloat {
+        1 - pow(1 - t, 3)
+    }
+
+    /// Restarts the "found" flash from scratch. ~60Hz fixed-step timer rather than a display-link
+    /// or `CACurrentMediaTime` — simple, and more than smooth enough for a 0.22s fade.
+    private func startSearchAnimation() {
+        searchAnimationTimer?.invalidate()
+        searchAnimationProgress = 0
+        let interval: CGFloat = 1.0 / 60.0
+        let step = interval / Self.searchAnimationDuration
+        let timer = Timer(timeInterval: TimeInterval(interval), repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            self.searchAnimationProgress = min(1, self.searchAnimationProgress + step)
+            self.needsDisplay = true
+            self.onSearchAnimationFrame?()
+            if self.searchAnimationProgress >= 1 {
+                timer.invalidate()
+                self.searchAnimationTimer = nil
+            }
+        }
+        searchAnimationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Bounding rects (this view's coords) for every match whose text is within `band`, tagged
+    /// with whether it's the current one. Used by `DiffSearchDimOverlayView`.
+    func visibleSearchMatchRects(in band: NSRect) -> [(isCurrent: Bool, rects: [NSRect])] {
+        guard isSearchActive, !searchMatchRanges.isEmpty, let layoutManager, let textContainer else { return [] }
+        let padded = band.insetBy(dx: 0, dy: -HunkSeparatorOverlayView.gapHeight)
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: padded, in: textContainer)
+        let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        let stringLength = (string as NSString).length
+        var result: [(Bool, [NSRect])] = []
+        for (index, range) in searchMatchRanges.enumerated() {
+            guard NSMaxRange(range) <= stringLength else { continue }
+            let onScreen = NSIntersectionRange(range, charRange).length > 0 || range.location == NSMaxRange(charRange)
+            guard onScreen else { continue }
+            let rects = searchMatchBoundingRects(for: range).filter { $0.intersects(band) }
+            if !rects.isEmpty { result.append((index == searchCurrentMatchIndex, rects)) }
+        }
+        return result
+    }
+}
+
+/// Collapses any intersecting rects into their bounding union, iterating to a fixed point — so
+/// two adjacent matches whose inflated rects overlap punch one disjoint hole in the dim's
+/// even-odd clip instead of re-darkening the overlap.
+func diffSearchMergedRects(_ rects: [NSRect]) -> [NSRect] {
+    var result: [NSRect] = []
+    for rect in rects {
+        var union = rect
+        var index = 0
+        while index < result.count {
+            if result[index].intersects(union) {
+                union = result[index].union(union)
+                result.remove(at: index)
+                index = 0
+            } else {
+                index += 1
+            }
+        }
+        result.append(union)
+    }
+    return result
+}
+
+/// Top-most overlay across the whole `DiffCodeContainerView` (gutter + code), so the find-in-diff
+/// dim is one continuous surface with no seam at the gutter/text boundary. Darkens everything
+/// except the matches (light mode only — `searchDimNSColor` is clear in dark), and outlines the
+/// non-current matches. The *current* match's fill is still drawn behind the glyphs in
+/// `DiffCodeTextView` so its text stays on top.
+final class DiffSearchDimOverlayView: NSView {
+    weak var codeTextView: DiffCodeTextView?
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let textView = codeTextView,
+              textView.isSearchActive,
+              !textView.searchMatchRanges.isEmpty else { return }
+
+        // Match rects come from the text view; shift into overlay (== container) coords.
+        let offsetX = DiffGutterView.totalWidth
+        let bandInTextView = dirtyRect.offsetBy(dx: -offsetX, dy: 0)
+        let matches = textView.visibleSearchMatchRects(in: bandInTextView)
+
+        var holes: [NSRect] = []
+        for (_, rects) in matches {
+            for rect in rects {
+                holes.append(rect.offsetBy(dx: offsetX, dy: 0).insetBy(dx: -2, dy: -1))
+            }
+        }
+        holes = diffSearchMergedRects(holes)
+
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if !isDark {
+            let band = NSRect(x: 0, y: dirtyRect.minY, width: bounds.width, height: dirtyRect.height)
+            let scrim = NSBezierPath(rect: band)
+            for hole in holes {
+                scrim.append(NSBezierPath(roundedRect: hole, xRadius: 4, yRadius: 4))
+            }
+            scrim.windingRule = .evenOdd
+            NSGraphicsContext.saveGraphicsState()
+            scrim.addClip()
+            DiffView.searchDimNSColor.setFill()
+            band.fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
+
+        DiffView.searchMatchOutlineNSColor.setStroke()
+        for (isCurrent, rects) in matches where !isCurrent {
+            for rect in rects {
+                let outline = NSBezierPath(roundedRect: rect.offsetBy(dx: offsetX, dy: 0).insetBy(dx: -1.5, dy: -0.5), xRadius: 3.5, yRadius: 3.5)
+                outline.lineWidth = 1
+                outline.stroke()
+            }
+        }
+
+        drawCurrentMatchPop(textView: textView, offsetX: offsetX, dirtyRect: dirtyRect)
+    }
+
+    /// The "found" pop: the current match's yellow box + glyphs, redrawn here (on top of the dim)
+    /// as one unit scaled ~1.2x→1x around its centre. The opaque fill covers the settled 1x copy
+    /// underneath, so there's no ghosted original text. Skipped once settled and for the rare
+    /// wrapped match.
+    private func drawCurrentMatchPop(textView: DiffCodeTextView, offsetX: CGFloat, dirtyRect: NSRect) {
+        guard textView.searchAnimationProgress < 1,
+              textView.searchMatchRanges.indices.contains(textView.searchCurrentMatchIndex),
+              let layoutManager = textView.layoutManager else { return }
+        let pop = sin(min(textView.searchAnimationProgress, 1) * .pi)
+        guard pop > 0.01 else { return }
+        let scale = 1 + 0.2 * pop
+
+        let range = textView.searchMatchRanges[textView.searchCurrentMatchIndex]
+        let rects = textView.searchMatchBoundingRects(for: range)
+        guard rects.count == 1, let base = rects.first else { return }
+        let rect = base.offsetBy(dx: offsetX, dy: 0)
+        guard rect.insetBy(dx: -rect.width * 0.25, dy: -rect.height * 0.25).intersects(dirtyRect) else { return }
+
+        let center = NSPoint(x: rect.midX, y: rect.midY)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let glyphOrigin = NSPoint(x: textView.textContainerOrigin.x + offsetX, y: textView.textContainerOrigin.y)
+
+        NSGraphicsContext.saveGraphicsState()
+        let transform = NSAffineTransform()
+        transform.translateX(by: center.x, yBy: center.y)
+        transform.scale(by: scale)
+        transform.translateX(by: -center.x, yBy: -center.y)
+        transform.concat()
+
+        DiffView.searchCurrentMatchNSColor.withAlphaComponent(1).setFill()
+        NSBezierPath(roundedRect: rect.insetBy(dx: -3, dy: -2), xRadius: 4, yRadius: 4).fill()
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: glyphOrigin)
+
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
+extension DiffCodeTextView {
+    /// Push new find-in-diff state (dedupe happens one level up, in `updateSearch`). Returns
+    /// whether a match is available to scroll to.
+    @discardableResult
+    func applySearch(active: Bool, matchRanges: [NSRange], currentIndex: Int) -> Bool {
+        isSearchActive = active
+        searchMatchRanges = matchRanges
+        searchCurrentMatchIndex = currentIndex
+        refreshCurrentMatchTextColor()
+
+        // Replay the "found" flash only when the current match's actual range changed — a new
+        // query, ⌘G/⌘⇧G, or the bar just opening — not on every keystroke that happens to leave
+        // it pointing at the same spot.
+        let currentRange = matchRanges.indices.contains(currentIndex) ? matchRanges[currentIndex] : nil
+        if active, let currentRange {
+            if currentRange != lastAnimatedMatchRange {
+                lastAnimatedMatchRange = currentRange
+                startSearchAnimation()
+            }
+        } else {
+            lastAnimatedMatchRange = nil
+            searchAnimationTimer?.invalidate()
+            searchAnimationTimer = nil
+            searchAnimationProgress = 1
+        }
+
+        needsDisplay = true
+        return active && !matchRanges.isEmpty
+    }
+
+    /// Forces the current match's glyphs to a fixed dark colour (layout-manager temporary
+    /// attribute, so the permanent syntax/diff colours are untouched) — otherwise pale label text
+    /// on the strong yellow fill is unreadable.
+    private func refreshCurrentMatchTextColor() {
+        guard let layoutManager else { return }
+        let fullRange = NSRange(location: 0, length: (string as NSString).length)
+        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
+        guard isSearchActive, searchMatchRanges.indices.contains(searchCurrentMatchIndex) else { return }
+        let range = searchMatchRanges[searchCurrentMatchIndex]
+        guard NSMaxRange(range) <= fullRange.length else { return }
+        layoutManager.addTemporaryAttribute(.foregroundColor, value: DiffView.searchCurrentMatchTextNSColor, forCharacterRange: range)
+    }
+
+    /// Enclosing rects for a character range, in this view's coordinates (offset by the text
+    /// container origin). More than one when the match wraps a line.
+    func searchMatchBoundingRects(for range: NSRange) -> [NSRect] {
+        guard let layoutManager, let textContainer else { return [] }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let origin = textContainerOrigin
+        var rects: [NSRect] = []
+        layoutManager.enumerateEnclosingRects(
+            forGlyphRange: glyphRange,
+            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+            in: textContainer
+        ) { rect, _ in
+            rects.append(rect.offsetBy(dx: origin.x, dy: origin.y))
+        }
+        return rects
     }
 }
 
@@ -442,6 +702,7 @@ final class DiffCodeContainerView: NSView {
     let textView = DiffCodeTextView.makeLegacyTextKit1()
     let gutterView = DiffGutterView()
     let hunkSeparatorView = HunkSeparatorOverlayView()
+    let searchDimOverlay = DiffSearchDimOverlayView()
     /// What `setContent` last actually applied — `DiffCodeScrollView.updateNSView` runs on
     /// *every* SwiftUI update of this view (scroll position changes, hover state, unrelated
     /// parent re-renders, etc.), not just ones where the diff itself changed. Without this,
@@ -454,14 +715,21 @@ final class DiffCodeContainerView: NSView {
     /// highlighting finishes arriving late for the *same* file, which must not reset scroll
     /// position out from under someone already reading further down.
     private var lastSelectionKey: DiffSelectionKey?
+    /// What `updateSearch` last pushed, so an unrelated `updateNSView` doesn't re-scroll to the
+    /// current match.
+    private var lastSearchKey: DiffSearchRenderKey?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         gutterView.codeTextView = textView
         hunkSeparatorView.codeTextView = textView
+        searchDimOverlay.codeTextView = textView
+        // Redraw the overlay's scaled "pop" in step with the text view's flash timer.
+        textView.onSearchAnimationFrame = { [weak searchDimOverlay] in searchDimOverlay?.needsDisplay = true }
         addSubview(gutterView)
         addSubview(textView)
         addSubview(hunkSeparatorView)
+        addSubview(searchDimOverlay)
     }
 
     required init?(coder: NSCoder) {
@@ -477,6 +745,7 @@ final class DiffCodeContainerView: NSView {
         let textWidth = max(bounds.width - gutterWidth, 0)
         textView.frame = NSRect(x: gutterWidth, y: 0, width: textWidth, height: bounds.height)
         hunkSeparatorView.frame = bounds
+        searchDimOverlay.frame = bounds
     }
 
     func fittingHeight(forWidth width: CGFloat) -> CGFloat {
@@ -495,6 +764,27 @@ final class DiffCodeContainerView: NSView {
         needsLayout = true
         gutterView.needsDisplay = true
         hunkSeparatorView.needsDisplay = true
+        searchDimOverlay.needsDisplay = true
+        // Text storage was replaced — the current-match temporary attribute is gone; re-push
+        // whatever search state we hold onto the fresh content.
+        lastSearchKey = nil
+    }
+
+    /// Push find-in-diff state to the text view and scroll the current match into view when it
+    /// (or the match set / active flag) changed. A `nil` `lastSearchKey` (just after `setContent`
+    /// replaced the text) forces a re-apply but suppresses the scroll — the fresh file is already
+    /// parked at the top by `resetScrollIfSelectionChanged`.
+    func updateSearch(active: Bool, matchRanges: [NSRange], currentIndex: Int) {
+        let key = DiffSearchRenderKey(active: active, matchRanges: matchRanges, currentIndex: currentIndex)
+        let forced = lastSearchKey == nil
+        guard forced || key != lastSearchKey else { return }
+        lastSearchKey = key
+        let shouldScroll = textView.applySearch(active: active, matchRanges: matchRanges, currentIndex: currentIndex)
+        gutterView.needsDisplay = true
+        searchDimOverlay.needsDisplay = true
+        if !forced, shouldScroll, matchRanges.indices.contains(currentIndex) {
+            textView.scrollRangeToVisible(matchRanges[currentIndex])
+        }
     }
 
     /// Selecting a different file (or the same file under a different commit/source) resets
@@ -513,6 +803,14 @@ final class DiffCodeContainerView: NSView {
 struct DiffSelectionKey: Equatable {
     let filePath: String?
     let source: ChangeSource?
+}
+
+/// What `DiffCodeContainerView.updateSearch` last applied — lets an unrelated `updateNSView`
+/// (scroll, hover, parent re-render) skip re-pushing identical search state and re-scrolling.
+private struct DiffSearchRenderKey: Equatable {
+    let active: Bool
+    let matchRanges: [NSRange]
+    let currentIndex: Int
 }
 
 /// Identifies what's currently painted in a `DiffCodeContainerView` well enough to know when a
@@ -550,6 +848,12 @@ struct DiffCodeScrollView: NSViewRepresentable {
     let highlightSnapshot: HighlightSnapshot?
     let diffText: String
     var fontSize: CGFloat = NSFont.systemFontSize
+    /// Find-in-diff render state (see `DiffSearchBar` / `AppState.diffFind*` / `DiffView`). The
+    /// ranges are character offsets into the rendered text, which is exactly
+    /// `lines.map(\.displayText).joined("\n")`.
+    var searchActive = false
+    var searchMatchRanges: [NSRange] = []
+    var searchCurrentIndex = 0
 
     /// The gap painted between consecutive hunks — shared with `HunkSeparatorOverlayView`, which
     /// has to correct for this same amount when locating a hunk's top boundary rule.
@@ -560,6 +864,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
         container.textView.appState = appState
         configure(textView: container.textView)
         updateContent(container: container)
+        container.updateSearch(active: searchActive, matchRanges: searchMatchRanges, currentIndex: searchCurrentIndex)
         container.resetScrollIfSelectionChanged(DiffSelectionKey(filePath: appState.selectedFile?.path, source: appState.selectedSource))
         return container
     }
@@ -567,12 +872,15 @@ struct DiffCodeScrollView: NSViewRepresentable {
     func updateNSView(_ container: DiffCodeContainerView, context: Context) {
         container.textView.appState = appState
         updateContent(container: container)
+        container.updateSearch(active: searchActive, matchRanges: searchMatchRanges, currentIndex: searchCurrentIndex)
         container.resetScrollIfSelectionChanged(DiffSelectionKey(filePath: appState.selectedFile?.path, source: appState.selectedSource))
 
         // Cross-column arrow-key navigation landed here from another column (`focusedColumn ==
         // .diff`) — claim real AppKit keyboard focus to match, the same way
-        // `SidebarViewController.handleStateChange` does for the repos column.
-        if appState.focusedColumn == .diff,
+        // `SidebarViewController.handleStateChange` does for the repos column. Skipped while the
+        // find bar is up: this runs on every unrelated `updateNSView` (e.g. the per-keystroke
+        // match rescan), and would otherwise yank first responder off the search field on each key.
+        if appState.focusedColumn == .diff, !appState.diffFindBarVisible,
            container.textView.window?.firstResponder !== container.textView {
             container.textView.window?.makeFirstResponder(container.textView)
         }

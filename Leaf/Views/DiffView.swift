@@ -45,6 +45,9 @@ struct DiffView: View {
     /// `header`'s `addedCount`/`removedCount` and `content`'s `DiffCodeScrollView` construction
     /// each independently re-parsed the same text on every single render.
     @State private var diffLines: [DiffLine] = []
+    /// Hoisted out of `DiffSearchBar` — a child's own `@FocusState` gets dropped when SwiftUI
+    /// rebuilds the `.safeAreaBar` content. Driven true on ⌘F via `diffFindFocusRequest`.
+    @FocusState private var searchFieldFocused: Bool
 
     static let paneBackgroundNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -96,6 +99,23 @@ struct DiffView: View {
             : NSColor(srgbRed: 0.5490, green: 0.0196, blue: 0.0196, alpha: 0.30)
     }
 
+    /// Find-in-diff. The current match gets a strong yellow fill + forced-dark glyph colour.
+    /// Non-current matches get no fill — they punch through the dim so their real row background
+    /// (green / red / pane) shows — plus a thin neutral outline so they stay findable. The dim
+    /// darkens the rest, in light mode only (clear in dark).
+    static let searchCurrentMatchNSColor = NSColor.systemYellow.withAlphaComponent(0.92)
+    static let searchCurrentMatchTextNSColor = NSColor(srgbRed: 0.12, green: 0.10, blue: 0.02, alpha: 1)
+    static let searchMatchOutlineNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor.labelColor.withAlphaComponent(0.45)
+            : NSColor.labelColor.withAlphaComponent(0.35)
+    }
+    static let searchDimNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor.clear
+            : NSColor.black.withAlphaComponent(0.14)
+    }
+
     static func borderNSColor(for kind: DiffLine.Kind) -> NSColor {
         switch kind {
         case .added: return addedBorderNSColor
@@ -134,10 +154,28 @@ struct DiffView: View {
 
     var body: some View {
         content
-            .scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
             .safeAreaBar(edge: .top, spacing: 0) { header }
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                // A stable wrapper: the `.safeAreaBar` closure always returns this one view, so a
+                // `DiffView.body` re-render never rebuilds the bar subtree (which would drop the
+                // search field's focus). The show/hide `if` lives inside the wrapper's body.
+                DiffSearchBarSlot(appState: appState, fieldFocused: $searchFieldFocused)
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Self.paneBackgroundColor)
+            // Focus assertions only — the match scan lives in `DiffScrollContent` so keystrokes
+            // never re-render `DiffView.body` (which would rebuild the `.safeAreaBar` and drop the
+            // field's focus).
+            .onChange(of: appState.diffFindBarVisible) { _, visible in
+                if visible {
+                    appState.diffFindCurrentIndex = 0
+                    DispatchQueue.main.async { searchFieldFocused = true }
+                }
+            }
+            .onChange(of: appState.diffFindFocusRequest) { _, _ in
+                searchFieldFocused = true
+            }
             // Cross-column focus (`AppState.focusedColumn`) is tracked here purely for the visual
             // outline — real AppKit keyboard focus lives on the actual `DiffCodeTextView` instead
             // (see `DiffCodeScrollView.updateNSView`/`DiffCodeTextView.becomeFirstResponder`), so
@@ -160,6 +198,7 @@ struct DiffView: View {
             }
             .onChange(of: DiffParseKey(diffText: appState.diffText, isConflicted: appState.selectedFile?.status == .conflicted), initial: true) { _, key in
                 diffLines = key.isConflicted ? Self.parsePlainText(key.diffText) : Self.parse(key.diffText)
+                appState.diffFindCurrentIndex = 0
             }
     }
 
@@ -226,23 +265,20 @@ struct DiffView: View {
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
-            ScrollView {
-                DiffCodeScrollView(appState: appState, lines: diffLines, highlightSnapshot: highlightSnapshot, diffText: appState.diffText, fontSize: CGFloat(diffFontSize))
-                    .frame(maxWidth: .infinity)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark, enabled: syntaxHighlightingEnabled)) {
-                // Skip the highlight pass entirely when disabled, rather than running it and
-                // discarding the result at render time — this is the "optimise for speed" half of
-                // the toggle: no JSC round-trip, no `refreshHighlighting`'s deliberate 80ms settle
-                // delay, and `DiffCodeScrollView.buildContent` never waits on a snapshot that would
-                // otherwise still need to arrive before it can paint colors.
-                guard syntaxHighlightingEnabled else {
-                    highlightSnapshot = nil
-                    return
+            DiffScrollContent(appState: appState, lines: diffLines, highlightSnapshot: highlightSnapshot, fontSize: CGFloat(diffFontSize))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark, enabled: syntaxHighlightingEnabled)) {
+                    // Skip the highlight pass entirely when disabled, rather than running it and
+                    // discarding the result at render time — this is the "optimise for speed" half
+                    // of the toggle: no JSC round-trip, no `refreshHighlighting`'s deliberate 80ms
+                    // settle delay, and `DiffCodeScrollView.buildContent` never waits on a snapshot
+                    // that would otherwise still need to arrive before it can paint colors.
+                    guard syntaxHighlightingEnabled else {
+                        highlightSnapshot = nil
+                        return
+                    }
+                    await refreshHighlighting()
                 }
-                await refreshHighlighting()
-            }
         }
     }
 
@@ -542,5 +578,92 @@ private struct HighlightRequest: Equatable {
     let diffText: String
     let isDark: Bool
     let enabled: Bool
+}
+
+/// The scrolling diff body, split out of `DiffView` so the find-in-diff match scan lives here:
+/// every keystroke re-renders *this* view (cheap — one `NSViewRepresentable`), not `DiffView`,
+/// so the bottom `.safeAreaBar` isn't rebuilt and `DiffSearchBar`'s field keeps focus.
+private struct DiffScrollContent: View {
+    @Bindable var appState: AppState
+    let lines: [DiffLine]
+    let highlightSnapshot: HighlightSnapshot?
+    let fontSize: CGFloat
+
+    @State private var matchRanges: [NSRange] = []
+
+    var body: some View {
+        ScrollView {
+            DiffCodeScrollView(
+                appState: appState,
+                lines: lines,
+                highlightSnapshot: highlightSnapshot,
+                diffText: appState.diffText,
+                fontSize: fontSize,
+                searchActive: appState.diffFindBarVisible,
+                searchMatchRanges: matchRanges,
+                searchCurrentIndex: appState.diffFindCurrentIndex
+            )
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onChange(of: ScanKey(query: appState.diffFindQuery, ignoreCase: appState.diffFindIgnoreCase, mode: appState.diffFindMode, barVisible: appState.diffFindBarVisible, lineCount: lines.count), initial: true) { _, _ in
+            rescan()
+        }
+    }
+
+    private struct ScanKey: Equatable {
+        let query: String
+        let ignoreCase: Bool
+        let mode: DiffFindMode
+        let barVisible: Bool
+        let lineCount: Int
+    }
+
+    /// Rescans the rendered diff text (`lines.map(\.displayText).joined("\n")`, exactly what
+    /// `DiffCodeTextView` holds) and writes the count / clamps the current index on `AppState`.
+    /// Non-overlapping.
+    private func rescan() {
+        let query = appState.diffFindQuery
+        guard appState.diffFindBarVisible, !query.isEmpty else {
+            matchRanges = []
+            appState.diffFindMatchCount = 0
+            return
+        }
+        let text = lines.map(\.displayText).joined(separator: "\n") as NSString
+        var options: NSString.CompareOptions = [.literal]
+        if appState.diffFindIgnoreCase { options.insert(.caseInsensitive) }
+        let mode = appState.diffFindMode
+
+        var ranges: [NSRange] = []
+        var start = 0
+        while start < text.length {
+            let found = text.range(of: query, options: options, range: NSRange(location: start, length: text.length - start))
+            guard found.location != NSNotFound else { break }
+            if Self.matchPasses(found, mode: mode, in: text) {
+                ranges.append(found)
+            }
+            start = found.location + max(found.length, 1)
+        }
+
+        matchRanges = ranges
+        appState.diffFindMatchCount = ranges.count
+        if appState.diffFindCurrentIndex >= ranges.count {
+            appState.diffFindCurrentIndex = 0
+        }
+    }
+
+    private static func matchPasses(_ range: NSRange, mode: DiffFindMode, in text: NSString) -> Bool {
+        switch mode {
+        case .contains: return true
+        case .startsWith: return wordBoundary(text, range.location - 1)
+        case .fullWord: return wordBoundary(text, range.location - 1) && wordBoundary(text, NSMaxRange(range))
+        }
+    }
+
+    private static func wordBoundary(_ text: NSString, _ index: Int) -> Bool {
+        guard index >= 0, index < text.length else { return true }
+        guard let scalar = Unicode.Scalar(text.character(at: index)) else { return true }
+        return !(CharacterSet.alphanumerics.contains(scalar) || scalar == "_")
+    }
 }
 
