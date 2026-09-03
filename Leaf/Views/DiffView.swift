@@ -177,19 +177,14 @@ struct DiffView: View {
                 searchFieldFocused = true
             }
             // Cross-column focus (`AppState.focusedColumn`) is tracked here purely for the visual
-            // outline — real AppKit keyboard focus lives on the actual `DiffCodeTextView` instead
+            // treatment — real AppKit keyboard focus lives on the actual `DiffCodeTextView` instead
             // (see `DiffCodeScrollView.updateNSView`/`DiffCodeTextView.becomeFirstResponder`), so
             // up/down, page up/down, home/end, etc. all come from `NSTextView`'s own standard key
             // bindings rather than being hand-rolled here. A `.focusable()`/`.focused()` pair tied
             // to the same `appState.focusedColumn` doesn't work for this: it would fight over real
             // first-responder status with the text view (only one of the two can actually hold
-            // it), so the ring is drawn manually instead, off the same already-shared state.
-            .overlay {
-                if appState.focusedColumn == .diff {
-                    Rectangle()
-                        .strokeBorder(Color.accentColor, lineWidth: 2)
-                }
-            }
+            // it). Rather than a ring around the whole pane, the focused state is shown by tinting
+            // the file icon + name in `header` (see `pathAndFileName(focused:)`).
             // Keyed on both the file and the source (the same file can be selected across
             // different commits) — SwiftUI cancels/restarts this automatically on change, same
             // as `ChangedFilesView`'s load, so the file-list selection is never waiting on this.
@@ -287,14 +282,26 @@ struct DiffView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
             if appState.selectedFile != nil {
-                Image(systemName: "doc.text")
-                    .foregroundStyle(.secondary)
+                let focused = appState.focusedColumn == .diff
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.text")
+                        .foregroundStyle(focused ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
 
-                pathAndFileName
-                    .font(.system(.body))
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                    .truncationTooltip(appState.selectedFile?.path ?? "")
+                    pathAndFileName(focused: focused)
+                        .font(.system(.body))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .truncationTooltip(appState.selectedFile?.path ?? "")
+                }
+                .padding(.horizontal, focused ? 7 : 0)
+                .padding(.vertical, focused ? 3 : 0)
+                .background {
+                    if focused {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.accentColor)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.15), value: focused)
             }
 
             Spacer(minLength: 8)
@@ -317,11 +324,15 @@ struct DiffView: View {
         .frame(height: ColumnLayout.headerHeight)
     }
 
-    /// Directory in secondary/grey, file name in primary/black, on one line.
-    private var pathAndFileName: Text {
-        let name = Text(fileName).foregroundColor(.primary)
+    /// Directory in secondary/grey, file name in primary/black, on one line. When `focused` the
+    /// header sits on an accent-colored fill, so both parts switch to white (the directory a
+    /// touch dimmer) to stay legible.
+    private func pathAndFileName(focused: Bool) -> Text {
+        let nameColor: Color = focused ? .white : .primary
+        let directoryColor: Color = focused ? Color.white.opacity(0.7) : .secondary
+        let name = Text(fileName).foregroundColor(nameColor)
         guard !directoryPath.isEmpty else { return name }
-        let directory = Text(directoryPath + "/").foregroundColor(.secondary)
+        let directory = Text(directoryPath + "/").foregroundColor(directoryColor)
         return Text("\(directory)\(name)")
     }
 
