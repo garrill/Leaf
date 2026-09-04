@@ -41,11 +41,13 @@ struct BranchListView: View {
                 }
 
                 Section {
+                    let unpushedSHAs = appState.unpushedCommitSHAs
                     ForEach(appState.commits) { commit in
                         let commitTags = appState.tagsByCommitSHA[commit.sha] ?? []
                         CommitRowView(
                             commit: commit,
                             tags: commitTags,
+                            isUnpushed: unpushedSHAs.contains(commit.sha),
                             showFullCommitTitle: showFullCommitTitle
                         )
                         .tag(ChangeSource.commit(commit))
@@ -197,6 +199,9 @@ struct BranchListView: View {
 private struct CommitRowView: View {
     let commit: GitCommit
     let tags: [GitTag]
+    /// This commit exists locally but not on the branch's upstream — flagged with a trailing
+    /// up-arrow badge.
+    let isUnpushed: Bool
     let showFullCommitTitle: Bool
 
     var body: some View {
@@ -205,11 +210,14 @@ private struct CommitRowView: View {
                 Text(commit.summary)
                     .lineLimit(showFullCommitTitle ? nil : 1)
                     .truncationTooltip(commit.summary, isEnabled: !showFullCommitTitle)
-                if !tags.isEmpty {
+                if !tags.isEmpty || isUnpushed {
                     Spacer(minLength: 6)
                     HStack(spacing: 4) {
                         ForEach(tags) { tag in
                             tagBadge(tag)
+                        }
+                        if isUnpushed {
+                            unpushedBadge
                         }
                     }
                 }
@@ -219,6 +227,18 @@ private struct CommitRowView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 6)
+    }
+
+    /// Up-arrow badge marking a commit that hasn't been pushed to the remote. Same reliance on
+    /// semantic colors (`.primary` glyph, `.secondary` circle) as `tagBadge` so both the glyph and
+    /// its background flip to white automatically when the row is selected and emphasised.
+    private var unpushedBadge: some View {
+        Image(systemName: "arrow.up")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.primary)
+            .frame(width: 16, height: 16)
+            .background(Circle().fill(Color.secondary.opacity(0.2)))
+            .help("This commit has not been pushed to the remote repository")
     }
 
     /// `.secondary` (rather than a literal color like `.accentColor`) is what lets this badge pick

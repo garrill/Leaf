@@ -96,6 +96,18 @@ final class AppState {
     var commits: [GitCommit] = []
     var selectedSource: ChangeSource?
 
+    /// SHAs of commits in `commits` not yet pushed to the current branch's upstream, so
+    /// `BranchListView` can flag each unpushed row. The history list is always the current
+    /// branch's and `aheadCount` is `@{upstream}..HEAD`, so the first `aheadCount` entries
+    /// (newest-first) are exactly the unpushed ones. When the branch has no upstream yet but the
+    /// repo has an `origin` to push to, every local commit counts as unpushed; with no `origin`
+    /// at all there's nothing to be unpushed against, so the set is empty.
+    var unpushedCommitSHAs: Set<String> {
+        guard hasOriginRemote else { return [] }
+        let unpushed = hasUpstream ? commits.prefix(aheadCount) : commits[...]
+        return Set(unpushed.map(\.sha))
+    }
+
     var tags: [GitTag] = []
     /// Commit SHA -> tags pointing at it, recomputed whenever `tags` changes. `BranchListView`
     /// looks this up per row, so a plain per-row linear scan over `tags` would redo the same
