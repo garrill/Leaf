@@ -941,11 +941,17 @@ struct DiffCodeScrollView: NSViewRepresentable {
         let wordDiffRanges = Self.wordDiffRanges(for: lines)
 
         for (index, line) in lines.enumerated() {
-            if index > 0 {
-                result.append(NSAttributedString(string: "\n"))
-            }
-
-            let piece = NSMutableAttributedString(string: line.displayText)
+            // Fold the paragraph-separating newline into the line's own piece rather than
+            // appending it as a bare, attribute-less run. A zero-length piece (a blank context
+            // line — common in prose/Markdown diffs) otherwise swallows every `addAttribute`
+            // call as a no-op, so when such a line is a hunk's first line it never actually
+            // receives `hunkGapParagraphStyle`'s `paragraphSpacingBefore` — yet
+            // `DiffCodeTextView.rowRect` still unconditionally subtracts the (never-applied) gap
+            // height for a hunk-start line, dropping that row's gutter number ~20pt out of place
+            // into the blank space between the two hunks. Keeping a trailing "\n" on every piece
+            // but the last guarantees at least one character to hang the paragraph style on.
+            let piece = NSMutableAttributedString(string: index < lines.count - 1 ? line.displayText + "\n" : line.displayText)
+            let contentLength = (line.displayText as NSString).length
             let fullRange = NSRange(location: 0, length: piece.length)
             piece.addAttribute(.font, value: bodyFont, range: fullRange)
             piece.addAttribute(.foregroundColor, value: DiffView.foregroundNSColor(for: line.kind), range: fullRange)
@@ -957,7 +963,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
             if let highlighted = validSnapshot?.lines[line.id] {
                 let highlightedNS = NSAttributedString(highlighted)
                 highlightedNS.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: highlightedNS.length)) { value, range, _ in
-                    guard let value, range.location + range.length <= piece.length else { return }
+                    guard let value, range.location + range.length <= contentLength else { return }
                     piece.addAttribute(.foregroundColor, value: value, range: range)
                 }
             }
@@ -965,7 +971,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
             // The stronger "word diff" highlight — the sub-range that actually differs from this
             // line's paired counterpart — layered on top of everything else, last, so it always wins.
             if let strongColor = DiffView.strongBackgroundNSColor(for: line.kind),
-               let wordRange = wordDiffRanges[index], wordRange.location + wordRange.length <= piece.length {
+               let wordRange = wordDiffRanges[index], wordRange.location + wordRange.length <= contentLength {
                 piece.addAttribute(.backgroundColor, value: strongColor, range: wordRange)
             }
 
