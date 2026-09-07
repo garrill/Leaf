@@ -555,6 +555,11 @@ private struct CommitFooterView: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Commit message", text: $appState.commitMessage, axis: .vertical)
                 .textFieldStyle(.plain)
+                // The backing `NSTextView` otherwise flashes its (empty) inline text-completion
+                // candidates panel — a grey ~200pt rounded rect just below the field — for a
+                // single frame when it first becomes first responder. Commit messages carry
+                // identifiers/paths/branch names, so suppressing correction here is right anyway.
+                .autocorrectionDisabled(true)
                 .lineLimit(1...4)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
