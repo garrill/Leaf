@@ -560,6 +560,13 @@ private struct CommitFooterView: View {
                 .padding(.vertical, 10)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .focused(isMessageFocused)
+                // `.plain` + the outer padding means the field's own click target is just the
+                // text rect — clicks in the padded pill margin fall through and don't focus it.
+                // Make the whole pill shape hit-test and route a tap there to the field. A tap
+                // landing directly on the `TextField` is handled by its own (descendant) gesture
+                // first, so cursor placement still works; this only catches the margin.
+                .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .onTapGesture { isMessageFocused.wrappedValue = true }
 
             Button {
                 appState.commitOrCompleteMerge()
