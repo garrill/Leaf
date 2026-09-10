@@ -236,6 +236,47 @@ nonisolated struct GitRepository {
         return (output, errorOutput, process.terminationStatus)
     }
 
+    /// Ceiling on the combined byte size of the trailing pathspec arguments handed to any one
+    /// `git` invocation. macOS caps a process's whole argv+envp block at `ARG_MAX` (1 MiB on
+    /// this platform); overshoot it and `posix_spawn` fails with `E2BIG`, which comes back out
+    /// of `Process.run()` as an uncaught `NSInvalidArgumentException` that aborts the whole app
+    /// rather than a Swift error a caller could catch. Staging or discarding a 30k-file change
+    /// blows straight past it, so every git call that takes a caller-sized list of paths is
+    /// split into batches under this (deliberately conservative — env vars and the fixed
+    /// leading args count toward the same limit) threshold.
+    static let maxPathspecBatchBytes = 128 * 1024
+
+    /// Runs `git <fixedArguments> <paths…>` one or more times, partitioning `paths` so no single
+    /// invocation's argument list approaches `ARG_MAX` (see `maxPathspecBatchBytes`).
+    /// `fixedArguments` must include everything up to and including the `--` pathspec separator.
+    /// Batches run in order; the first non-zero exit propagates as `GitError`. A no-op that
+    /// spawns nothing when `paths` is empty. Only valid for subcommands whose effect is the
+    /// union of the effects on each sub-list — `add`, `reset`, `checkout`, `ls-files` — never
+    /// e.g. `stash push`, which would create one stash entry per batch.
+    @discardableResult
+    private func runBatched(_ fixedArguments: [String], paths: [String]) throws -> String {
+        guard !paths.isEmpty else { return "" }
+        var combinedOutput = ""
+        var batch: [String] = []
+        var batchBytes = 0
+        func flush() throws {
+            guard !batch.isEmpty else { return }
+            combinedOutput += try run(fixedArguments + batch)
+            batch.removeAll(keepingCapacity: true)
+            batchBytes = 0
+        }
+        for path in paths {
+            let pathBytes = path.utf8.count + 1  // +1 ≈ the argv NUL terminator / pointer slot
+            if !batch.isEmpty, batchBytes + pathBytes > Self.maxPathspecBatchBytes {
+                try flush()
+            }
+            batch.append(path)
+            batchBytes += pathBytes
+        }
+        try flush()
+        return combinedOutput
+    }
+
     /// The GitHub "owner" (user or org) for this repo's `origin` remote, parsed locally from the
     /// remote URL — no network call, so it works offline and for private repos without needing a
     /// GitHub token. Returns `nil` if there's no `origin` or it isn't a github.com URL.
@@ -838,7 +879,7 @@ nonisolated struct GitRepository {
         // Unchecked files may already be staged from outside the app, so unstage them
         // first — otherwise a plain `git commit` (no pathspec) would sweep them in too.
         if !unstagePaths.isEmpty {
-            try run(["reset", "--"] + unstagePaths)
+            try runBatched(["reset", "--"], paths: unstagePaths)
         }
         // A path that's already fully staged with nothing left in the working tree — most often
         // a deletion staged outside Leaf, or left staged by an earlier aborted commit — exists
@@ -846,14 +887,30 @@ nonisolated struct GitRepository {
         // whole commit with "pathspec '…' did not match any files". It's already staged exactly
         // as the diff shows, and the pathspec-less `git commit` below sweeps in the whole index,
         // so the fix is simply not to re-add it.
-        let pathsToStage = paths.filter { path in
+        //
+        // Paths still present in the working tree are always safe to `add`. For the rest, one
+        // batched `git ls-files` says which are still in the index (a `git rm` that wasn't
+        // staged — worth adding to pick up the removal) versus already fully staged (skip).
+        // This used to be a per-path `ls-files --error-unmatch` probe, i.e. one spawned git
+        // process for every path — tens of thousands of them for a change this size, on top of
+        // the `git add` below then itself overflowing `ARG_MAX` and aborting the app.
+        var pathsToStage: [String] = []
+        var missingFromWorktree: [String] = []
+        for path in paths {
             if FileManager.default.fileExists(atPath: rootURL.appendingPathComponent(path).path) {
-                return true
+                pathsToStage.append(path)
+            } else {
+                missingFromWorktree.append(path)
             }
-            // Absent from the working tree: only worth an `add` if it's still in the index with
-            // an unstaged change to pick up (a `git rm` that wasn't staged). If it's not even in
-            // the index, it's an already-staged removal — skip it.
-            return (try? run(["ls-files", "--error-unmatch", "--", path])) != nil
+        }
+        if !missingFromWorktree.isEmpty {
+            // `-z`: paths verbatim (no C-style quoting), matching the already-unquoted paths
+            // from `statusEntries()` that callers pass in, so a plain set-membership test works.
+            let trackedOutput = try runBatched(["ls-files", "-z", "--"], paths: missingFromWorktree)
+            let stillInIndex = Set(
+                trackedOutput.split(separator: "\u{0}", omittingEmptySubsequences: true).map(String.init)
+            )
+            pathsToStage.append(contentsOf: missingFromWorktree.filter { stillInIndex.contains($0) })
         }
         // `-f`: `paths` only ever comes from `statusEntries()`, which never surfaces ignored
         // *untracked* files (no `--ignored` flag) — so any path here that also matches a
@@ -862,7 +919,7 @@ nonisolated struct GitRepository {
         // file is already tracked, which would otherwise abort the whole commit before
         // `git commit` ever runs, leaving the file staged but nothing committed.
         if !pathsToStage.isEmpty {
-            try run(["add", "-f", "--"] + pathsToStage)
+            try runBatched(["add", "-f", "--"], paths: pathsToStage)
         }
         try run(["commit", "-m", message])
     }
@@ -911,7 +968,7 @@ nonisolated struct GitRepository {
     /// anything — a merge commit must include the full merge, not a partial selection.
     func completeMerge(message: String, resolvedPaths: [String]) throws {
         if !resolvedPaths.isEmpty {
-            try run(["add", "--"] + resolvedPaths)
+            try runBatched(["add", "--"], paths: resolvedPaths)
         }
         // `-m` alone defaults to `--cleanup=whitespace`, not `strip` — without this, the
         // `# Conflicts:` comment lines from MERGE_MSG (prefilled into the commit box) would be
@@ -955,6 +1012,10 @@ nonisolated struct GitRepository {
             arguments.append("--")
             arguments.append(contentsOf: paths)
         }
+        // Not run through `runBatched`: `stash push` can't be split across invocations without
+        // producing one stash entry per batch. A selection large enough to overflow `ARG_MAX`
+        // here (tens of thousands of paths) isn't reachable from the current stash UI, which
+        // only ever passes a single file or the whole dirty tree (empty `paths`).
         try run(arguments)
     }
 
@@ -994,7 +1055,7 @@ nonisolated struct GitRepository {
     /// `applyStash()` just wrote, so the working tree ends up exactly as if `applyStash()` had
     /// never been called — the "cancel this restore" half of resolving `applyStash()`.
     func undoStashApply(conflictedPaths: [String]) throws {
-        try run(["checkout", "HEAD", "--"] + conflictedPaths)
+        try runBatched(["checkout", "HEAD", "--"], paths: conflictedPaths)
     }
 
     /// Applies the top-of-stack stash and drops it regardless of outcome (`applyStash()` +
@@ -1040,11 +1101,11 @@ nonisolated struct GitRepository {
         // is a no-op when the two already match, silently failing to discard the staged change.
         let staged = files.filter { $0.status == .added || $0.status == .renamed }.map(\.path)
         if !staged.isEmpty {
-            try run(["reset", "--"] + staged)
+            try runBatched(["reset", "--"], paths: staged)
         }
         let tracked = files.filter { $0.status != .untracked && $0.status != .added && $0.status != .renamed }.map(\.path)
         if !tracked.isEmpty {
-            try run(["checkout", "HEAD", "--"] + tracked)
+            try runBatched(["checkout", "HEAD", "--"], paths: tracked)
         }
     }
 

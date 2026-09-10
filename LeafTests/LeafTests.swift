@@ -215,6 +215,46 @@ final class TestRepo {
         let entries = try t.repo.statusEntries()
         #expect(entries.isEmpty)
     }
+
+    /// A pathspec list long enough to blow past a single `git` invocation's argument budget
+    /// (`ARG_MAX`) used to overflow `posix_spawn`, which surfaces from `Process.run()` as an
+    /// uncaught ObjC exception that aborts the app rather than a Swift error — the crash seen
+    /// committing a ~33k-file deletion. `commit` now stages in `ARG_MAX`-safe batches.
+    @Test func commitsPathListSpanningMultipleArgMaxBatches() throws {
+        let t = TestRepo()
+        try t.write("seed.txt", "1")
+        _ = try t.commitAll("initial")
+
+        // Long-named files so the combined pathspec bytes cross a couple of batch boundaries
+        // without needing tens of thousands of tiny files.
+        let namePrefix = "file_" + String(repeating: "x", count: 120) + "_"
+        var paths: [String] = []
+        var pathBytes = 0
+        var i = 0
+        while pathBytes < GitRepository.maxPathspecBatchBytes * 2 + 4096 {
+            let p = "\(namePrefix)\(i).txt"
+            try t.write(p, "content \(i)")
+            paths.append(p)
+            pathBytes += p.utf8.count + 1
+            i += 1
+        }
+
+        // Stage the whole batch of brand-new files in one commit.
+        try t.repo.commit(message: "add many", paths: paths, unstagePaths: [])
+        #expect(try t.repo.statusEntries().isEmpty)
+        let addedLog = try t.run(["log", "-1", "--name-only", "--format="])
+        #expect(addedLog.contains(paths.first!))
+        #expect(addedLog.contains(paths.last!))
+
+        // Delete them all and commit the deletions — exercises the batched `ls-files` probe for
+        // paths missing from the working tree, then the batched `git add`.
+        for p in paths {
+            try FileManager.default.removeItem(at: t.url.appendingPathComponent(p))
+        }
+        try t.repo.commit(message: "remove many", paths: paths, unstagePaths: [])
+        #expect(try t.repo.statusEntries().isEmpty)
+        #expect(try t.run(["ls-files"]).contains(namePrefix) == false)
+    }
 }
 
 // MARK: - Stash
