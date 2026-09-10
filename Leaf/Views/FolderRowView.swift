@@ -41,7 +41,10 @@ struct FolderRowView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationTooltip(folder.name)
+                    .truncationTooltip(
+                        folder.name,
+                        font: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
+                    )
             }
 
             Spacer()

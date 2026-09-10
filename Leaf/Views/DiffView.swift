@@ -259,6 +259,22 @@ struct DiffView: View {
         } else if appState.diffText.isEmpty {
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if diffLines.count > Self.maxInlineRenderLineCount {
+            // The blob-size pre-check (`diffFileTooLarge`) caps at 5 MB, which can still be
+            // hundreds of thousands of diff lines. Building the `NSAttributedString` + word-diff
+            // metadata for that many lines on the main thread is what actually freezes the app,
+            // so stop before `DiffCodeTextView` ever sees it.
+            VStack(spacing: 6) {
+                Image(systemName: "doc.badge.gearshape")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                Text("Diff Too Large to Display")
+                    .font(.callout.weight(.medium))
+                Text("\(fileName) — \(diffLines.count.formatted()) lines changed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else {
             DiffScrollContent(appState: appState, lines: diffLines, highlightSnapshot: highlightSnapshot, fontSize: CGFloat(diffFontSize))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -452,6 +468,11 @@ struct DiffView: View {
     /// hljs calls competing with the main thread for CPU, which is felt as jank even though the
     /// calls themselves are async, and syntax color is the least useful on a diff this size anyway.
     private static let maxHighlightedLineCount = 2000
+
+    /// Above this many parsed diff lines, don't render the diff inline at all (show the
+    /// "Diff Too Large" placeholder instead) — building `DiffCodeTextView`'s attributed string
+    /// and word-diff metadata for more than this on the main thread is what freezes the app.
+    private static let maxInlineRenderLineCount = 20_000
 
     private func refreshHighlighting() async {
         // Let SwiftUI commit the plain attributed text first. Highlighting is deliberately a

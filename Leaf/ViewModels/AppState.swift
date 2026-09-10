@@ -158,6 +158,13 @@ final class AppState {
     var diffReloadToken = 0
 
     var isSyncing = false
+
+    /// True while `commitCheckedChanges()` is staging + committing — swaps the commit button's
+    /// label for a spinner and blocks a second commit being kicked off on top of the first.
+    /// A big commit (tens of thousands of files) takes long enough that the button otherwise
+    /// looks dead.
+    var isCommitting = false
+
     var hasUpstream = false
     var aheadCount = 0
     var behindCount = 0
@@ -987,7 +994,7 @@ final class AppState {
     }
 
     func commitCheckedChanges() {
-        guard let repo = currentRepository else { return }
+        guard let repo = currentRepository, !isCommitting else { return }
         let paths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
         let unstagePaths = changedFiles.filter { !checkedFilePaths.contains($0.path) }.map(\.path)
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -999,8 +1006,10 @@ final class AppState {
             return
         }
 
+        isCommitting = true
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.isCommitting = false }
             do {
                 try await Task.detached(priority: .userInitiated) {
                     try repo.commit(message: message, paths: paths, unstagePaths: unstagePaths)
@@ -1149,7 +1158,7 @@ final class AppState {
     }
 
     func completeMerge() {
-        guard let repo = currentRepository else { return }
+        guard let repo = currentRepository, !isCommitting else { return }
         let resolvedPaths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
@@ -1159,8 +1168,10 @@ final class AppState {
             conflictedCommitAlert = ConflictedCommitAlert(conflictedPaths: conflictedPaths)
             return
         }
+        isCommitting = true
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.isCommitting = false }
             do {
                 try await Task.detached(priority: .userInitiated) {
                     try repo.completeMerge(message: message, resolvedPaths: resolvedPaths)
@@ -1553,6 +1564,11 @@ final class AppState {
         }
     }
 
+    /// How many recent history rows to warm the file-list cache for, and the file-count above
+    /// which the currently-open commit is considered "large" and prefetch is skipped entirely.
+    private static let prefetchCommitCount = 4
+    private static let prefetchLargeCommitThreshold = 4000
+
     /// Warms the file-list cache for the nearby history rows while the user is reading the
     /// branch column. This is intentionally sequential and utility-priority: it avoids a burst
     /// of Git processes competing with the currently selected diff, while making a first click
@@ -1561,12 +1577,19 @@ final class AppState {
         let selectedCommitSHA: String?
         if case .commit(let selectedCommit) = selectedSource {
             selectedCommitSHA = selectedCommit.sha
+            // If the commit currently open already has a large file list, nearby history
+            // commits are likely just as big — prefetching them would only pile expensive git
+            // processes behind the foreground diff. Skip.
+            if let cached = changedFilesCache[.commit(selectedCommit)],
+               cached.files.count > Self.prefetchLargeCommitThreshold {
+                return
+            }
         } else {
             selectedCommitSHA = nil
         }
         let cacheGeneration = selectionCacheGeneration
         Task { @MainActor [weak self] in
-            for commit in commits.prefix(10) where commit.sha != selectedCommitSHA {
+            for commit in commits.prefix(Self.prefetchCommitCount) where commit.sha != selectedCommitSHA {
                 guard let self, !Task.isCancelled,
                       self.selectedRepoURL == repoURL,
                       self.selectionCacheGeneration == cacheGeneration else { return }

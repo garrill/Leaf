@@ -216,44 +216,71 @@ final class TestRepo {
         #expect(entries.isEmpty)
     }
 
-    /// A pathspec list long enough to blow past a single `git` invocation's argument budget
-    /// (`ARG_MAX`) used to overflow `posix_spawn`, which surfaces from `Process.run()` as an
-    /// uncaught ObjC exception that aborts the app rather than a Swift error — the crash seen
-    /// committing a ~33k-file deletion. `commit` now stages in `ARG_MAX`-safe batches.
-    @Test func commitsPathListSpanningMultipleArgMaxBatches() throws {
+    /// A checked-file list in the tens of thousands used to overflow the kernel's argv/env size
+    /// limit when git's pathspecs went on the command line — `Process.run()` surfaces that as an
+    /// uncaught ObjC exception that aborts the app (the crash committing a ~33k-file deletion),
+    /// and an earlier byte-budget batching attempt still overflowed at ~12k. `commit` now feeds
+    /// the list to git on stdin via `--pathspec-from-file`, which has no such limit. `12_000`
+    /// files is well past where the command-line path broke.
+    @Test func commitsHugePathListWithoutOverflowingArgMax() throws {
         let t = TestRepo()
         try t.write("seed.txt", "1")
         _ = try t.commitAll("initial")
 
-        // Long-named files so the combined pathspec bytes cross a couple of batch boundaries
-        // without needing tens of thousands of tiny files.
-        let namePrefix = "file_" + String(repeating: "x", count: 120) + "_"
         var paths: [String] = []
-        var pathBytes = 0
-        var i = 0
-        while pathBytes < GitRepository.maxPathspecBatchBytes * 2 + 4096 {
-            let p = "\(namePrefix)\(i).txt"
-            try t.write(p, "content \(i)")
+        for i in 0..<12_000 {
+            let p = String(format: "src/module_%04d/file_%06d.txt", i / 100, i)
+            try t.write(p, "file \(i)\n")
             paths.append(p)
-            pathBytes += p.utf8.count + 1
-            i += 1
         }
 
-        // Stage the whole batch of brand-new files in one commit.
+        // Add all 12k brand-new (untracked) files in one commit.
         try t.repo.commit(message: "add many", paths: paths, unstagePaths: [])
         #expect(try t.repo.statusEntries().isEmpty)
-        let addedLog = try t.run(["log", "-1", "--name-only", "--format="])
-        #expect(addedLog.contains(paths.first!))
-        #expect(addedLog.contains(paths.last!))
+        #expect(try t.run(["ls-files"]).split(separator: "\n").count == 12_001)
 
-        // Delete them all and commit the deletions — exercises the batched `ls-files` probe for
-        // paths missing from the working tree, then the batched `git add`.
+        // Delete every file and commit the deletions — exercises the `ls-files --deleted` probe
+        // for paths gone from the working tree plus the stdin-fed `git add`.
         for p in paths {
             try FileManager.default.removeItem(at: t.url.appendingPathComponent(p))
         }
         try t.repo.commit(message: "remove many", paths: paths, unstagePaths: [])
         #expect(try t.repo.statusEntries().isEmpty)
-        #expect(try t.run(["ls-files"]).contains(namePrefix) == false)
+        #expect(try t.run(["ls-files"]).trimmingCharacters(in: .whitespacesAndNewlines) == "seed.txt")
+    }
+
+    /// Unchecked paths are unstaged before commit; with a huge selection that reset list also
+    /// can't go on the command line. Here half the files are left unchecked (and pre-staged
+    /// from outside) and must not land in the commit.
+    @Test func commitUnstagesHugeUncheckedListViaStdin() throws {
+        let t = TestRepo()
+        try t.write("seed.txt", "1")
+        _ = try t.commitAll("initial")
+
+        var checked: [String] = []
+        var unchecked: [String] = []
+        for i in 0..<8_000 {
+            let p = String(format: "d%03d/f%05d.txt", i / 100, i)
+            try t.write(p, "v\(i)")
+            if i.isMultiple(of: 2) { checked.append(p) } else { unchecked.append(p) }
+        }
+        // Everything staged from "outside" first, so commit has to reset the unchecked half.
+        try t.repo.commit(message: "seed all", paths: checked + unchecked, unstagePaths: [])
+
+        try t.write("seed.txt", "2")
+        for p in checked { try t.write(p, "changed") }
+        for p in unchecked { try t.write(p, "changed") }
+        try t.run(["add", "-A"])
+
+        try t.repo.commit(message: "checked half only", paths: checked, unstagePaths: unchecked)
+
+        let committed = Set(try t.run(["show", "--name-only", "--format=", "HEAD"])
+            .split(separator: "\n").map(String.init))
+        #expect(checked.allSatisfy { committed.contains($0) })
+        #expect(unchecked.allSatisfy { !committed.contains($0) })
+        // The unchecked files are still modified-but-unstaged, not gone.
+        let stillDirty = Set(try t.repo.statusEntries().map(\.path))
+        #expect(unchecked.allSatisfy { stillDirty.contains($0) })
     }
 }
 

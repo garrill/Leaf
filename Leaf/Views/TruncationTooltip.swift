@@ -1,115 +1,141 @@
 import AppKit
 import SwiftUI
 
-/// Shows a tooltip with the full, untruncated string when a truncated single-line `Text` is
-/// hovered, after a short delay (matching native tooltip behavior).
+/// Shows a tooltip with the full string when a single-line `Text` is actually truncated — and
+/// nothing when it fits.
 ///
-/// The tooltip itself renders in a standalone, non-activating `NSPanel` positioned in screen
-/// coordinates at the label's own top-left corner — not a SwiftUI `.overlay` — specifically so
-/// it can extend beyond the bounds of whatever clips its host view (a `List` row, a resizable
-/// column, a toolbar item, etc.), the same way a real AppKit tooltip would.
+/// The tooltip renders in a standalone, non-activating `NSPanel` positioned in screen
+/// coordinates at the label's own top-left corner (not a SwiftUI `.overlay`), so its text lands
+/// directly over the truncated text it's replacing and can extend past whatever clips its host
+/// row/column.
 ///
-/// Detection works by comparing the ideal (untruncated) width of the string, measured via a
-/// hidden `fixedSize()` copy, against the width actually available to the visible text.
+/// Nothing is measured or instantiated at rest. Hover detection is SwiftUI's own `.onHover`
+/// (one lightweight tracking area per *realised* row — a lazy `List` only realises the
+/// on-screen ones), and only while the pointer is actually over the text does a tiny
+/// `NSViewRepresentable` appear whose sole job is to give the truncation check a real view to
+/// measure against and a real window to convert coordinates through. That transient view is
+/// gone the instant the pointer leaves, so it never accumulates across a 10k-row list and never
+/// forces the `List` to build every row up front the way a permanent per-row representable does.
 private struct TruncationTooltip: ViewModifier {
     let text: String
     let isEnabled: Bool
-    @State private var isTruncated = false
+    let font: NSFont
 
-    @ViewBuilder
+    @State private var isHovering = false
+
     func body(content: Content) -> some View {
         if isEnabled {
             content
-                .background(
-                    GeometryReader { visibleGeo in
-                        // Reuses `content` itself (not a fresh `Text`) so the ideal-width probe below
-                        // carries the exact same font/weight/etc. as what's actually rendered —
-                        // otherwise a mismatched font here (e.g. a caller-applied `.font`/`.fontWeight`)
-                        // throws off the width comparison and reports truncation that isn't real.
-                        content
-                            .lineLimit(1)
-                            .fixedSize()
-                            .hidden()
-                            .background(
-                                GeometryReader { idealGeo in
-                                    Color.clear
-                                        .onAppear {
-                                            updateTruncated(idealWidth: idealGeo.size.width, visibleWidth: visibleGeo.size.width)
-                                        }
-                                        .onChange(of: idealGeo.size.width) { _, newValue in
-                                            updateTruncated(idealWidth: newValue, visibleWidth: visibleGeo.size.width)
-                                        }
-                                        .onChange(of: visibleGeo.size.width) { _, newValue in
-                                            updateTruncated(idealWidth: idealGeo.size.width, visibleWidth: newValue)
-                                        }
-                                }
-                            )
+                .onHover { isHovering = $0 }
+                .overlay {
+                    if isHovering {
+                        TooltipAnchor(text: text, font: font)
                     }
-                )
-                .overlay(TooltipHoverProbe(text: text, isTruncated: isTruncated))
+                }
         } else {
             content
         }
     }
+}
 
-    private func updateTruncated(idealWidth: CGFloat, visibleWidth: CGFloat) {
-        isTruncated = idealWidth > visibleWidth + 0.5
+extension NSFont {
+    /// Same family and size, restyled to `weight` — for building a measurement font that
+    /// matches a `Text` styled with `.fontWeight(...)`.
+    func withWeight(_ weight: NSFont.Weight) -> NSFont {
+        NSFont.systemFont(ofSize: pointSize, weight: weight)
     }
 }
 
 extension View {
-    /// Applies `TruncationTooltip` for `text`. Use on a single-line, truncating `Text` view.
-    /// Pass `isEnabled: false` to skip entirely (e.g. when the caller isn't truncating the text
-    /// at all, so there's nothing to show a tooltip for).
-    func truncationTooltip(_ text: String, isEnabled: Bool = true) -> some View {
-        modifier(TruncationTooltip(text: text, isEnabled: isEnabled))
+    /// Applies a truncation-only tooltip for `text`. Use on a single-line, truncating `Text`.
+    ///
+    /// - Parameters:
+    ///   - text: the full string to show when the visible text is truncated.
+    ///   - isEnabled: pass `false` to skip entirely (e.g. the caller isn't truncating at all).
+    ///   - font: the `NSFont` the visible text is rendered in, used to measure whether it's
+    ///     truncated. Defaults to the standard system body font; pass a match when the `Text`
+    ///     uses a different style (e.g. `.headline`, `.subheadline`).
+    func truncationTooltip(
+        _ text: String,
+        isEnabled: Bool = true,
+        font: NSFont = .systemFont(ofSize: NSFont.systemFontSize)
+    ) -> some View {
+        modifier(TruncationTooltip(text: text, isEnabled: isEnabled, font: font))
     }
 }
 
-/// A transparent, click-through `NSView` overlay whose only job is tracking hover (via
-/// `NSTrackingArea`, independent of hit-testing) to drive `TooltipPanel`.
-private struct TooltipHoverProbe: NSViewRepresentable {
+/// Present only while the pointer is over the labelled text. Overlays the text exactly, so its
+/// `bounds` is the width available to the text and `convert(_:to: nil)` gives the text's
+/// on-screen position. Decides (once, here) whether the text is truncated and, if so, drives
+/// `TooltipPanel` after the standard hover delay.
+private struct TooltipAnchor: NSViewRepresentable {
     let text: String
-    let isTruncated: Bool
+    let font: NSFont
 
-    func makeNSView(context: Context) -> ProbeView {
-        let view = ProbeView()
+    func makeNSView(context: Context) -> AnchorView {
+        let view = AnchorView()
         view.text = text
-        view.isTruncated = isTruncated
+        view.font = font
         return view
     }
 
-    func updateNSView(_ nsView: ProbeView, context: Context) {
+    func updateNSView(_ nsView: AnchorView, context: Context) {
         nsView.text = text
-        nsView.isTruncated = isTruncated
+        nsView.font = font
     }
 
-    final class ProbeView: NSView {
+    static func dismantleNSView(_ nsView: AnchorView, coordinator: ()) {
+        nsView.tearDown()
+    }
+
+    final class AnchorView: NSView {
         var text: String = ""
-        var isTruncated: Bool = false {
-            didSet {
-                if !isTruncated { cancelPendingShow(); TooltipPanel.shared.hide(owner: self) }
-            }
-        }
-        private var trackingArea: NSTrackingArea?
+        var font: NSFont = .systemFont(ofSize: NSFont.systemFontSize)
+
         private var showWorkItem: DispatchWorkItem?
         private var isHitTestingForOcclusionCheck = false
 
         override var isFlipped: Bool { true }
 
+        // Click-through so this never steals a click from the row it sits on. Flipped briefly to
+        // a real hit-test only for the occlusion check below.
         override func hitTest(_ point: NSPoint) -> NSView? {
-            // Normally click-through (returns nil) so this probe never intercepts real clicks.
-            // `isTopmostAtCurrentMouseLocation()` flips this briefly to use it as an occlusion
-            // probe instead — see its doc comment.
             isHitTestingForOcclusionCheck ? super.hitTest(point) : nil
         }
 
-        /// `NSTrackingArea` fires `mouseEntered`/`mouseExited` purely from the view's own frame,
-        /// with no regard for whether another view (e.g. a `.safeAreaBar`-docked panel) is
-        /// actually drawn on top of it on screen — a list row scrolled underneath such a panel
-        /// still reports hover. Before presenting, re-verify via a real `hitTest` from the
-        /// window's content view that this probe (not some occluding sibling) is what's actually
-        /// under the cursor.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            guard isTextTruncated else { return }
+            // Match the system tooltip delay before showing.
+            let item = DispatchWorkItem { [weak self] in self?.presentTooltip() }
+            showWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            if newWindow == nil { tearDown() }
+        }
+
+        func tearDown() {
+            showWorkItem?.cancel()
+            showWorkItem = nil
+            TooltipPanel.shared.hide(owner: self)
+        }
+
+        /// Whether the full string doesn't fit the width this view overlays. Core Text only —
+        /// no view, no layout pass.
+        private var isTextTruncated: Bool {
+            guard bounds.width > 0 else { return false }
+            let idealWidth = (text as NSString).size(withAttributes: [.font: font]).width
+            return idealWidth > bounds.width + 0.5
+        }
+
+        /// SwiftUI's `.onHover` fires from the row's frame and can report a hover for a row that
+        /// has scrolled under a `.safeAreaBar`-docked header/footer. Re-verify via a real
+        /// hit-test from the window content view that this anchor (not an occluding sibling) is
+        /// actually under the cursor. Invoked once, on show — not per row.
         private func isTopmostAtCurrentMouseLocation() -> Bool {
             guard let window else { return false }
             let mouseInWindow = window.mouseLocationOutsideOfEventStream
@@ -118,46 +144,10 @@ private struct TooltipHoverProbe: NSViewRepresentable {
             return window.contentView?.hitTest(mouseInWindow) === self
         }
 
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            if let trackingArea { removeTrackingArea(trackingArea) }
-            let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self, userInfo: nil)
-            addTrackingArea(area)
-            trackingArea = area
-        }
-
-        override func mouseEntered(with event: NSEvent) {
-            guard isTruncated else { return }
-            cancelPendingShow()
-            let item = DispatchWorkItem { [weak self] in
-                self?.presentTooltip()
-            }
-            showWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
-        }
-
-        override func mouseExited(with event: NSEvent) {
-            cancelPendingShow()
-            TooltipPanel.shared.hide(owner: self)
-        }
-
-        override func viewWillMove(toWindow newWindow: NSWindow?) {
-            super.viewWillMove(toWindow: newWindow)
-            if newWindow == nil {
-                cancelPendingShow()
-                TooltipPanel.shared.hide(owner: self)
-            }
-        }
-
-        private func cancelPendingShow() {
-            showWorkItem?.cancel()
-            showWorkItem = nil
-        }
-
         private func presentTooltip() {
-            guard let window, isTruncated, isTopmostAtCurrentMouseLocation() else { return }
-            // Top-left corner of this view, in screen coordinates — the tooltip is positioned
-            // to start exactly there, over the start of the truncated text it's replacing.
+            guard let window, isTextTruncated, isTopmostAtCurrentMouseLocation() else { return }
+            // Top-left corner of this view in screen coordinates — the panel is positioned to
+            // start exactly there, over the start of the truncated text it's replacing.
             let topLeftInWindow = convert(NSPoint(x: 0, y: 0), to: nil)
             let topLeftOnScreen = window.convertPoint(toScreen: topLeftInWindow)
             TooltipPanel.shared.show(text: text, topLeftOnScreen: topLeftOnScreen, owner: self)
@@ -198,10 +188,9 @@ private final class TooltipPanel {
         panel.contentView = contentView
         self.panel = panel
 
-        // `NSTrackingArea`'s `.activeInKeyWindow` option only sends mouseExited while the window
-        // is key — cmd-tabbing away, or the row's window losing key status, or scrolling the row
-        // out from under a stationary cursor, produces no such event, which otherwise leaves the
-        // panel stuck on screen indefinitely pointing at a row that's no longer under the mouse.
+        // The anchor view is torn down on hover-out, which hides the panel — but scrolling the
+        // row out from under a stationary cursor, or the window losing key/active status, may
+        // not produce a hover-out, so also force-hide on those.
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.hideUnconditionally() }

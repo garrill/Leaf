@@ -4,122 +4,26 @@ import SwiftUI
 struct ChangedFilesView: View {
     @Bindable var appState: AppState
     @FocusState private var isFocused: Bool
-    @State private var isTitleExpanded = false
-    @State private var isTitleTruncated = false
     /// Focus for the commit message field, tracked here (rather than solely inside
-    /// `CommitFooterView`) so this view's own arrow-key/escape column-navigation handlers and its
-    /// `isFocused` reclaim logic below can both check it and back off — see the comment on
-    /// `CommitFooterView.isMessageFocused` for why a shared, separately-identified `@FocusState`
-    /// is required here instead of letting the field fall under `isFocused`'s scope.
+    /// `CommitFooterView`) so `ChangedFilesList`'s own arrow-key/escape column-navigation
+    /// handlers and this view's `isFocused` reclaim logic can both check it and back off — see
+    /// the comment on `CommitFooterView.isMessageFocused` for why a shared, separately-identified
+    /// `@FocusState` is required here instead of letting the field fall under `isFocused`'s scope.
     @FocusState private var isCommitMessageFocused: Bool
 
     var body: some View {
         ZStack {
-            List(appState.changedFiles, selection: fileSelection) { file in
-                HStack {
-                    if isWorkingChanges {
-                        Toggle("", isOn: checkedBinding(for: file))
-                            .toggleStyle(.checkbox)
-                            .labelsHidden()
-                    }
-                    pathAndFileName(for: file)
-                    Spacer()
-                    if file.status == .conflicted || appState.justResolvedPath == file.path {
-                        // The orange conflict glyph stays alongside the resolve button (to its
-                        // right) — the button is now just a `checkmark.circle` icon, so the
-                        // row still needs the status glyph to read as conflicted. During the
-                        // brief post-resolve window `file.status` has already flipped to the
-                        // staged glyph while the green `checkmark.circle.fill` confirms.
-                        Button {
-                            appState.requestMarkResolved(file)
-                        } label: {
-                            ResolveIconView(isResolved: appState.justResolvedPath == file.path)
-                                .frame(width: 15, height: 15)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Mark as resolved")
-                        StatusIconView(status: file.status)
-                            .frame(width: 14, height: 14)
-                    } else {
-                        StatusIconView(status: file.status)
-                            .frame(width: 14, height: 14)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Every row's content is single-line regardless of which conditional branch
-                // above applies (toggle vs. not, resolve-button icon vs. status glyph) — an
-                // explicit fixed height lets List treat every row as uniform instead of having
-                // to measure each one individually. Without it, a commit touching hundreds of
-                // files spent a large chunk of selection time (confirmed via Instruments' Time
-                // Profiler) inside this row's `.contextMenu` closure, which only makes sense if
-                // the full row (including its context menu) was being built for every item up
-                // front rather than lazily for on-screen rows only.
-                .frame(height: 22)
-                .tag(file.path)
-                .listRowSeparator(.visible)
-                .contextMenu {
-                    contextMenuItems(for: file)
-                }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .environment(\.controlActiveState, .key)
-            .opacity(showsList ? 1 : 0)
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-            .safeAreaBar(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    header
-                    if isWorkingChanges && appState.isMergeInProgress {
-                        mergeBanner
-                    }
-                }
-            }
-            .safeAreaBar(edge: .bottom, spacing: 0) {
-                if isWorkingChanges && !appState.changedFiles.isEmpty {
-                    CommitFooterView(appState: appState, isMessageFocused: $isCommitMessageFocused)
-                } else if isStash && !appState.changedFiles.isEmpty {
-                    StashFooterView(appState: appState)
-                } else if isNewestUnpushedCommit || appState.pushSucceeded {
-                    // `appState.pushSucceeded` keeps this footer around for its own few seconds
-                    // even though a successful push immediately zeroes `aheadCount`, which would
-                    // otherwise make `isNewestUnpushedCommit` false and yank the success message
-                    // away before it's had a chance to animate out.
-                    //
-                    // By the time `pushSucceeded` flips back to false 3s later, `aheadCount` has
-                    // long since settled to 0 (via `refreshSyncStatus()`'s own async fetch), so
-                    // `isNewestUnpushedCommit` is already false too — that flip removes this whole
-                    // branch, not just something inside `UnpushedCommitFooterView`. The transition
-                    // has to live here, at the point the branch itself disappears, or the exit
-                    // never animates; `UnpushedCommitFooterView`'s own internal transition only
-                    // covers swapping between its buttons and its toast while it stays mounted.
-                    UnpushedCommitFooterView(appState: appState)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
-            .focused($isFocused)
-            // Left/right/escape here are column-navigation shortcuts, not something the commit
-            // message field should ever see — while it has focus, arrow keys need to move the
-            // text cursor and escape needs to do nothing, so all three back off and let the
-            // field's own default key handling run instead.
-            .onKeyPress(.leftArrow) {
-                guard !isCommitMessageFocused else { return .ignored }
-                appState.focusedColumn = .branches
-                return .handled
-            }
-            .onKeyPress(.rightArrow) {
-                guard !isCommitMessageFocused else { return .ignored }
-                appState.focusedColumn = .diff
-                return .handled
-            }
-            .onKeyPress(.escape) {
-                guard !isCommitMessageFocused, isNewestUnpushedCommit, !appState.isPushingCommit else { return .ignored }
-                appState.undoLastCommit()
-                return .handled
-            }
+            // The file `List` and everything attached directly to it (header/footer bars, focus,
+            // key handlers) live in `ChangedFilesList` so that a selection change — which the
+            // list's `selection:` binding makes a `body` dependency — re-runs only that small
+            // subview, not this view's four `.alert`s, the empty-state overlays below, or the
+            // load `.task`. On a commit with tens of thousands of changed files, that saved
+            // re-evaluation is the difference between a click landing instantly and stalling.
+            ChangedFilesList(
+                appState: appState,
+                isFocused: $isFocused,
+                isCommitMessageFocused: $isCommitMessageFocused
+            )
 
             if appState.selectedRepoURL == nil {
                 // Blank — column 2 already communicates "no repository selected".
@@ -134,32 +38,18 @@ struct ChangedFilesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Keyed on the selection itself, not triggered imperatively from `AppState` — SwiftUI
         // cancels and restarts this automatically the moment `selectedSource` changes again, so
-        // a superseded selection's git call never lingers to overwrite a newer one. This is what
-        // actually keeps the commit-list row highlight (a plain, instant property write) fully
-        // decoupled from however long this load takes. Repo URL is included alongside the source
-        // because `refreshRepositoryState()` can resolve a newly selected repo to the very same
-        // `ChangeSource` case (e.g. two repos in a row both defaulting to `.workingChanges`) —
-        // without the URL in the key, that repo switch wouldn't change `id` at all, so this task
-        // would never re-run and `changedFiles` would stay stuck at the empty list `selectRepo`
-        // clears it to up front.
+        // a superseded selection's git call never lingers to overwrite a newer one. Repo URL is
+        // included alongside the source because `refreshRepositoryState()` can resolve a newly
+        // selected repo to the very same `ChangeSource` case (e.g. two repos in a row both
+        // defaulting to `.workingChanges`) — without the URL in the key, that repo switch
+        // wouldn't change `id` at all, so this task would never re-run and `changedFiles` would
+        // stay stuck at the empty list `selectRepo` clears it to up front.
         .task(id: ChangedFilesLoadKey(repoURL: appState.selectedRepoURL, source: appState.selectedSource)) {
             await appState.loadChangedFilesForCurrentSelection()
         }
-        // Cross-column arrow-key navigation landed here from another column — claim real
-        // keyboard focus to match (see `AppState.focusedColumn`). Only ever assigns `true`: when
-        // focus moves elsewhere, AppKit resigns this column's first-responder status on its own
-        // as soon as another view calls `makeFirstResponder`, and `@FocusState` mirrors that back
-        // down to `false` automatically. Explicitly assigning `false` here too raced against the
-        // neighboring column's own `true` assignment (both fire from the same `focusedColumn`
-        // change) — depending on NSHostingController update order, this column's `false` could
-        // land after the other column's `true` and steal focus back to nothing.
-        // Skipped while the commit message field already holds focus: setting `isFocused` here
-        // would make SwiftUI hand real first-responder status to the List itself, yanking it away
-        // from the field's `NSTextView` a beat after a click had just granted it — the exact
-        // "only one of the two can actually hold it" conflict `DiffView` hits with its own text
-        // view (see that file's comment on the same fight). `CommitFooterView`'s own `onChange`
-        // is what sets `appState.focusedColumn = .files` when the field is clicked directly, so
-        // this guard is what stops that from looping back and reclaiming focus in the same beat.
+        // `CommitFooterView`'s own `onChange` is what sets `appState.focusedColumn = .files` when
+        // the message field is clicked directly, so this guard is what stops that from looping
+        // back and reclaiming focus for the List in the same beat.
         .onChange(of: appState.focusedColumn) { _, newValue in
             guard newValue == .files, !isCommitMessageFocused else { return }
             isFocused = true
@@ -274,6 +164,126 @@ struct ChangedFilesView: View {
         let repoURL: URL?
         let source: ChangeSource?
     }
+}
+
+/// The changed-files `List` for column 3, plus its header/merge banner, footer bars, and
+/// keyboard handling. Split out from `ChangedFilesView` so a file-selection change (a `body`
+/// dependency via the list's `selection:` binding) only re-runs this subview — not that view's
+/// alerts, empty-state overlays, or load task.
+private struct ChangedFilesList: View {
+    @Bindable var appState: AppState
+    var isFocused: FocusState<Bool>.Binding
+    var isCommitMessageFocused: FocusState<Bool>.Binding
+    @State private var isTitleExpanded = false
+    @State private var isTitleTruncated = false
+
+    var body: some View {
+        List(appState.changedFiles, selection: fileSelection) { file in
+            HStack {
+                if isWorkingChanges {
+                    Toggle("", isOn: checkedBinding(for: file))
+                        .toggleStyle(.checkbox)
+                        .labelsHidden()
+                }
+                pathAndFileName(for: file)
+                Spacer()
+                if file.status == .conflicted || appState.justResolvedPath == file.path {
+                    // The orange conflict glyph stays alongside the resolve button (to its
+                    // right) — the button is now just a `checkmark.circle` icon, so the
+                    // row still needs the status glyph to read as conflicted. During the
+                    // brief post-resolve window `file.status` has already flipped to the
+                    // staged glyph while the green `checkmark.circle.fill` confirms.
+                    Button {
+                        appState.requestMarkResolved(file)
+                    } label: {
+                        ResolveIconView(isResolved: appState.justResolvedPath == file.path)
+                            .frame(width: 15, height: 15)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Mark as resolved")
+                    StatusIconView(status: file.status)
+                        .frame(width: 14, height: 14)
+                } else {
+                    StatusIconView(status: file.status)
+                        .frame(width: 14, height: 14)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Every row's content is single-line, so a fixed height lets List treat rows as
+            // uniform instead of measuring each. Combined with keeping the row body free of
+            // laziness-defeating modifiers — no per-row `.contextMenu` (moved to the
+            // List-level `.contextMenu(forSelectionType:)` below, which is only built on
+            // right-click) and no per-row `NSViewRepresentable` (the truncation tooltip is now
+            // a plain `.help`) — this is what keeps selecting a row in a 10k-file list as fast
+            // as in a 5-file one. Both were confirmed via Instruments to be run for every item
+            // up front, not just the on-screen ones.
+            .frame(height: 22)
+            .tag(file.path)
+            .listRowSeparator(.visible)
+        }
+        .contextMenu(forSelectionType: String.self) { paths in
+            contextMenuItems(forPaths: paths)
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .environment(\.controlActiveState, .key)
+        .opacity(showsList ? 1 : 0)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+        .safeAreaBar(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                header
+                if isWorkingChanges && appState.isMergeInProgress {
+                    mergeBanner
+                }
+            }
+        }
+        .safeAreaBar(edge: .bottom, spacing: 0) {
+            if isWorkingChanges && !appState.changedFiles.isEmpty {
+                CommitFooterView(appState: appState, isMessageFocused: isCommitMessageFocused)
+            } else if isStash && !appState.changedFiles.isEmpty {
+                StashFooterView(appState: appState)
+            } else if isNewestUnpushedCommit || appState.pushSucceeded {
+                // `appState.pushSucceeded` keeps this footer around for its own few seconds
+                // even though a successful push immediately zeroes `aheadCount`, which would
+                // otherwise make `isNewestUnpushedCommit` false and yank the success message
+                // away before it's had a chance to animate out.
+                //
+                // By the time `pushSucceeded` flips back to false 3s later, `aheadCount` has
+                // long since settled to 0 (via `refreshSyncStatus()`'s own async fetch), so
+                // `isNewestUnpushedCommit` is already false too — that flip removes this whole
+                // branch, not just something inside `UnpushedCommitFooterView`. The transition
+                // has to live here, at the point the branch itself disappears, or the exit
+                // never animates; `UnpushedCommitFooterView`'s own internal transition only
+                // covers swapping between its buttons and its toast while it stays mounted.
+                UnpushedCommitFooterView(appState: appState)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
+        .focused(isFocused)
+        // Left/right/escape here are column-navigation shortcuts, not something the commit
+        // message field should ever see — while it has focus, arrow keys need to move the
+        // text cursor and escape needs to do nothing, so all three back off and let the
+        // field's own default key handling run instead.
+        .onKeyPress(.leftArrow) {
+            guard !isCommitMessageFocused.wrappedValue else { return .ignored }
+            appState.focusedColumn = .branches
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            guard !isCommitMessageFocused.wrappedValue else { return .ignored }
+            appState.focusedColumn = .diff
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            guard !isCommitMessageFocused.wrappedValue, isNewestUnpushedCommit, !appState.isPushingCommit else { return .ignored }
+            appState.undoLastCommit()
+            return .handled
+        }
+    }
 
     /// Top inset for the header title's first line. Chosen to sit where a single centred line
     /// of `.font(.headline)` lands inside `ColumnLayout.headerHeight`, so the first line stays
@@ -288,7 +298,7 @@ struct ChangedFilesView: View {
                 .font(.headline)
                 .lineLimit(isTitleExpanded ? nil : 1)
                 .textSelection(.enabled)
-                .truncationTooltip(headerTitle, isEnabled: !isTitleExpanded)
+                .truncationTooltip(headerTitle, isEnabled: !isTitleExpanded, font: .preferredFont(forTextStyle: .headline))
                 .background(isTitleExpanded ? nil : titleTruncationProbe)
             Spacer(minLength: 0)
             if isTitleTruncated || isTitleExpanded {
@@ -310,8 +320,8 @@ struct ChangedFilesView: View {
     }
 
     /// Measures `headerTitle`'s ideal (untruncated) single-line width against the space actually
-    /// available to it, mirroring `TruncationTooltip`'s own detection approach, so the expand
-    /// button only appears when the title is genuinely being cut off.
+    /// available to it, so the expand button only appears when the title is genuinely cut off.
+    /// This one probe is a single instance (not per row), so its cost is negligible.
     private var titleTruncationProbe: some View {
         GeometryReader { visibleGeo in
             Text(headerTitle)
@@ -368,20 +378,13 @@ struct ChangedFilesView: View {
         .background(Color.orange.opacity(0.12))
     }
 
-    /// The files a context-menu action should apply to: the full multi-selection if the
-    /// right-clicked file is part of it, otherwise just the right-clicked file on its own
-    /// (matching Finder's behavior for right-clicking outside the current selection).
-    private func targetFiles(for file: ChangedFile) -> [ChangedFile] {
-        guard appState.selectedFilePaths.contains(file.path), appState.selectedFilePaths.count > 1 else {
-            return [file]
-        }
-        return appState.changedFiles.filter { appState.selectedFilePaths.contains($0.path) }
-    }
-
+    /// `.contextMenu(forSelectionType:)` hands us the effective target set already — the live
+    /// multi-selection if the right-clicked row is part of it, otherwise just that row — so this
+    /// only has to resolve paths back to `ChangedFile`s. Built lazily, once, on right-click.
     @ViewBuilder
-    private func contextMenuItems(for file: ChangedFile) -> some View {
-        let files = targetFiles(for: file)
-        if files.count == 1 {
+    private func contextMenuItems(forPaths paths: Set<String>) -> some View {
+        let files = appState.changedFiles.filter { paths.contains($0.path) }
+        if let file = files.first, files.count == 1 {
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([fullURL(for: file)])
             }
@@ -407,7 +410,7 @@ struct ChangedFilesView: View {
                     appState.ignoreFile(file)
                 }
             }
-        } else {
+        } else if files.count > 1 {
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting(files.map(fullURL(for:)))
             }
@@ -522,7 +525,6 @@ struct ChangedFilesView: View {
             set: { appState.setChecked($0, for: file.path) }
         )
     }
-
 }
 
 /// Split out from `ChangedFilesView` so typing in the commit message field only invalidates
@@ -626,6 +628,7 @@ private struct CommitFooterView: View {
     }
 
     private var canCommit: Bool {
+        guard !appState.isCommitting else { return false }
         let hasMessage = !appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if appState.isMergeInProgress {
             return hasMessage && !hasUnresolvedConflicts
@@ -633,13 +636,20 @@ private struct CommitFooterView: View {
         return checkedCount > 0 && hasMessage
     }
 
-    private var commitButtonLabel: Text {
-        if appState.isMergeInProgress {
-            return Text("Complete Merge")
+    /// While a commit is in flight the label is just a spinner — a big commit takes long
+    /// enough that a static label reads as an unresponsive button.
+    @ViewBuilder
+    private var commitButtonLabel: some View {
+        if appState.isCommitting {
+            ProgressView()
+                .controlSize(.small)
+        } else if appState.isMergeInProgress {
+            Text("Complete Merge")
+        } else {
+            let branchName = appState.selectedBranch?.name ?? "…"
+            let suffix = checkedCount == 1 ? "" : "s"
+            Text("Commit \(checkedCount) file\(suffix) to ") + Text(branchName).bold()
         }
-        let branchName = appState.selectedBranch?.name ?? "…"
-        let suffix = checkedCount == 1 ? "" : "s"
-        return Text("Commit \(checkedCount) file\(suffix) to ") + Text(branchName).bold()
     }
 }
 
@@ -680,7 +690,7 @@ private struct StashFooterView: View {
 }
 
 /// Toolbar shown when the selected commit is the branch's own tip and hasn't reached `origin` yet
-/// (`ChangedFilesView.isNewestUnpushedCommit`) — offers to undo it, landing its changes back on
+/// (`ChangedFilesList.isNewestUnpushedCommit`) — offers to undo it, landing its changes back on
 /// "Uncommitted Changes" (`AppState.undoLastCommit()`'s `reset --soft` plus the usual
 /// post-refresh selection heuristic), or push it straight up. The push button only appears at all
 /// when an `origin` remote actually exists to push to.
