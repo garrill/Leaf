@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0]
+
+* Icon for unpushed commits
+* Hunks starting with a blank line display correct line number
+* increased hit area of commit message input
+* disabled autocomplete on message input
+* Batch large commits to stop crash
+* Optimised list view so large commits can be browsed quicker
+* More options for ignoring files
+* Fixed stale diff checker when files have same line count
+
 ## [0.5.0]
 
 * Failures / error messages show as actionable alerts
