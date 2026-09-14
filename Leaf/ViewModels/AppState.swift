@@ -978,6 +978,22 @@ final class AppState {
         }
     }
 
+    /// Adds raw `.gitignore` patterns (e.g. `*.log`, `/path/to/folder/`), for the "ignore all
+    /// .ext files"/"ignore folder" context menu options rather than an exact `ChangedFile` path.
+    func ignorePatterns(_ patterns: [String]) {
+        guard let repo = currentRepository, !patterns.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.ignorePatterns(patterns) }.value
+                self.errorMessage = nil
+                await self.loadChangedFilesForCurrentSelection()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func setChecked(_ isChecked: Bool, for path: String) {
         if isChecked {
             checkedFilePaths.insert(path)

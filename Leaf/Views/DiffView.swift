@@ -45,6 +45,11 @@ struct DiffView: View {
     /// `header`'s `addedCount`/`removedCount` and `content`'s `DiffCodeScrollView` construction
     /// each independently re-parsed the same text on every single render.
     @State private var diffLines: [DiffLine] = []
+    /// Bumped every time `diffLines` is recomputed below, so `DiffContentKey` (which needs to
+    /// tell a stale render pass — new `diffText`, still-old `diffLines` — apart from a caught-up
+    /// one) can't be fooled by two different files coincidentally parsing to the same line count.
+    /// See `DiffContentKey`'s doc comment.
+    @State private var diffLinesRevision = 0
     /// Hoisted out of `DiffSearchBar` — a child's own `@FocusState` gets dropped when SwiftUI
     /// rebuilds the `.safeAreaBar` content. Driven true on ⌘F via `diffFindFocusRequest`.
     @FocusState private var searchFieldFocused: Bool
@@ -193,6 +198,7 @@ struct DiffView: View {
             }
             .onChange(of: DiffParseKey(diffText: appState.diffText, isConflicted: appState.selectedFile?.status == .conflicted), initial: true) { _, key in
                 diffLines = key.isConflicted ? Self.parsePlainText(key.diffText) : Self.parse(key.diffText)
+                diffLinesRevision += 1
                 appState.diffFindCurrentIndex = 0
             }
     }
@@ -276,7 +282,7 @@ struct DiffView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else {
-            DiffScrollContent(appState: appState, lines: diffLines, highlightSnapshot: highlightSnapshot, fontSize: CGFloat(diffFontSize))
+            DiffScrollContent(appState: appState, lines: diffLines, linesRevision: diffLinesRevision, highlightSnapshot: highlightSnapshot, fontSize: CGFloat(diffFontSize))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .task(id: HighlightRequest(path: appState.selectedFile?.path, diffText: appState.diffText, isDark: colorScheme == .dark, enabled: syntaxHighlightingEnabled)) {
                     // Skip the highlight pass entirely when disabled, rather than running it and
@@ -618,6 +624,7 @@ private struct HighlightRequest: Equatable {
 private struct DiffScrollContent: View {
     @Bindable var appState: AppState
     let lines: [DiffLine]
+    let linesRevision: Int
     let highlightSnapshot: HighlightSnapshot?
     let fontSize: CGFloat
 
@@ -628,6 +635,7 @@ private struct DiffScrollContent: View {
             DiffCodeScrollView(
                 appState: appState,
                 lines: lines,
+                linesRevision: linesRevision,
                 highlightSnapshot: highlightSnapshot,
                 diffText: appState.diffText,
                 fontSize: fontSize,

@@ -821,18 +821,24 @@ private struct DiffSearchRenderKey: Equatable {
 /// and line count are otherwise identical, so an identity-based key repaints in that case where a
 /// line-count-based one would not.
 ///
-/// `lineCount` is included alongside `diffText` because `DiffView`'s parsed `diffLines` (passed
-/// in as `DiffCodeScrollView.lines`) is cached separately, updated via its own `.onChange`, and
-/// can momentarily lag a render pass behind `diffText` itself changing (each async diff load
-/// lands as its own transaction). Without this, the very first `updateContent` after selecting a
-/// new file could bake in a stale/empty `lines` (same `diffText` as what's about to arrive), and
-/// the later call carrying the now-correct `lines` would look unchanged by `diffText` alone and
-/// get skipped — leaving the pane blank until something else (any key field changing) forced a
-/// rebuild. With syntax highlighting on, a fresh `HighlightSnapshot` arriving shortly after always
-/// provided that forcing nudge, which is what masked this; with it off, nothing ever did.
+/// `linesRevision` is included alongside `diffText` because `DiffView`'s parsed `diffLines`
+/// (passed in as `DiffCodeScrollView.lines`) is cached separately, updated via its own
+/// `.onChange`, and can momentarily lag a render pass behind `diffText` itself changing (each
+/// async diff load lands as its own transaction). Without this, the very first `updateContent`
+/// after selecting a new file could bake in a stale `lines` (still the previous file's, paired
+/// with the new `diffText`), and the later call carrying the now-correct `lines` would need to
+/// look different from that stale one to actually repaint. A plain line *count* was tried first,
+/// but two different files routinely parse to the same line count (e.g. both single-line edits),
+/// so that stale render silently won every subsequent comparison too — the pane would then stay
+/// one file behind, only correcting itself whenever a file's count happened to differ from the
+/// previous one. `linesRevision` instead comes from a counter `DiffView` bumps every single time
+/// it recomputes `diffLines`, so a genuine reparse always produces a key that differs from
+/// whatever (possibly stale) content was last painted, regardless of the resulting count. With
+/// syntax highlighting on, a fresh `HighlightSnapshot` arriving shortly after always provided a
+/// forcing nudge of its own, which is what masked this; with it off, nothing else did.
 struct DiffContentKey: Equatable {
     let diffText: String
-    let lineCount: Int
+    let linesRevision: Int
     let highlightSnapshotID: UUID?
     let fontSize: CGFloat
 }
@@ -845,6 +851,7 @@ struct DiffContentKey: Equatable {
 struct DiffCodeScrollView: NSViewRepresentable {
     @Bindable var appState: AppState
     let lines: [DiffLine]
+    let linesRevision: Int
     let highlightSnapshot: HighlightSnapshot?
     let diffText: String
     var fontSize: CGFloat = NSFont.systemFontSize
@@ -907,7 +914,7 @@ struct DiffCodeScrollView: NSViewRepresentable {
     }
 
     private func updateContent(container: DiffCodeContainerView) {
-        let key = DiffContentKey(diffText: diffText, lineCount: lines.count, highlightSnapshotID: highlightSnapshot?.id, fontSize: fontSize)
+        let key = DiffContentKey(diffText: diffText, linesRevision: linesRevision, highlightSnapshotID: highlightSnapshot?.id, fontSize: fontSize)
         guard container.needsContentUpdate(for: key) else { return }
         let (attributed, metadata) = Self.buildContent(lines: lines, highlightSnapshot: highlightSnapshot, diffText: diffText, fontSize: fontSize)
         container.setContent(attributedString: attributed, metadata: metadata, key: key)

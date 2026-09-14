@@ -406,8 +406,24 @@ private struct ChangedFilesList: View {
                 Button("Discard Changes", role: .destructive) {
                     appState.discardChanges(for: file)
                 }
-                Button("Ignore File") {
-                    appState.ignoreFile(file)
+                Menu("Ignore…") {
+                    Button("Ignore File") {
+                        appState.ignoreFile(file)
+                    }
+                    if let ext = fileExtension(for: file) {
+                        Button("Ignore All .\(ext) Files") {
+                            appState.ignorePatterns(["*.\(ext)"])
+                        }
+                    }
+                    let folders = ancestorFolders(for: file.path)
+                    if !folders.isEmpty {
+                        Divider()
+                        ForEach(Array(folders.enumerated()), id: \.offset) { index, folder in
+                            Button(index == 0 ? "Ignore Folder \(folder)" : "Ignore Parent Folder \(folder)") {
+                                appState.ignorePatterns(["/\(folder)/"])
+                            }
+                        }
+                    }
                 }
             }
         } else if files.count > 1 {
@@ -441,6 +457,23 @@ private struct ChangedFilesList: View {
             return URL(fileURLWithPath: file.path)
         }
         return repoURL.appendingPathComponent(file.path)
+    }
+
+    private func fileExtension(for file: ChangedFile) -> String? {
+        let ext = (file.path as NSString).pathExtension
+        return ext.isEmpty ? nil : ext
+    }
+
+    /// Ancestor folders of `path`, deepest (immediate parent) first, walking up to the repo root.
+    /// Empty if the file sits at the repo root.
+    private func ancestorFolders(for path: String) -> [String] {
+        var components = path.split(separator: "/").map(String.init)
+        guard !components.isEmpty else { return [] }
+        components.removeLast()
+        guard !components.isEmpty else { return [] }
+        return stride(from: components.count, through: 1, by: -1).map {
+            components.prefix($0).joined(separator: "/")
+        }
     }
 
     private func copyToPasteboard(_ string: String) {

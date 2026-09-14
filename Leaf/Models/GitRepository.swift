@@ -1143,6 +1143,12 @@ nonisolated struct GitRepository {
         try appendToGitignore(files.map(\.path))
     }
 
+    /// Appends raw `.gitignore` patterns (e.g. `*.log`, `/path/to/folder/`) rather than exact file
+    /// paths — used for the "ignore all .ext files"/"ignore folder" context menu options.
+    func ignorePatterns(_ patterns: [String]) throws {
+        try appendToGitignore(patterns)
+    }
+
     private func appendToGitignore(_ paths: [String]) throws {
         let gitignoreURL = rootURL.appendingPathComponent(".gitignore")
         var existing = (try? String(contentsOf: gitignoreURL, encoding: .utf8)) ?? ""
