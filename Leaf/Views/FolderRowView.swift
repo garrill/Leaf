@@ -5,7 +5,6 @@ struct FolderRowView: View {
     let repoCount: Int
     let isRenaming: Bool
     let isHovering: Bool
-    let isLastInGroup: Bool
     let onToggle: () -> Void
     let onStartRename: () -> Void
     let onCommitRename: (String) -> Void
@@ -58,7 +57,7 @@ struct FolderRowView: View {
         }
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .padding(.bottom, isLastInGroup ? SidebarLayout.groupSpacing : 0)
+        .padding(.top, SidebarLayout.groupSpacing)
         .animation(.easeOut(duration: 0.12), value: isHovering)
         .overlay {
             // Only exists (and only intercepts clicks) while NOT renaming — otherwise a plain
@@ -107,7 +106,6 @@ private struct FolderRowPreviewRepo: View {
             appState: appState,
             sidebarStore: sidebarStore,
             isRenaming: false,
-            isLastInGroup: false,
             onStartRename: {},
             onCommitRename: { _ in }
         )
@@ -126,7 +124,6 @@ private struct FolderRowPreviewRepo: View {
             repoCount: 3,
             isRenaming: false,
             isHovering: false,
-            isLastInGroup: false,
             onToggle: {},
             onStartRename: {},
             onCommitRename: { _ in },
@@ -143,7 +140,6 @@ private struct FolderRowPreviewRepo: View {
             repoCount: 2,
             isRenaming: false,
             isHovering: true,
-            isLastInGroup: false,
             onToggle: {},
             onStartRename: {},
             onCommitRename: { _ in },
@@ -159,7 +155,6 @@ private struct FolderRowPreviewRepo: View {
             repoCount: 0,
             isRenaming: true,
             isHovering: false,
-            isLastInGroup: true,
             onToggle: {},
             onStartRename: {},
             onCommitRename: { _ in },

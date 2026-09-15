@@ -181,30 +181,15 @@ private final class FocusableSidebarOutlineView: NSOutlineView {
     }
 }
 
-/// Draws the selection pill inset from the row's edges, matching the rounded highlight used by
-/// Finder/Mail-style sidebars.
+/// Uses AppKit's own `.sourceList` selection drawing rather than a custom pill — the group
+/// spacing that used to sit below a group's last row (and needed a custom `drawSelection`
+/// override to keep the default full-row-height selection from stretching down through it) now
+/// sits above the group's own heading row instead, so there's no oversized row for a selection to
+/// stretch through and no need to fight AppKit's default drawing.
 ///
 /// The native NSOutlineView disclosure button is hidden while leaving the outline hierarchy
 /// intact, so NSOutlineView continues to handle expansion/collapse normally.
 final class SidebarTableRowView: NSTableRowView {
-    override func drawSelection(in dirtyRect: NSRect) {
-        guard isSelected else { return }
-
-        let color: NSColor = isEmphasized
-            ? .selectedContentBackgroundColor
-            : .unemphasizedSelectedContentBackgroundColor
-
-        // Rows at the end of a group are taller than `SidebarLayout.rowHeight`, carrying blank
-        // group-spacing padding below their content — keep the selection pill pinned to the top,
-        // matching the content, instead of stretching down through that padding.
-        var rect = bounds.insetBy(dx: 4, dy: 2)
-        rect.size.height = min(rect.height, SidebarLayout.rowHeight - 4)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-
-        color.setFill()
-        path.fill()
-    }
-
     override func didAddSubview(_ subview: NSView) {
         super.didAddSubview(subview)
 
@@ -553,36 +538,22 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         SidebarTableRowView()
     }
 
-    /// Adds breathing room under each top-level group (folder), matching Finder/Mail-style
-    /// sidebars — appended to whichever row currently draws last for that group: the folder's own
-    /// row when collapsed or empty, otherwise its last visible child repo.
+    /// Adds breathing room above each top-level group (folder), matching Finder/Mail-style
+    /// sidebars — folder rows are always a group's own heading, so this is just "is this a
+    /// folder row", regardless of expand state or how many children it has.
     func outlineView(
         _ outlineView: NSOutlineView,
         heightOfRowByItem item: Any
     ) -> CGFloat {
-        isLastRowOfGroup(item, in: outlineView)
+        isFolderRow(item)
             ? SidebarLayout.rowHeight + SidebarLayout.groupSpacing
             : SidebarLayout.rowHeight
     }
 
-    /// Whether `item` is the last row drawn for its top-level group (folder) — the folder's own
-    /// row when collapsed or empty, otherwise its last visible child repo.
-    private func isLastRowOfGroup(_ item: Any, in outlineView: NSOutlineView) -> Bool {
-        guard let boxed = item as? SidebarOutlineItem else {
-            return false
-        }
-
-        switch boxed.kind {
-        case .folder(let id):
-            return !outlineView.isItemExpanded(item) || children(ofFolder: id).isEmpty
-
-        case .repo(let id):
-            guard let repo = sidebarStore.repos.first(where: { $0.id == id }),
-                  let folderID = repo.folderID else {
-                return false
-            }
-            return children(ofFolder: folderID).last?.id == id
-        }
+    private func isFolderRow(_ item: Any) -> Bool {
+        guard let boxed = item as? SidebarOutlineItem else { return false }
+        if case .folder = boxed.kind { return true }
+        return false
     }
 
     // MARK: Drag and drop
@@ -811,7 +782,6 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             appState: appState,
             sidebarStore: sidebarStore,
             isRenaming: appState.renamingRepoID == repo.id,
-            isLastInGroup: isLastRowOfGroup(item(forRepo: repo.id), in: outlineView),
             onStartRename: { [self] in
                 appState.renamingRepoID = repo.id
             },
@@ -853,19 +823,13 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         folder: SidebarFolder,
         isHovering: Bool
     ) -> FolderRowView {
-        let isLastInGroup: Bool = {
-            guard let outlineView else { return false }
-            return isLastRowOfGroup(item(forFolder: folder.id), in: outlineView)
-        }()
-
-        return FolderRowView(
+        FolderRowView(
             folder: folder,
             repoCount: sidebarStore.repos.count {
                 $0.folderID == folder.id
             },
             isRenaming: appState.renamingFolderID == folder.id,
             isHovering: isHovering,
-            isLastInGroup: isLastInGroup,
 
             onToggle: { [self] in
                 let item = self.item(forFolder: folder.id)

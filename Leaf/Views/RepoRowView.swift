@@ -6,7 +6,6 @@ struct RepoRowView: View {
     let appState: AppState
     let sidebarStore: SidebarStore
     let isRenaming: Bool
-    let isLastInGroup: Bool
     let onStartRename: () -> Void
     let onCommitRename: (String) -> Void
 
@@ -41,7 +40,6 @@ struct RepoRowView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .padding(.bottom, isLastInGroup ? SidebarLayout.groupSpacing : 0)
         .onAppear { beginRenamingIfNeeded() }
         .onChange(of: isRenaming) { _, renaming in
             if renaming { beginRenamingIfNeeded() }

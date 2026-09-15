@@ -88,7 +88,7 @@ struct ChangedFilesView: View {
             // into the sentence — `Text` doesn't parse Markdown from a plain `String`, so
             // backticks around it would render as literal characters, not a code span.
             if let remote = alert.pushRemoteURL {
-                Text("Failed to push to:\n") + Text(remote).bold() + Text("\n\(alert.message)")
+                Text("Failed to push to:\n\(Text(remote).bold())\n\(alert.message)")
             } else {
                 Text(alert.message)
             }
@@ -176,9 +176,17 @@ private struct ChangedFilesList: View {
     var isCommitMessageFocused: FocusState<Bool>.Binding
     @State private var isTitleExpanded = false
     @State private var isTitleTruncated = false
+    /// `List`'s selection binds to this local buffer rather than straight into `appState`, same
+    /// reasoning as `BranchListView.localSelection` — `List(selection:)` fires its internal
+    /// spurious empty-set deselect before a real click's selection lands, and routed directly
+    /// into `appState.updateFileSelection` that briefly-empty write was clearing `selectedFile`
+    /// to nil, which is what left the diff pane blank after selecting a repo/source (the
+    /// programmatic `selectFile(changedFiles.first)` that follows a load got stomped by this
+    /// same spurious empty fire before the user ever touched the list).
+    @State private var localFileSelection: Set<String> = []
 
     var body: some View {
-        List(appState.changedFiles, selection: fileSelection) { file in
+        List(appState.changedFiles, selection: $localFileSelection) { file in
             HStack {
                 if isWorkingChanges {
                     Toggle("", isOn: checkedBinding(for: file))
@@ -282,6 +290,30 @@ private struct ChangedFilesList: View {
             guard !isCommitMessageFocused.wrappedValue, isNewestUnpushedCommit, !appState.isPushingCommit else { return .ignored }
             appState.undoLastCommit()
             return .handled
+        }
+        .task {
+            localFileSelection = appState.selectedFilePaths
+        }
+        // The user picked row(s) natively — propagate a step after AppKit's own selection
+        // commit. The empty set is ignored: it's either `List`'s spurious pre-click internal
+        // deselect (see `localFileSelection`'s doc comment) or the list having just been cleared
+        // by a load already handled via the mirror below, never a real "deselect everything"
+        // gesture this app needs to support.
+        .onChange(of: localFileSelection) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            appState.updateFileSelection(newValue)
+        }
+        // Selection changed for a reason other than the user clicking/arrowing a row (a fresh
+        // load's auto-selected first file, switching repos/sources, discarding the selected
+        // file, etc.) — mirror it into the local state that actually drives the table view,
+        // snapping instead of animating since this is a full jump.
+        .onChange(of: appState.selectedFilePaths) { _, newValue in
+            guard localFileSelection != newValue else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                localFileSelection = newValue
+            }
         }
     }
 
@@ -503,15 +535,6 @@ private struct ChangedFilesList: View {
         appState.selectedRepoURL != nil && appState.selectedSource != nil && !appState.changedFiles.isEmpty
     }
 
-    /// Backed by a `Set<String>` (file paths) rather than `Set<ChangedFile>` so native
-    /// shift/cmd-click multi-selection works, tagging rows with `file.path` above.
-    private var fileSelection: Binding<Set<String>> {
-        Binding(
-            get: { appState.selectedFilePaths },
-            set: { newValue in appState.updateFileSelection(newValue) }
-        )
-    }
-
     /// Directory in secondary/grey, file name in primary color, on one line — matching
     /// `DiffView`'s header treatment, with `.truncationMode(.head)` so a long path truncates
     /// from the front and the file name (the most useful part) always stays visible.
@@ -681,7 +704,7 @@ private struct CommitFooterView: View {
         } else {
             let branchName = appState.selectedBranch?.name ?? "…"
             let suffix = checkedCount == 1 ? "" : "s"
-            Text("Commit \(checkedCount) file\(suffix) to ") + Text(branchName).bold()
+            Text("Commit \(checkedCount) file\(suffix) to \(Text(branchName).bold())")
         }
     }
 }

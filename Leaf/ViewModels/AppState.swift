@@ -378,9 +378,8 @@ final class AppState {
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try GitRepository.clone(from: trimmedURL, into: destination) { [weak self] line in
-                        Task { @MainActor [weak self] in
-                            guard let self else { return }
+                    try GitRepository.clone(from: trimmedURL, into: destination) { line in
+                        Task { @MainActor in
                             self.cloneProgressText = Self.formatProgressLine(line)
                             if let fraction = Self.cloneStageFraction(for: line) {
                                 // Clamped to never decrease: within the "remote" macro-stage,
@@ -431,7 +430,16 @@ final class AppState {
         // Clear the previous repo's file list/diff immediately rather than leaving them on
         // screen until the new repo's debounced/detached loads complete — otherwise columns 3
         // and 4 briefly show one repo's files/diff next to column 2's already-updated branches.
+        // `selectedSource` in particular has to go here too, not just `selectedFile` — leaving a
+        // stale `.commit`/`.stash` selection from the previous repo around means
+        // `ChangedFilesView`'s `.task(id:)` (keyed on `selectedRepoURL` + `selectedSource`) fires
+        // immediately on the repo-URL change alone and runs a changed-files load for that old
+        // source's SHA against the *new* repo on disk — `git show <old sha>` there fails with
+        // "fatal: bad object <sha>", which flashes as an error in the diff pane (shared
+        // `errorMessage`) until `refreshRepositoryState()`'s async completion calls `selectSource`
+        // with something valid for the new repo and clears it a moment later.
         changedFiles = []
+        selectedSource = nil
         selectedFile = nil
         selectedFilePaths = []
         checkedFilePaths = []
@@ -1251,9 +1259,9 @@ final class AppState {
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try repo.push(branch: branch, includeTags: true) { [weak self] line in
-                        Task { @MainActor [weak self] in
-                            self?.pushProgressText = Self.formatProgressLine(line)
+                    try repo.push(branch: branch, includeTags: true) { line in
+                        Task { @MainActor in
+                            self.pushProgressText = Self.formatProgressLine(line)
                         }
                     }
                 }.value

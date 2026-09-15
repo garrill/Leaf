@@ -208,9 +208,6 @@ private struct BranchMenuToolbarView: View {
                 Text(branchLabelText)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
             }
 
         }
