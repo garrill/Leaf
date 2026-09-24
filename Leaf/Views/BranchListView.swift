@@ -15,6 +15,11 @@ struct BranchListView: View {
     /// `appState.selectedSource` a step later, via `.onChange` below, keeps the hot path (a
     /// native table view committing its own selection) as cheap as possible.
     @State private var localSelection: ChangeSource?
+    /// Set right before a non-user-driven write to `localSelection` (see the `appState.selectedSource`
+    /// mirror below) and checked in `localSelection`'s own `onChange` so that a repo switch's
+    /// auto-selected first commit doesn't steal `focusedColumn`/real keyboard focus away from the
+    /// sidebar the way an actual click on a row should.
+    @State private var pendingProgrammaticSelection: ChangeSource?
     @FocusState private var isFocused: Bool
     @AppStorage(LeafSettings.showFullCommitTitleKey, store: LeafSettings.store) private var showFullCommitTitle = LeafSettings.defaultShowFullCommitTitle
 
@@ -118,6 +123,18 @@ struct BranchListView: View {
             // never flashes to "no file selected" in between.
             guard let newValue else { return }
             appState.selectSource(newValue)
+            // Only a real click/arrow should steal focus — a repo switch's auto-selected first
+            // commit lands here too (via the mirror below assigning `localSelection`), and that
+            // one must leave `focusedColumn` on the sidebar.
+            guard pendingProgrammaticSelection != newValue else {
+                pendingProgrammaticSelection = nil
+                return
+            }
+            // A mouse click on a row doesn't reliably flip `isFocused` true on its own (unlike
+            // arrow-key cross-column navigation, which sets `focusedColumn` explicitly) — claim
+            // it here too, or the sidebar's `NSOutlineView` keeps real AppKit first-responder
+            // status (and its blue selection) while this list's own selection renders grey.
+            appState.focusedColumn = .branches
         }
         // Selection changed for a reason other than the user clicking/arrowing a row (initial
         // load, switching repos, discarding the selected file, etc.) — mirror it into the local
@@ -125,6 +142,7 @@ struct BranchListView: View {
         // is a full jump, not a step-by-step navigation the user should see move.
         .onChange(of: appState.selectedSource) { _, newValue in
             guard localSelection != newValue else { return }
+            pendingProgrammaticSelection = newValue
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {

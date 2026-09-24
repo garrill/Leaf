@@ -184,6 +184,11 @@ private struct ChangedFilesList: View {
     /// programmatic `selectFile(changedFiles.first)` that follows a load got stomped by this
     /// same spurious empty fire before the user ever touched the list).
     @State private var localFileSelection: Set<String> = []
+    /// Set right before a non-user-driven write to `localFileSelection` (see the
+    /// `appState.selectedFilePaths` mirror below) and checked in `localFileSelection`'s own
+    /// `onChange` so that a repo/commit switch's auto-selected first file doesn't steal
+    /// `focusedColumn`/real keyboard focus the way an actual click on a row should.
+    @State private var pendingProgrammaticFileSelection: Set<String>?
 
     var body: some View {
         List(appState.changedFiles, selection: $localFileSelection) { file in
@@ -302,6 +307,17 @@ private struct ChangedFilesList: View {
         .onChange(of: localFileSelection) { _, newValue in
             guard !newValue.isEmpty else { return }
             appState.updateFileSelection(newValue)
+            // Only a real click/arrow should steal focus — a repo/commit switch's auto-selected
+            // first file lands here too (via the mirror below assigning `localFileSelection`),
+            // and that one must leave `focusedColumn` wherever it already was.
+            guard pendingProgrammaticFileSelection != newValue else {
+                pendingProgrammaticFileSelection = nil
+                return
+            }
+            // See `BranchListView`'s matching comment — a plain click doesn't reliably flip
+            // `isFocused` true on its own, so claim `focusedColumn` here to force real AppKit
+            // first-responder status onto this list instead of leaving it on the sidebar.
+            appState.focusedColumn = .files
         }
         // Selection changed for a reason other than the user clicking/arrowing a row (a fresh
         // load's auto-selected first file, switching repos/sources, discarding the selected
@@ -309,6 +325,7 @@ private struct ChangedFilesList: View {
         // snapping instead of animating since this is a full jump.
         .onChange(of: appState.selectedFilePaths) { _, newValue in
             guard localFileSelection != newValue else { return }
+            pendingProgrammaticFileSelection = newValue
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
