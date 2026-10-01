@@ -1,49 +1,169 @@
 {
+  "features" : [
+    "refractivity"
+  ],
   "fill" : {
-    "linear-gradient" : [
-      "srgb:0.98829,0.79342,0.36644,1.00000",
-      "srgb:0.90968,0.34685,0.30266,1.00000"
-    ],
-    "orientation" : {
-      "start" : {
-        "x" : 0.5,
-        "y" : 0
-      },
-      "stop" : {
-        "x" : 0.5,
-        "y" : 0.7
-      }
-    }
+    "automatic-gradient" : "extended-gray:1.00000,1.00000"
   },
   "groups" : [
     {
+      "blend-mode-specializations" : [
+        {
+          "value" : "darken"
+        },
+        {
+          "appearance" : "dark",
+          "value" : "normal"
+        }
+      ],
       "blur-material" : null,
-      "hidden" : false,
       "layers" : [
         {
+          "blend-mode-specializations" : [
+            {
+              "value" : "normal"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
           "fill" : {
-            "automatic-gradient" : "extended-gray:1.00000,1.00000"
+            "linear-gradient" : [
+              "display-p3:0.24441,0.56869,1.05747,0.80000",
+              "extended-srgb:0.00000,0.53333,1.00000,0.60000"
+            ]
           },
-          "glass" : true,
-          "image-name" : "Rectangle 24e.svg",
-          "name" : "Leaf glyph",
+          "hidden" : false,
+          "image-name" : "Ellipse 19.svg",
+          "name" : "Bottom circle",
           "position" : {
-            "scale" : 16,
+            "scale" : 1,
             "translation-in-points" : [
-              0,
-              0
+              160,
+              160
             ]
           }
         }
       ],
       "lighting" : "individual",
+      "opacity" : 0.6,
+      "refractivity-specializations" : [
+        {
+          "value" : {
+            "depth" : 0.05,
+            "enabled" : true,
+            "strength" : 0.5
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "depth" : 0,
+            "enabled" : true,
+            "strength" : 0.5
+          }
+        }
+      ],
       "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
+        "kind" : "layer-color",
+        "opacity" : 1
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.6
+      }
+    },
+    {
+      "hidden" : false,
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "linear-gradient" : [
+              "display-p3:0.44053,0.82207,0.44527,0.70000",
+              "extended-srgb:0.20392,0.78039,0.34902,1.00000"
+            ],
+            "orientation" : {
+              "start" : {
+                "x" : 1,
+                "y" : 0
+              },
+              "stop" : {
+                "x" : 0,
+                "y" : 1
+              }
+            }
+          },
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "intersectcircle.svg",
+          "name" : "Intersect leaf",
+          "opacity-specializations" : [
+            {
+              "value" : 0.8
+            },
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ]
+        }
+      ],
+      "opacity-specializations" : [
+        {
+          "value" : 0.8
+        },
+        {
+          "appearance" : "dark",
+          "value" : 1
+        }
+      ],
+      "refractivity" : {
+        "depth" : 0,
+        "enabled" : false,
+        "strength" : 0.5
+      },
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 1
+      }
+    },
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "fill" : {
+            "automatic-gradient" : "extended-srgb:0.38039,0.33333,0.96078,1.00000"
+          },
+          "hidden" : false,
+          "image-name" : "Ellipse 19.svg",
+          "name" : "Top circle",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -160,
+              -160
+            ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "name" : "Group",
+      "opacity" : 0.6,
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 1
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.5
+        "value" : 0.8
       }
     }
   ],

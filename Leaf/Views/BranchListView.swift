@@ -29,7 +29,9 @@ struct BranchListView: View {
                 Section {
                     Group {
                         if appState.uncommittedChangeCount > 0 {
-                            uncommittedChangesRow.tag(ChangeSource.workingChanges)
+                            uncommittedChangesRow
+                                .claimingFocusOnClick(claimFocusOnClick)
+                                .tag(ChangeSource.workingChanges)
                         } else {
                             uncommittedChangesRow
                         }
@@ -38,6 +40,7 @@ struct BranchListView: View {
 
                     if appState.stashCount > 0 {
                         stashedChangesRow
+                            .claimingFocusOnClick(claimFocusOnClick)
                             .tag(ChangeSource.stash)
                             .listRowSeparator(.visible)
                     }
@@ -55,6 +58,7 @@ struct BranchListView: View {
                             isUnpushed: unpushedSHAs.contains(commit.sha),
                             showFullCommitTitle: showFullCommitTitle
                         )
+                        .claimingFocusOnClick(claimFocusOnClick)
                         .tag(ChangeSource.commit(commit))
                         .listRowSeparator(.visible)
                         .contextMenu {
@@ -200,6 +204,15 @@ struct BranchListView: View {
         .padding(.vertical, 6)
     }
 
+    /// Clicking the row that's *already* selected (grey because another column has focus)
+    /// leaves `localSelection` unchanged, so its `onChange` focus claim never fires — this
+    /// claims it on the click itself. Sets `isFocused` directly as well as `focusedColumn`, since
+    /// the latter may already read `.branches` and then its own `onChange` wouldn't fire either.
+    private func claimFocusOnClick() {
+        isFocused = true
+        appState.focusedColumn = .branches
+    }
+
     private func sectionHeader(_ title: String, systemImage: String) -> some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
@@ -275,5 +288,15 @@ private struct CommitRowView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(Capsule().fill(Color.secondary.opacity(0.15)))
+    }
+}
+
+private extension View {
+    /// Runs `action` on a click anywhere in the row, alongside (not instead of) `List`'s own
+    /// native selection handling.
+    func claimingFocusOnClick(_ action: @escaping () -> Void) -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded(action))
     }
 }

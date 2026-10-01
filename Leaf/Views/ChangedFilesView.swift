@@ -232,11 +232,29 @@ private struct ChangedFilesList: View {
             // as in a 5-file one. Both were confirmed via Instruments to be run for every item
             // up front, not just the on-screen ones.
             .frame(height: 22)
+            .contentShape(Rectangle())
+            // Clicking the row that's *already* selected (grey because another column has
+            // focus) leaves `localFileSelection` unchanged, so its `onChange` focus claim below
+            // never fires — claim focus on the click itself too. Set `isFocused` directly as
+            // well as `focusedColumn`: the latter can already read `.files` (e.g. commit
+            // message field focused), in which case its own `onChange` wouldn't fire either.
+            .simultaneousGesture(TapGesture().onEnded {
+                isFocused.wrappedValue = true
+                appState.focusedColumn = .files
+            })
             .tag(file.path)
             .listRowSeparator(.visible)
         }
         .contextMenu(forSelectionType: String.self) { paths in
             contextMenuItems(forPaths: paths)
+        } primaryAction: { paths in
+            // Double-click (or Return) — same as the single-file "Open in Default Program"
+            // context-menu item. Skipped for a multi-selection and for a file that no longer
+            // exists on disk (deleted in the working tree or in the selected commit).
+            guard paths.count == 1, let file = appState.changedFiles.first(where: { paths.contains($0.path) }) else { return }
+            let url = fullURL(for: file)
+            guard FileManager.default.fileExists(atPath: url.path) else { return }
+            LeafSettings.open(url)
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
