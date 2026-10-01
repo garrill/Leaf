@@ -93,10 +93,7 @@ struct ChangedFilesView: View {
                 Text(alert.message)
             }
         }
-        // A conflicting stash restore (`AppState.restoreStash()`) — separate from
-        // `gitFailureAlert` above since it's not a failure to report so much as a choice about
-        // what happens to the now-redundant stash entry once its content is already merged
-        // (with conflict markers) into the working tree.
+        /// A conflicting stash restore (`AppState.restoreStash()`) — separate from `gitFailureAlert` above since it's not a failure to report so much as a choice about what happens to the now-redundant stash entry once its content is already merged (with conflict markers) into the working tree.
         .alert(
             "Restore Stash",
             isPresented: Binding(
@@ -290,7 +287,7 @@ private struct ChangedFilesList: View {
                 // never animates; `UnpushedCommitFooterView`'s own internal transition only
                 // covers swapping between its buttons and its toast while it stays mounted.
                 UnpushedCommitFooterView(appState: appState)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(.materialize)
             }
         }
         .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
@@ -788,52 +785,112 @@ private struct StashFooterView: View {
 private struct UnpushedCommitFooterView: View {
     @Bindable var appState: AppState
 
-    var body: some View {
-        VStack(spacing: 8) {
-            if appState.pushSucceeded {
-                PushSuccessToastView()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else {
-                HStack(spacing: 8) {
-                    Button {
-                        appState.undoLastCommit()
-                    } label: {
-                        Label("Undo Commit", systemImage: "arrow.uturn.backward")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.capsule)
-                    .disabled(appState.isPushingCommit)
+    private enum Panel { case buttons, toast }
 
-                    if appState.hasOriginRemote {
-                        Button {
-                            appState.pushCurrentBranch()
-                        } label: {
-                            HStack(spacing: 6) {
-                                if appState.isPushingCommit {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else {
-                                    Image(systemName: "arrow.up")
-                                }
-                                Text(appState.isPushingCommit ? (appState.pushProgressText ?? "Pushing") : "Push to Origin")
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.glassProminent)
-                        .buttonBorderShape(.capsule)
-                        .disabled(appState.isSyncing)
-                    }
+    /// How long each half of the buttons ⇄ toast swap takes. The outgoing panel fully
+    /// dissolves first, *then* the incoming one materializes — never both at once.
+    private static let fadeDuration: TimeInterval = 0.3
+
+    /// Which panel is currently (or becoming) visible. `nil` mid-swap, while the outgoing
+    /// panel has dissolved and before the incoming one starts.
+    @State private var visiblePanel: Panel?
+    /// Which panel sizes the footer. Only switched while both panels are invisible, so the
+    /// height change between the buttons' and the toast's sizes rides on the incoming fade.
+    @State private var layoutPanel: Panel = .buttons
+    @State private var hasAppeared = false
+
+    var body: some View {
+        // Both panels stay mounted and are faded via `MaterializeModifier` directly rather than
+        // inserted/removed with transitions: an `if/else` swap would leave the footer at zero
+        // height between the two phases. Deliberately no `GlassEffectContainer` either — inside
+        // one, the buttons' glass morphs into the toast's green glass instead of dissolving.
+        ZStack(alignment: .top) {
+            HStack(spacing: 8) {
+                Button {
+                    appState.undoLastCommit()
+                } label: {
+                    Label("Undo Commit", systemImage: "arrow.uturn.backward")
+                        .materializeBlur()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                 }
-                .frame(maxWidth: .infinity)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .disabled(appState.isPushingCommit)
+
+                if appState.hasOriginRemote {
+                    Button {
+                        appState.pushCurrentBranch()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if appState.isPushingCommit {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.up")
+                            }
+                            Text(appState.isPushingCommit ? (appState.pushProgressText ?? "Pushing") : "Push to Origin")
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .materializeBlur()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.capsule)
+                    .disabled(appState.isSyncing)
+                }
             }
+            .frame(maxWidth: .infinity)
+            .modifier(panelAppearance(.buttons))
+
+            PushSuccessToastView()
+                .modifier(panelAppearance(.toast))
         }
         .padding(10)
-        .animation(.easeInOut(duration: 0.3), value: appState.pushSucceeded)
+        .task(id: appState.pushSucceeded) {
+            let target: Panel = appState.pushSucceeded ? .toast : .buttons
+            // First appearance: snap straight to the right panel, no animation.
+            guard hasAppeared else {
+                hasAppeared = true
+                visiblePanel = target
+                layoutPanel = target
+                return
+            }
+            withAnimation(.easeInOut(duration: Self.fadeDuration)) { visiblePanel = nil }
+            try? await Task.sleep(for: .seconds(Self.fadeDuration))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: Self.fadeDuration)) {
+                layoutPanel = target
+                visiblePanel = target
+            }
+        }
+    }
+
+    private func panelAppearance(_ panel: Panel) -> PanelAppearance {
+        // Until the first `.task` run has synced the state, read straight from `pushSucceeded`
+        // so the footer's very first frame isn't blank.
+        guard hasAppeared else {
+            let initial: Panel = appState.pushSucceeded ? .toast : .buttons
+            return PanelAppearance(isVisible: initial == panel, ownsLayout: initial == panel)
+        }
+        return PanelAppearance(isVisible: visiblePanel == panel, ownsLayout: layoutPanel == panel)
+    }
+}
+
+/// Fades a footer panel in/out with the materialize look, and collapses it out of the layout
+/// (height 0, still drawn but invisible) when it isn't the one sizing the footer.
+private struct PanelAppearance: ViewModifier {
+    let isVisible: Bool
+    let ownsLayout: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(MaterializeModifier(progress: isVisible ? 1 : 0))
+            .frame(height: ownsLayout ? nil : 0, alignment: .top)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
     }
 }
 
@@ -851,6 +908,7 @@ private struct PushSuccessToastView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
             }
+            .materializeBlur()
             .padding(.horizontal, 24)
             .padding(.vertical, 12)
             .glassEffect(.clear.tint(.green.opacity(0.8)), in: .capsule)
@@ -871,4 +929,104 @@ private struct PushSuccessToastView: View {
             .padding(.bottom, 16)
     }
     .frame(width: 420, height: 200)
+}
+
+private extension AnyTransition {
+    /// Materializes in and dissolves out in place (blur + fade) — no movement either way.
+    static var materialize: AnyTransition {
+        .modifier(
+            active: MaterializeModifier(progress: 0),
+            identity: MaterializeModifier(progress: 1)
+        )
+    }
+}
+
+/// Fades a view with the materialize look. Only the *opacity* is applied here, to the whole
+/// view: blurring a view that contains Liquid Glass renders it offscreen, which stops the glass
+/// sampling what's behind it — it snaps to a flat, solid fill the moment the transition starts.
+/// The blur half is instead published through `materializeProgress` and applied by
+/// `materializeBlur()` to just the labels/icons *inside* the glass.
+private struct MaterializeModifier: ViewModifier, Animatable {
+    /// Blur radius at the fully-dissolved end of the transition.
+    static let maxBlur: CGFloat = 8
+
+    /// 1 = fully present, 0 = fully dissolved.
+    var progress: Double
+
+    // Animatable so `body` re-runs every frame and the environment value below animates too.
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.materializeProgress, progress)
+            .opacity(progress)
+    }
+}
+
+private extension EnvironmentValues {
+    /// The enclosing `MaterializeModifier`'s progress (1 = fully present).
+    @Entry var materializeProgress: Double = 1
+}
+
+private struct MaterializeBlurModifier: ViewModifier {
+    @Environment(\.materializeProgress) private var progress
+
+    func body(content: Content) -> some View {
+        content.blur(radius: (1 - progress) * MaterializeModifier.maxBlur)
+    }
+}
+
+private extension View {
+    /// The blur half of the materialize transition — apply to content *inside* a glass shape,
+    /// never to the glass itself (see `MaterializeModifier`).
+    func materializeBlur() -> some View {
+        modifier(MaterializeBlurModifier())
+    }
+}
+
+/// Toggles `pushSucceeded` on the real footer to replay the buttons → toast → gone transitions.
+/// "Push Succeeded" swaps the buttons for the toast; "Remove Footer" mimics the footer
+/// itself disappearing once `pushSucceeded` flips back after a push.
+#Preview("Unpushed Commit Footer Transitions") {
+    @Previewable @State var appState: AppState = {
+        let appState = AppState()
+        appState.hasOriginRemote = true
+        return appState
+    }()
+    @Previewable @State var showsFooter = true
+
+    VStack(spacing: 0) {
+        List {
+            ForEach(0..<12) { i in
+                Text("fileabcdefghijklmnopqrstuvwxyz_\(i).swift")
+            }
+        }
+        // Same styling as `ChangedFilesList`, so the footer sits over the same background.
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+        .safeAreaBar(edge: .bottom, spacing: 0) {
+            if showsFooter {
+                UnpushedCommitFooterView(appState: appState)
+                    .transition(.materialize)
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: showsFooter)
+
+        Divider()
+        HStack {
+            Button(appState.pushSucceeded ? "Show Buttons" : "Push Succeeded") {
+                appState.pushSucceeded.toggle()
+            }
+            Button(showsFooter ? "Remove Footer" : "Show Footer") {
+                showsFooter.toggle()
+            }
+        }
+        .padding(8)
+    }
+    .frame(width: 420, height: 320)
 }
