@@ -4,12 +4,12 @@ import SwiftUI
 struct ChangedFilesView: View {
     @Bindable var appState: AppState
     @FocusState private var isFocused: Bool
-    /// Focus for the commit message field, tracked here (rather than solely inside
+    /// Which commit message field (if any) has focus, tracked here (rather than solely inside
     /// `CommitFooterView`) so `ChangedFilesList`'s own arrow-key/escape column-navigation
-    /// handlers and this view's `isFocused` reclaim logic can both check it and back off — see
-    /// the comment on `CommitFooterView.isMessageFocused` for why a shared, separately-identified
-    /// `@FocusState` is required here instead of letting the field fall under `isFocused`'s scope.
-    @FocusState private var isCommitMessageFocused: Bool
+    /// handlers and this view's `isFocused` reclaim logic can both check it and back off. Plain
+    /// state, not `@FocusState` — the fields are AppKit text views (`CommitTextField`) that
+    /// report their own first-responder changes into it.
+    @State private var commitFieldFocus: CommitField?
 
     var body: some View {
         ZStack {
@@ -22,7 +22,7 @@ struct ChangedFilesView: View {
             ChangedFilesList(
                 appState: appState,
                 isFocused: $isFocused,
-                isCommitMessageFocused: $isCommitMessageFocused
+                commitFieldFocus: $commitFieldFocus
             )
 
             if appState.selectedRepoURL == nil {
@@ -51,7 +51,7 @@ struct ChangedFilesView: View {
         // the message field is clicked directly, so this guard is what stops that from looping
         // back and reclaiming focus for the List in the same beat.
         .onChange(of: appState.focusedColumn) { _, newValue in
-            guard newValue == .files, !isCommitMessageFocused else { return }
+            guard newValue == .files, commitFieldFocus == nil else { return }
             isFocused = true
         }
         // The user tabbed/clicked into this column directly (not via arrow-key navigation) —
@@ -170,7 +170,7 @@ struct ChangedFilesView: View {
 private struct ChangedFilesList: View {
     @Bindable var appState: AppState
     var isFocused: FocusState<Bool>.Binding
-    var isCommitMessageFocused: FocusState<Bool>.Binding
+    var commitFieldFocus: Binding<CommitField?>
     @State private var isTitleExpanded = false
     @State private var isTitleTruncated = false
     /// `List`'s selection binds to this local buffer rather than straight into `appState`, same
@@ -270,7 +270,7 @@ private struct ChangedFilesList: View {
         }
         .safeAreaBar(edge: .bottom, spacing: 0) {
             if isWorkingChanges && !appState.changedFiles.isEmpty {
-                CommitFooterView(appState: appState, isMessageFocused: isCommitMessageFocused)
+                CommitFooterView(appState: appState, focusedField: commitFieldFocus)
             } else if isStash && !appState.changedFiles.isEmpty {
                 StashFooterView(appState: appState)
             } else if isNewestUnpushedCommit || appState.pushSucceeded {
@@ -297,17 +297,17 @@ private struct ChangedFilesList: View {
         // text cursor and escape needs to do nothing, so all three back off and let the
         // field's own default key handling run instead.
         .onKeyPress(.leftArrow) {
-            guard !isCommitMessageFocused.wrappedValue else { return .ignored }
+            guard commitFieldFocus.wrappedValue == nil else { return .ignored }
             appState.focusedColumn = .branches
             return .handled
         }
         .onKeyPress(.rightArrow) {
-            guard !isCommitMessageFocused.wrappedValue else { return .ignored }
+            guard commitFieldFocus.wrappedValue == nil else { return .ignored }
             appState.focusedColumn = .diff
             return .handled
         }
         .onKeyPress(.escape) {
-            guard !isCommitMessageFocused.wrappedValue, isNewestUnpushedCommit, !appState.isPushingCommit else { return .ignored }
+            guard commitFieldFocus.wrappedValue == nil, isNewestUnpushedCommit, !appState.isPushingCommit else { return .ignored }
             appState.undoLastCommit()
             return .handled
         }
@@ -622,46 +622,30 @@ private struct ChangedFilesList: View {
 /// laggy on repos with many changed files.
 private struct CommitFooterView: View {
     @Bindable var appState: AppState
-    /// Passed down from `ChangedFilesView` (rather than a plain local `@FocusState` here) so that
-    /// view's own column-navigation key handlers and its `isFocused` reclaim logic can see when
-    /// this field has focus. It has to be its own separately-identified `@FocusState` rather than
-    /// falling under `ChangedFilesView.isFocused`'s scope — with only one `.focused($isFocused)`
-    /// in the tree, SwiftUI resolves *any* focusable descendant (this field included) as "focus
-    /// for that binding," so a click landing in the field was also flipping `isFocused` true and
-    /// making the List itself claim real first-responder status a beat later — stealing the field
-    /// back before the click's effect had a chance to stick, and requiring a second click to win.
-    var isMessageFocused: FocusState<Bool>.Binding
+    /// Owned by `ChangedFilesView` so its column-navigation key handlers and its `isFocused`
+    /// reclaim logic can see when a commit field has focus and back off.
+    @Binding var focusedField: CommitField?
 
-    /// Return-key submission can't be done via `.onKeyPress(.return)` on the field itself:
-    /// `axis: .vertical` backs the field with a real multi-line `NSTextView`, which swallows
-    /// Return as `insertNewline:` at the AppKit level before SwiftUI's key-press pipeline ever
-    /// sees it (confirmed empirically — the modifier never fired). A local `NSEvent` monitor,
-    /// installed only while this field holds focus, intercepts the key first and can suppress it
-    /// by returning `nil`. Shift+Return is passed through unmodified — it doesn't submit, and
-    /// isn't given any newline-inserting behavior of its own either.
-    @State private var returnKeyMonitor: Any?
+    /// True while either field has focus. Kept separately from `focusedField` (rather than
+    /// derived from it) so the collapse can be deferred — clicking from the summary into the
+    /// description can pass through a momentary `nil` focus, and collapsing on that would yank
+    /// the description field out from under the very click meant to focus it.
+    @State private var isEditing = false
+    @State private var collapseTask: Task<Void, Never>?
+    @Environment(\.displayScale) private var displayScale
+
+    private static let cornerRadius: CGFloat = 18
+    private static let expandAnimation = Animation.smooth(duration: 0.25)
+
+    /// At rest with no description this is the same single-line pill as a plain message field;
+    /// focusing it (or a description already being there) grows it into the divided box.
+    private var isExpanded: Bool {
+        isEditing || !appState.commitDescription.isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Commit message", text: $appState.commitMessage, axis: .vertical)
-                .textFieldStyle(.plain)
-                // The backing `NSTextView` otherwise flashes its (empty) inline text-completion
-                // candidates panel — a grey ~200pt rounded rect just below the field — for a
-                // single frame when it first becomes first responder. Commit messages carry
-                // identifiers/paths/branch names, so suppressing correction here is right anyway.
-                .autocorrectionDisabled(true)
-                .lineLimit(1...4)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .focused(isMessageFocused)
-                // `.plain` + the outer padding means the field's own click target is just the
-                // text rect — clicks in the padded pill margin fall through and don't focus it.
-                // Make the whole pill shape hit-test and route a tap there to the field. A tap
-                // landing directly on the `TextField` is handled by its own (descendant) gesture
-                // first, so cursor placement still works; this only catches the margin.
-                .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .onTapGesture { isMessageFocused.wrappedValue = true }
+            messageBox
 
             Button {
                 appState.commitOrCompleteMerge()
@@ -675,36 +659,85 @@ private struct CommitFooterView: View {
             .disabled(!canCommit)
         }
         .padding(10)
-        .onChange(of: isMessageFocused.wrappedValue) { _, focused in
-            if focused {
+        .onChange(of: focusedField) { _, field in
+            if field != nil {
+                collapseTask?.cancel()
+                isEditing = true
                 // Set directly rather than through `ChangedFilesView.isFocused` — see that
                 // view's own `onChange(of: appState.focusedColumn)` for why routing this through
                 // the List's focus state instead would just reclaim the field right back.
                 appState.focusedColumn = .files
-                installReturnKeyMonitor()
             } else {
-                removeReturnKeyMonitor()
+                scheduleCollapse()
             }
         }
         .onDisappear {
-            removeReturnKeyMonitor()
+            collapseTask?.cancel()
         }
     }
 
-    private func installReturnKeyMonitor() {
-        removeReturnKeyMonitor()
-        returnKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 36, !event.modifierFlags.contains(.shift) else { return event }
-            guard canCommit else { return event }
-            appState.commitOrCompleteMerge()
-            return nil
+    /// Two separate fields (each scrolling on its own) sharing one glass shape, divided by a
+    /// hairline so they read as a single input.
+    ///
+    /// - Summary: Return commits (never inserts a newline — the subject is one line), Tab moves
+    ///   to the description. Grows once to a second line for a long summary, then scrolls.
+    /// - Description: Return inserts a newline, Shift+Tab moves back to the summary. Fixed three
+    ///   lines tall; longer text scrolls.
+    /// - Either: Cmd+Return commits.
+    private var messageBox: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            CommitTextField(
+                text: $appState.commitMessage,
+                placeholder: isExpanded ? "Commit summary" : "Commit message",
+                font: .systemFont(ofSize: NSFont.systemFontSize),
+                field: .summary,
+                focus: $focusedField,
+                maxLines: 2,
+                isSingleParagraph: true,
+                onSubmit: commitIfPossible,
+                onCommandReturn: commitIfPossible
+            )
+
+            if isExpanded {
+                Rectangle()
+                    .fill(.separator)
+                    // One device pixel — 0.5pt on Retina.
+                    .frame(height: 1 / displayScale)
+                    .padding(.horizontal, CommitTextField.horizontalInset)
+                    .transition(.opacity)
+
+                CommitTextField(
+                    text: $appState.commitDescription,
+                    placeholder: "Description (optional)",
+                    font: .preferredFont(forTextStyle: .callout),
+                    textColor: .secondaryLabelColor,
+                    field: .description,
+                    focus: $focusedField,
+                    minLines: 3,
+                    maxLines: 3,
+                    onCommandReturn: commitIfPossible
+                )
+                .transition(.opacity)
+            }
         }
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+        // Keeps the scrolling text views inside the rounded corners.
+        .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+        .animation(Self.expandAnimation, value: isExpanded)
     }
 
-    private func removeReturnKeyMonitor() {
-        guard let returnKeyMonitor else { return }
-        NSEvent.removeMonitor(returnKeyMonitor)
-        self.returnKeyMonitor = nil
+    private func commitIfPossible() {
+        guard canCommit else { return }
+        appState.commitOrCompleteMerge()
+    }
+
+    private func scheduleCollapse() {
+        collapseTask?.cancel()
+        collapseTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, focusedField == nil else { return }
+            isEditing = false
+        }
     }
 
     private var checkedCount: Int {

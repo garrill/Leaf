@@ -132,13 +132,35 @@ final class AppState {
     /// A "Check All"/"Uncheck All" chosen while Uncommitted Changes wasn't selected — applied by
     /// `applyChangedFiles` once that list loads (see `setAllWorkingChangesChecked`).
     private var pendingWorkingChangesCheckState: Bool?
+    /// The commit's summary (subject) line — the first field of the commit footer.
     var commitMessage: String = ""
-    /// One in-progress commit message draft per repo, so switching repos doesn't carry text typed
+    /// Optional body text from the commit footer's second field, joined under `commitMessage`
+    /// with a blank line by `composedCommitMessage`.
+    var commitDescription: String = ""
+    /// One in-progress commit message draft (summary + description) per repo, so switching repos doesn't carry text typed
     /// for one repo over to another — saved/restored around `selectedRepoURL` changes in
     /// `selectRepo`/`deselectRepo` rather than making `commitMessage` itself a computed property,
     /// since plenty of call sites just assign into it directly (clearing it after a commit, the
     /// merge-message prefill in `refreshRepositoryState`/`applySnapshot`).
-    private var commitMessageDrafts: [URL: String] = [:]
+    private var commitMessageDrafts: [URL: (summary: String, description: String)] = [:]
+
+    /// The full message handed to git: summary, then the description as the body after a blank
+    /// line (git's own subject/body convention) when there is one.
+    private var composedCommitMessage: String {
+        let summary = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = commitDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return description.isEmpty ? summary : summary + "\n\n" + description
+    }
+
+    /// Fills an empty commit box from `MERGE_MSG` — first line into the summary, the remainder
+    /// (e.g. the `# Conflicts:` list, stripped again at commit time) into the description.
+    private func prefillMergeMessageIfEmpty(_ mergeMessage: String?) {
+        guard commitMessage.isEmpty, commitDescription.isEmpty else { return }
+        let message = mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let parts = message.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        commitMessage = parts.first.map(String.init) ?? ""
+        commitDescription = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+    }
 
     var diffText: String = ""
     var imageDiffOld: Data?
@@ -464,9 +486,10 @@ final class AppState {
         // was actually being navigated at the time.
         guard url != selectedRepoURL, !isRepositoryBusy else { return }
         if let previousURL = selectedRepoURL {
-            commitMessageDrafts[previousURL] = commitMessage
+            commitMessageDrafts[previousURL] = (commitMessage, commitDescription)
         }
-        commitMessage = commitMessageDrafts[url] ?? ""
+        commitMessage = commitMessageDrafts[url]?.summary ?? ""
+        commitDescription = commitMessageDrafts[url]?.description ?? ""
         selectedRepoURL = url
         // Clear the previous repo's file list/diff immediately rather than leaving them on
         // screen until the new repo's debounced/detached loads complete — otherwise columns 3
@@ -498,9 +521,10 @@ final class AppState {
     func deselectRepo() {
         guard !isRepositoryBusy else { return }
         if let previousURL = selectedRepoURL {
-            commitMessageDrafts[previousURL] = commitMessage
+            commitMessageDrafts[previousURL] = (commitMessage, commitDescription)
         }
         commitMessage = ""
+        commitDescription = ""
         selectedRepoURL = nil
         repoWatcher = nil
         errorMessage = nil
@@ -1228,8 +1252,8 @@ final class AppState {
         guard let repo = currentRepository, !isCommitting else { return }
         let paths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
         let unstagePaths = changedFiles.filter { !checkedFilePaths.contains($0.path) }.map(\.path)
-        let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !paths.isEmpty, !message.isEmpty else { return }
+        let message = composedCommitMessage
+        guard !paths.isEmpty, !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let conflictedPaths = checkedConflictedPaths
         guard conflictedPaths.isEmpty else {
@@ -1246,6 +1270,7 @@ final class AppState {
                     try repo.commit(message: message, paths: paths, unstagePaths: unstagePaths)
                 }.value
                 self.commitMessage = ""
+                self.commitDescription = ""
                 self.errorMessage = nil
                 self.refreshRepositoryState()
             } catch {
@@ -1271,6 +1296,7 @@ final class AppState {
                 // The subject line is all `GitCommit` carries — enough to let the user immediately
                 // re-commit as-is, or edit/expand it, rather than retyping from scratch.
                 self.commitMessage = commit.summary
+                self.commitDescription = ""
                 self.errorMessage = nil
                 self.refreshRepositoryState()
             } catch {
@@ -1391,8 +1417,8 @@ final class AppState {
     func completeMerge() {
         guard let repo = currentRepository, !isCommitting else { return }
         let resolvedPaths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
-        let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty else { return }
+        let message = composedCommitMessage
+        guard !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let conflictedPaths = checkedConflictedPaths
         guard conflictedPaths.isEmpty else {
@@ -1408,6 +1434,7 @@ final class AppState {
                     try repo.completeMerge(message: message, resolvedPaths: resolvedPaths)
                 }.value
                 self.commitMessage = ""
+                self.commitDescription = ""
                 self.errorMessage = nil
                 self.refreshRepositoryState()
             } catch {
@@ -1753,8 +1780,8 @@ final class AppState {
             self.repoOwner = snapshot.owner
             self.isMergeInProgress = snapshot.isMergeInProgress
             self.mergeMessage = snapshot.mergeMessage
-            if snapshot.isMergeInProgress, self.commitMessage.isEmpty {
-                self.commitMessage = snapshot.mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if snapshot.isMergeInProgress {
+                self.prefillMergeMessageIfEmpty(snapshot.mergeMessage)
             }
             self.branches = snapshot.branches
             self.remoteOnlyBranches = snapshot.remoteOnlyBranches
@@ -2036,8 +2063,8 @@ final class AppState {
 
             self.isMergeInProgress = snapshot.isMergeInProgress
             self.mergeMessage = snapshot.mergeMessage
-            if self.isMergeInProgress, self.commitMessage.isEmpty {
-                self.commitMessage = snapshot.mergeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if self.isMergeInProgress {
+                self.prefillMergeMessageIfEmpty(snapshot.mergeMessage)
             }
             self.branches = snapshot.branches
             self.remoteOnlyBranches = snapshot.remoteOnlyBranches
