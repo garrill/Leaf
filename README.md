@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/icon.png" width="128" height="128" alt="Leaf app icon">
+	<picture  width="128" height="128" alt="Leaf app icon">
+		<source media="(prefers-color-scheme: dark)" srcset="docs/icon-dark.png">
+		<img src="docs/icon-light.png">
+	</picture>
 </p>
 
 <h1 align="center">Leaf</h1>
@@ -21,8 +24,8 @@ Download the latest `.dmg` from the [GitHub Releases page](https://github.com/ga
 - **Rich diff viewer** — syntax-highlighted, word-level diffs, plus side by-side or swipe over image diffs
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <img src="docs/screenshot-light.png" alt="Leaf screenshot">
+	<source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+	<img src="docs/screenshot-light.png" alt="Leaf screenshot">
 </picture>
 
 ## Requirements
