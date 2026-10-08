@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0]
+
+* Fixed MacOS 27 bugs
+* New icon
+* Large branch switching UX improved
+* Correct column / item focus improved
+* Double click a file to open in default program
+* Animations of glass elements use .materialize transitions
+* Context menu options for uncommited files and stashed files
+* Toolbar items rebuilt
+* Icon renderer improved
+
 ## [0.6.0]
 
 * Icon for unpushed commits

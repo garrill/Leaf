@@ -29,6 +29,28 @@
 			</item>
 		-->
         <item>
+            <title>0.7.0</title>
+            <pubDate>Thu, 08 Oct 2026 12:24:05 +0100</pubDate>
+            <sparkle:fullReleaseNotesLink>https://github.com/garrill/Leaf/releases</sparkle:fullReleaseNotesLink>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>0.7.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[### v0.7.0 (October 8 2026)
+
+
+* Fixed MacOS 27 bugs
+* New icon
+* Large branch switching UX improved
+* Correct column / item focus improved
+* Double click a file to open in default program
+* Animations of glass elements use .materialize transitions
+* Context menu options for uncommited files and stashed files
+* Toolbar items rebuilt
+* Icon renderer improved
+]]></description>
+            <enclosure url="https://github.com/garrill/Leaf/releases/download/v0.7.0/Leaf-0.7.0.dmg" length="4531863" type="application/octet-stream" sparkle:edSignature="jNdnyUsbibmJcR1o7iOI9JV+T1oB+DghyU0YEWs15YhDPmGE1wcYXExYOWW26mjlpOzytIOhF3roPON3qdaoDQ=="/>
+        </item>
+        <item>
             <title>0.6.0</title>
             <pubDate>Mon, 14 Sep 2026 22:47:11 +0100</pubDate>
             <sparkle:fullReleaseNotesLink>https://github.com/garrill/Leaf/releases</sparkle:fullReleaseNotesLink>
