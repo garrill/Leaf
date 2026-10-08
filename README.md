@@ -1,7 +1,7 @@
 <p align="center">
-	<picture  width="128" height="128" alt="Leaf app icon">
+	<picture alt="Leaf app icon">
 		<source media="(prefers-color-scheme: dark)" srcset="docs/icon-dark.png">
-		<img src="docs/icon-light.png">
+		<img src="docs/icon-light.png" width="128" height="128">
 	</picture>
 </p>
 
