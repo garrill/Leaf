@@ -484,7 +484,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         _ outlineView: NSOutlineView,
         shouldSelectItem item: Any
     ) -> Bool {
-        guard let boxed = item as? SidebarOutlineItem else {
+        // `AppState.selectRepo` refuses mid-switch anyway; refusing here too keeps the outline's
+        // highlighted row from drifting away from the repo that's actually still selected.
+        guard let boxed = item as? SidebarOutlineItem, !appState.isRepositoryBusy else {
             return false
         }
 

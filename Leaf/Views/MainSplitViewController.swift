@@ -52,6 +52,9 @@ final class MainSplitViewController: NSSplitViewController {
     private let defaultSidebarWidth: CGFloat = 280
     private let defaultBranchesWidth: CGFloat = 320
     private var sidebarCollapseObservation: NSKeyValueObservation?
+    private let busyOverlay = BusyOverlayView()
+    /// Whoever had keyboard focus when `busyOverlay` went up, handed focus back when it comes down.
+    private weak var responderBeforeBusy: NSResponder?
 
     init(appState: AppState) {
         self.appState = appState
@@ -113,6 +116,19 @@ final class MainSplitViewController: NSSplitViewController {
         // from the menu's own `toggleSidebar(_:)` action and from the user dragging the divider
         // shut directly, so this needs to observe the split view item rather than just reacting
         // to the menu command.
+        // Added after the split items so it sits above every column. Pinned to `view` rather
+        // than any one pane so a column resize mid-switch can't uncover part of the window.
+        busyOverlay.translatesAutoresizingMaskIntoConstraints = false
+        busyOverlay.isHidden = true
+        view.addSubview(busyOverlay)
+        NSLayoutConstraint.activate([
+            busyOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            busyOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            busyOverlay.topAnchor.constraint(equalTo: view.topAnchor),
+            busyOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        observeBusyState()
+
         SidebarVisibility.shared.isCollapsed = sidebarItem.isCollapsed
         sidebarCollapseObservation = sidebarItem.observe(\.isCollapsed, options: [.new]) { _, change in
             guard let isCollapsed = change.newValue else { return }
@@ -122,11 +138,78 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
+    /// Same `withObservationTracking` re-arm pattern as `MainWindowController.observeTitle()`.
+    private func observeBusyState() {
+        withObservationTracking {
+            _ = appState.isRepositoryBusy
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                self?.updateBusyOverlay()
+                self?.observeBusyState()
+            }
+        }
+    }
+
+    /// While a branch switch runs, every column is frozen: clicks land on `busyOverlay` instead of
+    /// the panes, and it also takes first responder so arrow keys/Return can't move a list
+    /// selection (and start loading a commit or another repo) underneath it.
+    private func updateBusyOverlay() {
+        let isBusy = appState.isRepositoryBusy
+        guard busyOverlay.isHidden == isBusy else { return }
+        if isBusy {
+            responderBeforeBusy = view.window?.firstResponder
+            busyOverlay.isHidden = false
+            view.window?.makeFirstResponder(busyOverlay)
+        } else {
+            busyOverlay.isHidden = true
+            if view.window?.firstResponder === busyOverlay {
+                view.window?.makeFirstResponder(responderBeforeBusy)
+            }
+            responderBeforeBusy = nil
+        }
+    }
+
     override func viewDidAppear() {
         super.viewDidAppear()
         guard !hasAppliedInitialLayout else { return }
         hasAppliedInitialLayout = true
         splitView.setPosition(defaultSidebarWidth, ofDividerAt: 0)
         splitView.setPosition(defaultSidebarWidth + defaultBranchesWidth, ofDividerAt: 1)
+    }
+}
+
+/// A full-window shield shown by `MainSplitViewController` while `AppState.isRepositoryBusy` —
+/// swallows every mouse and key event aimed at the columns beneath it, with a light wash so the
+/// window reads as busy rather than frozen.
+private final class BusyOverlayView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.35).cgColor
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        isHidden ? nil : (frame.contains(point) ? self : nil)
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {}
+    override func rightMouseDown(with event: NSEvent) {}
+    override func otherMouseDown(with event: NSEvent) {}
+    override func scrollWheel(with event: NSEvent) {}
+    override func keyDown(with event: NSEvent) {}
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
     }
 }

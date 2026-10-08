@@ -440,8 +440,8 @@ nonisolated struct GitRepository {
     /// (`git checkout -b <name> --track <upstreamRef>`) — the "check out a remote-only branch"
     /// path. `--track` is git's default when branching off a remote-tracking ref, but stating it
     /// keeps the intent explicit and independent of `branch.autoSetupMerge` config.
-    func checkoutRemoteBranch(_ branch: GitRemoteBranch) throws {
-        try run(["checkout", "-b", branch.name, "--track", branch.upstreamRef])
+    func checkoutRemoteBranch(_ branch: GitRemoteBranch, progress: (@Sendable (String) -> Void)? = nil) throws {
+        try run(["checkout", "--progress", "-b", branch.name, "--track", branch.upstreamRef], progress: progress)
     }
 
     /// Local branches whose configured upstream no longer exists on the remote — the remote branch
@@ -669,8 +669,50 @@ nonisolated struct GitRepository {
         }
     }
 
-    func checkout(branch: String) throws {
-        try run(["checkout", branch])
+    /// `--progress` forces git's "Updating files: 45% (1234/2741)" meter even though stderr is a
+    /// pipe, so `AppState.selectBranch` can show how far a big switch has got. git only starts
+    /// printing it once the switch has run for a moment, so a quick checkout reports nothing.
+    func checkout(branch: String, progress: (@Sendable (String) -> Void)? = nil) throws {
+        try run(["checkout", "--progress", branch], progress: progress)
+    }
+
+    /// How disruptive switching to `branch` would be, measured before touching the working tree —
+    /// lets `AppState.selectBranch` warn before a switch to some long-forgotten branch rewrites
+    /// tens of thousands of files. `--name-only` is a pure tree-to-tree comparison (no blob
+    /// contents read), so it stays cheap even when the answer is huge.
+    struct CheckoutImpact {
+        var changedFileCount: Int
+        /// Commits on the current HEAD that `branch` doesn't have — i.e. how far behind it is.
+        var commitsBehind: Int
+        /// Commits on `branch` that the current HEAD doesn't have.
+        var commitsAhead: Int
+        var lastCommitDate: Date?
+    }
+
+    func checkoutImpact(to branch: String) -> CheckoutImpact? {
+        let ref = "refs/heads/\(branch)"
+        guard let names = try? run(["diff", "--no-renames", "--name-only", "-z", "HEAD", ref, "--"]) else {
+            return nil
+        }
+        let changedFileCount = names.split(separator: "\0").count
+        var behind = 0
+        var ahead = 0
+        if let counts = try? run(["rev-list", "--left-right", "--count", "HEAD...\(ref)"]) {
+            let parts = counts.split(whereSeparator: \.isWhitespace).compactMap { Int($0) }
+            if parts.count == 2 {
+                behind = parts[0]
+                ahead = parts[1]
+            }
+        }
+        let lastCommitDate = (try? run(["log", "-1", "--format=%ct", ref]))
+            .flatMap { TimeInterval($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map { Date(timeIntervalSince1970: $0) }
+        return CheckoutImpact(
+            changedFileCount: changedFileCount,
+            commitsBehind: behind,
+            commitsAhead: ahead,
+            lastCommitDate: lastCommitDate
+        )
     }
 
     /// Creates a new branch off HEAD and switches to it in one step (`git checkout -b`).

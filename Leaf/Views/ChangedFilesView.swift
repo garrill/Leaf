@@ -754,9 +754,10 @@ private struct StashFooterView: View {
                 Button(role: .destructive) {
                     appState.discardStash()
                 } label: {
-                    Label("Discard", systemImage: "xmark.bin")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                    buttonLabel(
+                        title: "Discard", busyTitle: "Discarding\u{2026}", systemImage: "xmark.bin",
+                        isBusy: appState.busyOperation == .discarding
+                    )
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
@@ -764,16 +765,35 @@ private struct StashFooterView: View {
                 Button {
                     appState.restoreStash()
                 } label: {
-                    Label("Restore", systemImage: "arrow.up.bin")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                    buttonLabel(
+                        title: "Restore", busyTitle: "Restoring\u{2026}", systemImage: "arrow.up.bin",
+                        isBusy: appState.busyOperation == .restoring
+                    )
                 }
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.capsule)
             }
             .frame(maxWidth: .infinity)
+            .disabled(appState.isRepositoryBusy)
         }
         .padding(10)
+    }
+
+    /// Swaps the icon for a spinner and the title for its "-ing…" form while that operation runs
+    /// — git reports no progress for `stash apply`, so there's no count to show, but on a big
+    /// stash a static label otherwise reads as a dead button.
+    private func buttonLabel(title: String, busyTitle: String, systemImage: String, isBusy: Bool) -> some View {
+        HStack(spacing: 6) {
+            if isBusy {
+                ProgressView()
+                    .controlSize(.small)
+                Text(busyTitle)
+            } else {
+                Label(title, systemImage: systemImage)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
     }
 }
 

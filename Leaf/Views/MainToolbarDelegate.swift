@@ -204,16 +204,33 @@ private struct BranchMenuToolbarView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.trianglehead.branch")
-                Text(branchLabelText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if appState.isSwitchingBranch {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text(switchingLabelText)
+                        .lineLimit(1)
+                        .monospacedDigit()
+                } else {
+                    Image(systemName: "arrow.trianglehead.branch")
+                    Text(branchLabelText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
 
         }
         .menuStyle(.button)
         .buttonStyle(.glass)
-        .disabled(appState.branches.isEmpty)
+        // Outside the button, so it widens the gap between the hover highlight and the
+        // toolbar's own glass pill rather than the highlight itself — the item otherwise
+        // sits with a visibly tighter margin on the trailing side than the other three.
+        .padding(.trailing, 1)
+        .disabled(appState.branches.isEmpty || appState.isRepositoryBusy)
+    }
+
+    private var switchingLabelText: String {
+        guard let progress = appState.branchSwitchProgressText else { return "Switching\u{2026}" }
+        return "Switching\u{2026} \(progress)"
     }
 
     /// One branch entry: a checkmark label when it's the checked-out branch, otherwise a submenu
@@ -258,7 +275,7 @@ private struct FetchToolbarView: View {
                 }
                 .buttonStyle(.accessoryBarAction)
                 .help("Fetch")
-                .disabled(appState.selectedRepoURL == nil)
+                .disabled(appState.selectedRepoURL == nil || appState.isRepositoryBusy)
             }
         }
         .frame(width: 36, height: 36)
@@ -289,7 +306,8 @@ private struct PullPushToolbarView: View {
             .help("Pull")
             .disabled(appState.selectedRepoURL == nil ||
                       !appState.hasUpstream ||
-                      appState.isSyncing)
+                      appState.isSyncing ||
+                      appState.isRepositoryBusy)
 
             Button {
                 appState.pushCurrentBranch()
@@ -304,7 +322,8 @@ private struct PullPushToolbarView: View {
             .help("Push")
             .disabled(appState.selectedRepoURL == nil ||
                       appState.selectedBranch == nil ||
-                      appState.isSyncing)
+                      appState.isSyncing ||
+                      appState.isRepositoryBusy)
         }
     }
 

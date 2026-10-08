@@ -129,6 +129,9 @@ final class AppState {
     /// actions. Always a superset containing `selectedFile` when non-empty.
     var selectedFilePaths: Set<String> = []
     var checkedFilePaths: Set<String> = []
+    /// A "Check All"/"Uncheck All" chosen while Uncommitted Changes wasn't selected — applied by
+    /// `applyChangedFiles` once that list loads (see `setAllWorkingChangesChecked`).
+    private var pendingWorkingChangesCheckState: Bool?
     var commitMessage: String = ""
     /// One in-progress commit message draft per repo, so switching repos doesn't carry text typed
     /// for one repo over to another — saved/restored around `selectedRepoURL` changes in
@@ -158,6 +161,44 @@ final class AppState {
     var diffReloadToken = 0
 
     var isSyncing = false
+
+    /// True from the moment a branch checkout is requested until the post-checkout refresh has
+    /// landed. While set, `MainSplitViewController` puts an input-swallowing overlay over every
+    /// column, the toolbar is disabled, and repo/branch-changing entry points refuse to start —
+    /// piling a repo switch or a second checkout onto a big in-flight one only made it worse.
+    /// `RepoWatcher` callbacks are also deferred (see `handleExternalChange()`): a big checkout
+    /// rewrites thousands of files, and refreshing against a half-written tree every 0.4s is
+    /// pure contention with git itself.
+    var isSwitchingBranch = false
+    /// git's own "Updating files" meter for the in-flight checkout, condensed for the branch
+    /// toolbar button (e.g. "45%"). nil until git reports anything — a quick switch never does.
+    var branchSwitchProgressText: String?
+
+    /// A long-running stash/discard operation — same treatment as `isSwitchingBranch` (overlay, disabled
+    /// toolbar, deferred watcher), plus `StashFooterView` relabels the matching button. git
+    /// reports no progress at all for `stash push`/`apply`, so there's no percentage to show; a
+    /// discard's `stash drop` is instant, but the refresh after it (re-listing the next stash
+    /// entry's files and the working tree) is what takes the time on a big stash.
+    enum BusyOperation {
+        case stashing, restoring, discarding
+        /// "Discard All Changes" on the Uncommitted Changes row — every file is moved to the Bin
+        /// individually before git reverts the tracked ones, which is slow on a big working tree.
+        case discardingWorkingChanges
+    }
+    var busyOperation: BusyOperation?
+
+    /// Any operation during which the repo must not be touched from elsewhere in the UI — see
+    /// `isSwitchingBranch`.
+    var isRepositoryBusy: Bool { isSwitchingBranch || busyOperation != nil }
+    /// A `RepoWatcher` notification that arrived while `handleExternalChange()` couldn't act on
+    /// it (mid-switch, or a snapshot already in flight) — replayed once that clears.
+    private var hasDeferredExternalChange = false
+    private var isExternalChangeInFlight = false
+
+    /// A checkout touching at least this many files asks for confirmation first — most often
+    /// it's an accidental click on an old branch, and once git has started there's no safe
+    /// way to stop it halfway.
+    static let largeCheckoutFileThreshold = 1000
 
     /// True while `commitCheckedChanges()` is staging + committing — swaps the commit button's
     /// label for a spinner and blocks a second commit being kicked off on top of the first.
@@ -421,7 +462,7 @@ final class AppState {
         // `git remote get-url origin` call) on the main thread on every such reload — a real,
         // confirmed-via-Instruments source of main-thread hangs completely unrelated to whatever
         // was actually being navigated at the time.
-        guard url != selectedRepoURL else { return }
+        guard url != selectedRepoURL, !isRepositoryBusy else { return }
         if let previousURL = selectedRepoURL {
             commitMessageDrafts[previousURL] = commitMessage
         }
@@ -455,6 +496,7 @@ final class AppState {
     }
 
     func deselectRepo() {
+        guard !isRepositoryBusy else { return }
         if let previousURL = selectedRepoURL {
             commitMessageDrafts[previousURL] = commitMessage
         }
@@ -470,7 +512,7 @@ final class AppState {
     /// Sidebar" context-menu action (same confirmation alert, same optional move-to-Bin); this is
     /// the Repository menu's equivalent for whichever repo is currently selected.
     func removeSelectedRepo() {
-        guard let repo = selectedSidebarRepo else { return }
+        guard let repo = selectedSidebarRepo, !isRepositoryBusy else { return }
 
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -527,11 +569,16 @@ final class AppState {
     }
 
     func selectBranch(_ branch: GitBranch) {
-        guard let repo = currentRepository else { return }
+        guard let repo = currentRepository, !isRepositoryBusy else { return }
         guard !branch.isCurrent else {
             refreshRepositoryState()
             return
         }
+        // Flipped before any git work (even the branch re-read and impact check below) so the
+        // overlay/disabled toolbar go up immediately, rather than leaving a window where a second
+        // click could start another switch or select a different repo on top of this one.
+        isSwitchingBranch = true
+        branchSwitchProgressText = nil
         // `checkout`/`stashChanges`/`restoreStash` all shell out synchronously (`Process.
         // waitUntilExit()`); running them inline on the main thread would freeze the whole UI for
         // the duration of the call on a branch switch touching many files, so the actual git work
@@ -548,10 +595,20 @@ final class AppState {
             self.branches = freshBranches
             guard freshBranches.contains(where: { $0.name == branch.name }) else {
                 self.errorMessage = "Branch \u{201C}\(branch.name)\u{201D} no longer exists. It may have been deleted."
+                self.finishBusyOperation()
                 return
             }
+
+            let impact = await Task.detached(priority: .userInitiated) { repo.checkoutImpact(to: branch.name) }.value
+            if let impact, impact.changedFileCount >= Self.largeCheckoutFileThreshold,
+               !Self.confirmLargeCheckout(to: branch.name, from: self.selectedBranch?.name, impact: impact) {
+                self.finishBusyOperation()
+                return
+            }
+
+            let progress = self.branchSwitchProgressHandler()
             do {
-                try await Task.detached(priority: .userInitiated) { try repo.checkout(branch: branch.name) }.value
+                try await Task.detached(priority: .userInitiated) { try repo.checkout(branch: branch.name, progress: progress) }.value
                 self.errorMessage = nil
             } catch let GitError.commandFailed(message) where Self.isLocalChangesCheckoutFailure(message) {
                 // Checkout is blocked by a dirty working tree — ask the user whether to bring
@@ -562,7 +619,7 @@ final class AppState {
                     do {
                         let outcome = try await Task.detached(priority: .userInitiated) { () throws -> GitRepository.StashApplyOutcome in
                             try repo.stashChanges(paths: [], includeUntracked: true)
-                            try repo.checkout(branch: branch.name)
+                            try repo.checkout(branch: branch.name, progress: progress)
                             return try repo.restoreStash()
                         }.value
                         if case .conflicts = outcome {
@@ -577,7 +634,7 @@ final class AppState {
                     do {
                         try await Task.detached(priority: .userInitiated) {
                             try repo.stashChanges(paths: [], includeUntracked: true)
-                            try repo.checkout(branch: branch.name)
+                            try repo.checkout(branch: branch.name, progress: progress)
                         }.value
                         self.errorMessage = nil
                     } catch {
@@ -589,8 +646,77 @@ final class AppState {
             } catch {
                 self.errorMessage = error.localizedDescription
             }
-            self.refreshRepositoryState()
+            // Stay in the switching state until the post-checkout snapshot has actually landed —
+            // its `git status` over a freshly rewritten tree can itself take a while, and
+            // releasing the UI before then just lets clicks act on the previous branch's
+            // (now stale) commits and files.
+            self.refreshRepositoryState { [weak self] in
+                self?.finishBusyOperation()
+            }
         }
+    }
+
+    /// Ends whichever busy state (`isSwitchingBranch`/`busyOperation`) was started, then catches
+    /// up on any `RepoWatcher` notification that arrived meanwhile — only needed for changes made
+    /// *outside* Leaf during the operation, since the caller's own `refreshRepositoryState()`
+    /// already covers what the operation itself did.
+    private func finishBusyOperation() {
+        isSwitchingBranch = false
+        branchSwitchProgressText = nil
+        busyOperation = nil
+        if hasDeferredExternalChange {
+            hasDeferredExternalChange = false
+            handleExternalChange()
+        }
+    }
+
+    /// Feeds git's checkout progress meter into `branchSwitchProgressText`. Called on the
+    /// stderr drain thread, hence the hop to the main actor.
+    private func branchSwitchProgressHandler() -> @Sendable (String) -> Void {
+        { line in
+            guard let text = Self.checkoutProgressPercent(from: line) else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.isSwitchingBranch else { return }
+                self.branchSwitchProgressText = text
+            }
+        }
+    }
+
+    /// "Updating files:  45% (1234/2741)" -> "45%". Only the file-writing stage is shown; git's
+    /// other checkout chatter ("Switched to branch…", "Your branch is up to date…") is dropped.
+    nonisolated static func checkoutProgressPercent(from line: String) -> String? {
+        guard line.hasPrefix("Updating files"),
+              let percentRange = line.range(of: #"\d+%"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(line[percentRange])
+    }
+
+    /// Confirms a checkout big enough to be worth a second thought (see
+    /// `largeCheckoutFileThreshold`). Cancel is the default button so a reflexive Return backs
+    /// out — the usual reason this appears is clicking an old branch by mistake.
+    private static func confirmLargeCheckout(to branchName: String, from currentName: String?, impact: GitRepository.CheckoutImpact) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Switch to \u{201C}\(branchName)\u{201D}?"
+
+        var details = ["Switching will change \(impact.changedFileCount.formatted()) files in your working tree."]
+        if let date = impact.lastCommitDate {
+            let relative = RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+            details.append("Its latest commit was \(relative).")
+        }
+        if impact.commitsBehind > 0 {
+            let current = currentName.map { "\u{201C}\($0)\u{201D}" } ?? "your current branch"
+            let commits = impact.commitsBehind == 1 ? "commit" : "commits"
+            details.append("It\u{2019}s \(impact.commitsBehind.formatted()) \(commits) behind \(current).")
+        }
+        alert.informativeText = details.joined(separator: " ") + "\n\nA switch this large can take a while, and can\u{2019}t be interrupted once it starts."
+
+        alert.addButton(withTitle: "Switch Branch")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].keyEquivalent = ""
+        alert.buttons[1].keyEquivalent = "\r"
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Deletes a local branch after confirming — this is a force delete (`git branch -D`), so the
@@ -621,7 +747,7 @@ final class AppState {
     /// out the new one from the branch menu. The current branch is never touched (git won't delete
     /// a checked-out branch), so it's dropped from the list even if its own upstream is gone.
     func pruneGoneBranches() {
-        guard let repo = currentRepository, !isSyncing else { return }
+        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
         isSyncing = true
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -682,16 +808,21 @@ final class AppState {
     /// dirty-working-tree prompt here — creating a branch at the remote ref's commit rarely
     /// collides with local edits, and if it does, git's own error is surfaced as-is.
     func checkoutRemoteBranch(_ branch: GitRemoteBranch) {
-        guard let repo = currentRepository, !isSyncing else { return }
+        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
+        isSwitchingBranch = true
+        branchSwitchProgressText = nil
+        let progress = branchSwitchProgressHandler()
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await Task.detached(priority: .userInitiated) { try repo.checkoutRemoteBranch(branch) }.value
+                try await Task.detached(priority: .userInitiated) { try repo.checkoutRemoteBranch(branch, progress: progress) }.value
                 self.errorMessage = nil
             } catch {
                 self.errorMessage = error.localizedDescription
             }
-            self.refreshRepositoryState()
+            self.refreshRepositoryState { [weak self] in
+                self?.finishBusyOperation()
+            }
         }
     }
 
@@ -839,14 +970,10 @@ final class AppState {
         // Untracked files have no commit to fall back to — they're moved to the Bin outright,
         // unlike tracked files which are also moved to the Bin but then revert to the last
         // commit. Call that out explicitly rather than lumping both under one generic warning.
-        let hasUntracked = files.contains { $0.status == .untracked }
         let title = files.count == 1
             ? "Discard changes to \u{201C}\((files[0].path as NSString).lastPathComponent)\u{201D}?"
             : "Discard changes to \(files.count) files?"
-        let message = hasUntracked
-            ? "Untracked files will be moved to the Bin; tracked files will be moved to the Bin and revert to their last committed version."
-            : "Files will be moved to the Bin and revert to their last committed version."
-        guard Self.confirmDestructiveAction(title: title, message: message, confirmButtonTitle: "Discard") else { return }
+        guard Self.confirmDestructiveAction(title: title, message: Self.discardMessage(for: files), confirmButtonTitle: "Discard") else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -859,14 +986,49 @@ final class AppState {
         }
     }
 
+    private static func discardMessage(for files: [ChangedFile]) -> String {
+        files.contains { $0.status == .untracked }
+            ? "Untracked files will be moved to the Bin; tracked files will be moved to the Bin and revert to their last committed version."
+            : "Files will be moved to the Bin and revert to their last committed version."
+    }
+
+    /// The "Discard All Changes" context-menu action on the Uncommitted Changes row. Re-reads the
+    /// working tree's status itself rather than using `changedFiles`, which only holds the
+    /// working changes while that row is the selected one (it could be a commit's files).
+    func discardAllChanges() {
+        guard let repo = currentRepository, uncommittedChangeCount > 0, !isRepositoryBusy else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let files = await Task.detached(priority: .userInitiated) { (try? repo.statusEntries()) ?? [] }.value
+            guard !files.isEmpty, !self.isRepositoryBusy else { return }
+            let title = files.count == 1
+                ? "Discard all changes (1 file)?"
+                : "Discard all changes (\(files.count.formatted()) files)?"
+            guard Self.confirmDestructiveAction(title: title, message: Self.discardMessage(for: files), confirmButtonTitle: "Discard All") else { return }
+            self.busyOperation = .discardingWorkingChanges
+            do {
+                try await Task.detached(priority: .userInitiated) { try repo.discardChanges(for: files) }.value
+                self.errorMessage = nil
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            // A full refresh, not just the file list — an emptied working tree needs
+            // `refreshRepositoryState()`'s selection fallback (stash, then latest commit).
+            self.refreshRepositoryState { [weak self] in
+                self?.finishBusyOperation()
+            }
+        }
+    }
+
     /// Stashes the given files (`git stash push`), including untracked ones if any target file
     /// is untracked. Uses `refreshRepositoryState()` rather than the lighter
     /// `loadChangedFilesForCurrentSelection` — stashing can empty out `.workingChanges` entirely,
     /// and the selection needs to re-derive through `refreshRepositoryState()`'s fallback chain
     /// (which now checks the stash before falling through to history).
     func stashChanges(for files: [ChangedFile]) {
-        guard let repo = currentRepository, !files.isEmpty else { return }
+        guard let repo = currentRepository, !files.isEmpty, !isRepositoryBusy else { return }
         let includeUntracked = files.contains { $0.status == .untracked }
+        busyOperation = .stashing
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -874,9 +1036,33 @@ final class AppState {
                     try repo.stashChanges(paths: files.map(\.path), includeUntracked: includeUntracked)
                 }.value
                 self.errorMessage = nil
-                self.refreshRepositoryState()
             } catch {
                 self.errorMessage = error.localizedDescription
+            }
+            self.refreshRepositoryState { [weak self] in
+                self?.finishBusyOperation()
+            }
+        }
+    }
+
+    /// The "Stash All Changes" context-menu action on the Uncommitted Changes row — every file in
+    /// the working tree, untracked included, regardless of what's checked. An empty path list is
+    /// a plain `git stash push -u` rather than a (potentially huge) pathspec payload.
+    func stashAllChanges() {
+        guard let repo = currentRepository, uncommittedChangeCount > 0, !isRepositoryBusy else { return }
+        busyOperation = .stashing
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try repo.stashChanges(paths: [], includeUntracked: true)
+                }.value
+                self.errorMessage = nil
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            self.refreshRepositoryState { [weak self] in
+                self?.finishBusyOperation()
             }
         }
     }
@@ -887,22 +1073,27 @@ final class AppState {
     /// the now-redundant stash entry, since unlike the branch-switch auto-stash path
     /// (`GitRepository.restoreStash()`) this is an explicit action with somewhere to ask.
     func restoreStash() {
-        guard let repo = currentRepository else { return }
+        guard let repo = currentRepository, stashCount > 0, !isRepositoryBusy else { return }
+        busyOperation = .restoring
         Task { @MainActor [weak self] in
             guard let self else { return }
+            var conflictedPaths: [String]?
             do {
                 let outcome = try await Task.detached(priority: .userInitiated) { try repo.applyStash() }.value
                 self.errorMessage = nil
-                switch outcome {
-                case .success:
-                    self.refreshRepositoryState()
-                case .conflicts(let paths):
-                    self.refreshRepositoryState()
-                    self.selectSource(.workingChanges)
-                    self.stashConflictAlert = StashConflictAlert(conflictedPaths: paths)
+                if case .conflicts(let paths) = outcome {
+                    conflictedPaths = paths
                 }
             } catch {
                 self.errorMessage = error.localizedDescription
+            }
+            self.refreshRepositoryState { [weak self] in
+                guard let self else { return }
+                self.finishBusyOperation()
+                if let conflictedPaths {
+                    self.selectSource(.workingChanges)
+                    self.stashConflictAlert = StashConflictAlert(conflictedPaths: conflictedPaths)
+                }
             }
         }
     }
@@ -950,20 +1141,23 @@ final class AppState {
     }
 
     func discardStash() {
-        guard let repo = currentRepository else { return }
+        guard let repo = currentRepository, stashCount > 0, !isRepositoryBusy else { return }
         guard Self.confirmDestructiveAction(
             title: "Discard stashed changes?",
             message: "This cannot be undone. The stashed changes will be permanently deleted.",
             confirmButtonTitle: "Discard"
         ) else { return }
+        busyOperation = .discarding
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 try await Task.detached(priority: .userInitiated) { try repo.dropStash() }.value
                 self.errorMessage = nil
-                self.refreshRepositoryState()
             } catch {
                 self.errorMessage = error.localizedDescription
+            }
+            self.refreshRepositoryState { [weak self] in
+                self?.finishBusyOperation()
             }
         }
     }
@@ -1007,6 +1201,19 @@ final class AppState {
             checkedFilePaths.insert(path)
         } else {
             checkedFilePaths.remove(path)
+        }
+    }
+
+    /// The Uncommitted Changes row's "Check All"/"Uncheck All" context-menu actions. Checks only
+    /// exist for the working-changes file list, so when another row is selected this switches
+    /// to Uncommitted Changes and applies the choice once its (async) file list loads, rather
+    /// than having the load's default all-checked state overwrite it.
+    func setAllWorkingChangesChecked(_ isChecked: Bool) {
+        if selectedSource == .workingChanges {
+            checkedFilePaths = isChecked ? Set(changedFiles.map(\.path)) : []
+        } else {
+            pendingWorkingChangesCheckState = isChecked
+            selectSource(.workingChanges)
         }
     }
 
@@ -1083,7 +1290,7 @@ final class AppState {
     }
 
     func mergeBranch(_ branch: GitBranch) {
-        guard let repo = currentRepository, !isSyncing else { return }
+        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
         isSyncing = true
         Task {
             do {
@@ -1210,7 +1417,7 @@ final class AppState {
     }
 
     func fetchRemote() {
-        guard let repo = currentRepository, !isSyncing else { return }
+        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
         isSyncing = true
         Task {
             do {
@@ -1230,7 +1437,7 @@ final class AppState {
     }
 
     func pullCurrentBranch() {
-        guard let repo = currentRepository, !isSyncing else { return }
+        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
         isSyncing = true
         Task {
             do {
@@ -1250,7 +1457,7 @@ final class AppState {
     }
 
     func pushCurrentBranch() {
-        guard let repo = currentRepository, let branch = selectedBranch?.name, !isSyncing else { return }
+        guard let repo = currentRepository, let branch = selectedBranch?.name, !isSyncing, !isRepositoryBusy else { return }
         isSyncing = true
         isPushingCommit = true
         pushProgressText = nil
@@ -1291,7 +1498,7 @@ final class AppState {
     /// The "Pull from Origin" fix on a non-fast-forward push rejection — pulls, then retries the
     /// push automatically once it succeeds.
     func pullThenPush() {
-        guard let repo = currentRepository, !isSyncing else { return }
+        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
         gitFailureAlert = nil
         isSyncing = true
         Task {
@@ -1321,7 +1528,7 @@ final class AppState {
     /// sidebar's "Stashed Changes" row) whenever they're ready to reconcile their edit with
     /// upstream's, with `restoreStash()`'s usual conflict-marker handling if the two collide.
     func stashAndRetryPull(path: String) {
-        guard let repo = currentRepository, !isSyncing else { return }
+        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
         gitFailureAlert = nil
         isSyncing = true
         Task {
@@ -1496,11 +1703,15 @@ final class AppState {
         )
     }
 
-    private func refreshRepositoryState() {
+    /// `completion` runs once this refresh is over — applied, or dropped because a newer refresh
+    /// or a repo switch superseded it — so a caller can hold UI state (e.g. `isRepositoryBusy`)
+    /// until then without any risk of it never being released.
+    private func refreshRepositoryState(completion: (() -> Void)? = nil) {
         // Every caller has just changed repository-level state (or selected another repo), so
         // cached selection results may no longer describe the Git graph being displayed.
         invalidateSelectionCaches()
         guard let repo = currentRepository else {
+            defer { completion?() }
             branches = []
             remoteOnlyBranches = []
             defaultBranchName = nil
@@ -1533,6 +1744,7 @@ final class AppState {
         let generation = repositoryRefreshGeneration
         let repoURL = selectedRepoURL
         Task { @MainActor [weak self] in
+            defer { completion?() }
             let snapshot = await Task.detached(priority: .userInitiated) {
                 Self.repositorySnapshot(for: repo)
             }.value
@@ -1712,6 +1924,26 @@ final class AppState {
         // Any filesystem event can affect a diff, status, or commit/stash contents. Prefer a
         // slightly conservative cache clear to ever presenting an old Git snapshot.
         invalidateSelectionCaches()
+        // A big checkout rewrites thousands of files, so FSEvents fires every latency window for
+        // as long as git runs. Snapshotting a half-written tree is useless, and each snapshot is a
+        // dozen git processes (including a full `status --untracked-files=all`) competing with
+        // the checkout itself — `selectBranch` refreshes once at the end instead.
+        guard !isRepositoryBusy else {
+            hasDeferredExternalChange = true
+            return
+        }
+        // At most one snapshot in flight. Previously every callback started its own detached
+        // fetch and only the newest result was kept, so a sustained burst of events (a big
+        // checkout, a build writing into the tree) stacked up concurrent `git status` runs that
+        // each took longer than the event interval — the app never caught up and appeared hung
+        // long after git had finished. Further events while one is running collapse into a
+        // single re-run once it completes.
+        guard !isExternalChangeInFlight else {
+            hasDeferredExternalChange = true
+            return
+        }
+        isExternalChangeInFlight = true
+        let repoURL = selectedRepoURL
         let source = selectedSource
         let previousCheckedFilePaths = checkedFilePaths
         let previousChangedFilePaths = Set(changedFiles.map(\.path))
@@ -1720,6 +1952,13 @@ final class AppState {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                self.isExternalChangeInFlight = false
+                if self.hasDeferredExternalChange, !self.isRepositoryBusy {
+                    self.hasDeferredExternalChange = false
+                    self.handleExternalChange()
+                }
+            }
             let snapshot = await Task.detached(priority: .userInitiated) { () -> ExternalChangeSnapshot in
                 let isMergeInProgress = repo.isMergeInProgress()
                 let mergeMessage = repo.mergeMessage()
@@ -1792,7 +2031,8 @@ final class AppState {
             // A newer `handleExternalChange()` call started (and possibly already applied its
             // own snapshot) while this one's detached fetch was still in flight — drop this
             // stale result instead of overwriting fresher state with it.
-            guard generation == self.externalChangeGeneration else { return }
+            // Likewise for a repo switch mid-fetch — this snapshot describes the old repo.
+            guard generation == self.externalChangeGeneration, repoURL == self.selectedRepoURL else { return }
 
             self.isMergeInProgress = snapshot.isMergeInProgress
             self.mergeMessage = snapshot.mergeMessage
@@ -1931,7 +2171,10 @@ final class AppState {
         if case .workingChanges = source {
             updateUncommittedSummary(repo: repo, statusEntries: result.statusEntries)
             let currentPaths = Set(result.files.map(\.path))
-            if preserveChecks {
+            if let pending = pendingWorkingChangesCheckState {
+                pendingWorkingChangesCheckState = nil
+                checkedFilePaths = pending ? currentPaths : []
+            } else if preserveChecks {
                 checkedFilePaths.formIntersection(currentPaths)
                 checkedFilePaths.formUnion(currentPaths.subtracting(previousPaths))
             } else {

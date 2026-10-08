@@ -32,6 +32,13 @@ struct BranchListView: View {
                             uncommittedChangesRow
                                 .claimingFocusOnClick(claimFocusOnClick)
                                 .tag(ChangeSource.workingChanges)
+                                .contextMenu {
+                                    Button("Stash All Changes") { appState.stashAllChanges() }
+                                    Button("Discard All Changes\u{2026}", role: .destructive) { appState.discardAllChanges() }
+                                    Divider()
+                                    Button("Check All Files") { appState.setAllWorkingChangesChecked(true) }
+                                    Button("Uncheck All Files") { appState.setAllWorkingChangesChecked(false) }
+                                }
                         } else {
                             uncommittedChangesRow
                         }
@@ -43,6 +50,10 @@ struct BranchListView: View {
                             .claimingFocusOnClick(claimFocusOnClick)
                             .tag(ChangeSource.stash)
                             .listRowSeparator(.visible)
+                            .contextMenu {
+                                Button("Restore Stash") { appState.restoreStash() }
+                                Button("Discard Stash\u{2026}", role: .destructive) { appState.discardStash() }
+                            }
                     }
                 } header: {
                     sectionHeader("Local changes", systemImage: "doc")
