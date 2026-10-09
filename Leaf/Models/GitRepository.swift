@@ -69,6 +69,8 @@ struct GitCommit: Identifiable, Hashable {
     let summary: String
     let date: Date
     let author: String
+    /// The message body below the subject line (`%b`), trimmed — empty for a one-line commit.
+    var body: String = ""
 
     var id: String { sha }
 
@@ -828,17 +830,24 @@ nonisolated struct GitRepository {
     }
 
     private static let fieldSeparator = "\u{1F}"
+    private static let recordSeparator = "\u{1E}"
 
     func commitLog(branch: String, limit: Int = 200) throws -> [GitCommit] {
-        let format = ["%H", "%h", "%s", "%at", "%an"].joined(separator: Self.fieldSeparator)
+        // `%b` (the body) spans multiple lines, so records are delimited by an explicit record
+        // separator rather than by newline.
+        let format = ["%H", "%h", "%s", "%at", "%an", "%b"].joined(separator: Self.fieldSeparator) + Self.recordSeparator
         let output = try run(["log", branch, "-n", String(limit), "--format=\(format)"])
         return output
-            .split(separator: "\n")
-            .compactMap { line -> GitCommit? in
-                let parts = String(line).components(separatedBy: Self.fieldSeparator)
-                guard parts.count == 5, let epochSeconds = TimeInterval(parts[3]) else { return nil }
+            .components(separatedBy: Self.recordSeparator)
+            .compactMap { record -> GitCommit? in
+                // git puts a newline between entries, which lands at the start of each record.
+                let parts = record.trimmingCharacters(in: .newlines).components(separatedBy: Self.fieldSeparator)
+                guard parts.count == 6, let epochSeconds = TimeInterval(parts[3]) else { return nil }
                 let date = Date(timeIntervalSince1970: epochSeconds)
-                return GitCommit(sha: parts[0], shortSha: parts[1], summary: parts[2], date: date, author: parts[4])
+                return GitCommit(
+                    sha: parts[0], shortSha: parts[1], summary: parts[2], date: date, author: parts[4],
+                    body: parts[5].trimmingCharacters(in: .whitespacesAndNewlines)
+                )
             }
     }
 

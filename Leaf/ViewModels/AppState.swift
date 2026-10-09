@@ -1293,10 +1293,10 @@ final class AppState {
             guard let self else { return }
             do {
                 try await Task.detached(priority: .userInitiated) { try repo.undoLastCommit() }.value
-                // The subject line is all `GitCommit` carries — enough to let the user immediately
-                // re-commit as-is, or edit/expand it, rather than retyping from scratch.
+                // Restore the message so the user can immediately re-commit as-is, or edit it,
+                // rather than retyping from scratch.
                 self.commitMessage = commit.summary
-                self.commitDescription = ""
+                self.commitDescription = commit.body
                 self.errorMessage = nil
                 self.refreshRepositoryState()
             } catch {

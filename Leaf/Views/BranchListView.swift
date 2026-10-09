@@ -22,6 +22,7 @@ struct BranchListView: View {
     @State private var pendingProgrammaticSelection: ChangeSource?
     @FocusState private var isFocused: Bool
     @AppStorage(LeafSettings.showFullCommitTitleKey, store: LeafSettings.store) private var showFullCommitTitle = LeafSettings.defaultShowFullCommitTitle
+    @AppStorage(LeafSettings.showCommitDescriptionKey, store: LeafSettings.store) private var showCommitDescription = LeafSettings.defaultShowCommitDescription
 
     var body: some View {
         ZStack {
@@ -67,7 +68,8 @@ struct BranchListView: View {
                             commit: commit,
                             tags: commitTags,
                             isUnpushed: unpushedSHAs.contains(commit.sha),
-                            showFullCommitTitle: showFullCommitTitle
+                            showFullCommitTitle: showFullCommitTitle,
+                            showCommitDescription: showCommitDescription
                         )
                         .claimingFocusOnClick(claimFocusOnClick)
                         .tag(ChangeSource.commit(commit))
@@ -244,7 +246,9 @@ private struct CommitRowView: View {
     /// This commit exists locally but not on the branch's upstream — flagged with a trailing
     /// up-arrow badge.
     let isUnpushed: Bool
+    /// Lets the summary and description wrap in full; otherwise one line and two respectively.
     let showFullCommitTitle: Bool
+    let showCommitDescription: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -263,6 +267,11 @@ private struct CommitRowView: View {
                         }
                     }
                 }
+            }
+            if showCommitDescription, !commit.body.isEmpty {
+                Text(commit.body)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(showFullCommitTitle ? nil : 2)
             }
             Text("\(commit.author) · \(commit.relativeDate)")
                 .font(.caption)

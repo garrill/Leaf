@@ -943,6 +943,21 @@ private extension GitRepository.StashApplyOutcome {
         #expect(Set(files.map(\.path)) == ["a.txt", "b.txt"])
     }
 
+    @Test func commitLogParsesMultiLineBody() throws {
+        let t = TestRepo()
+        try t.write("a.txt", "1")
+        _ = try t.commitAll("first commit")
+        try t.write("a.txt", "2")
+        _ = try t.commitAll("second commit\n\nBody line one\n\nBody line two")
+
+        let log = try t.repo.commitLog(branch: "main")
+        #expect(log.count == 2)
+        #expect(log[0].summary == "second commit")
+        #expect(log[0].body == "Body line one\n\nBody line two")
+        #expect(log[1].summary == "first commit")
+        #expect(log[1].body.isEmpty)
+    }
+
     @Test func diffForFileInCommit() throws {
         let t = TestRepo()
         try t.write("a.txt", "1\n")

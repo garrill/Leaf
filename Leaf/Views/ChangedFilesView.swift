@@ -358,14 +358,21 @@ private struct ChangedFilesList: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
-            Text(headerTitle)
-                .font(.headline)
-                .lineLimit(isTitleExpanded ? nil : 1)
-                .textSelection(.enabled)
-                .truncationTooltip(headerTitle, isEnabled: !isTitleExpanded, font: .preferredFont(forTextStyle: .headline))
-                .background(isTitleExpanded ? nil : titleTruncationProbe)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(headerTitle)
+                    .font(.headline)
+                    .lineLimit(isTitleExpanded ? nil : 1)
+                    .textSelection(.enabled)
+                    .truncationTooltip(headerTitle, isEnabled: !isTitleExpanded, font: .preferredFont(forTextStyle: .headline))
+                    .background(isTitleExpanded ? nil : titleTruncationProbe)
+                // Hidden until expanded, so the header stays a single line by default.
+                if isTitleExpanded, !headerDescription.isEmpty {
+                    Text(headerDescription)
+                        .textSelection(.enabled)
+                }
+            }
             Spacer(minLength: 0)
-            if isTitleTruncated || isTitleExpanded {
+            if isTitleTruncated || isTitleExpanded || !headerDescription.isEmpty {
                 Button {
                     isTitleExpanded.toggle()
                 } label: {
@@ -373,7 +380,7 @@ private struct ChangedFilesList: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Expand title")
+                .help(isTitleExpanded ? "Collapse commit message" : "Expand commit message")
             }
         }
         .padding(.horizontal, 12)
@@ -408,6 +415,11 @@ private struct ChangedFilesList: View {
                     }
                 )
         }
+    }
+
+    private var headerDescription: String {
+        guard case .commit(let commit) = appState.selectedSource else { return "" }
+        return commit.body
     }
 
     private var headerTitle: String {

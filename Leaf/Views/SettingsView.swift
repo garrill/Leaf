@@ -10,7 +10,10 @@ enum LeafSettings {
     static let syntaxHighlightingEnabledKey = "syntaxHighlightingEnabled"
     static let externalEditorPathKey = "externalEditorPath"
     static let showRepoStatusKey = "showRepoStatus"
+    /// Key predates commit descriptions (it now covers summary + description) — kept as-is so
+    /// existing users' preference carries over.
     static let showFullCommitTitleKey = "showFullCommitTitle"
+    static let showCommitDescriptionKey = "showCommitDescription"
     static let hideWhitespaceChangesKey = "hideWhitespaceChanges"
 
     static let defaultDiffFontSize = Double(NSFont.systemFontSize)
@@ -18,6 +21,7 @@ enum LeafSettings {
     static let defaultSyntaxHighlightingEnabled = true
     static let defaultShowRepoStatus = true
     static let defaultShowFullCommitTitle = false
+    static let defaultShowCommitDescription = true
     static let defaultHideWhitespaceChanges = false
 
     /// Debug and Release builds of `Leaf` share one `PRODUCT_BUNDLE_IDENTIFIER` (`garrill.Leaf`),
@@ -54,6 +58,7 @@ struct SettingsView: View {
     @AppStorage(LeafSettings.externalEditorPathKey, store: LeafSettings.store) private var externalEditorPath = ""
     @AppStorage(LeafSettings.showRepoStatusKey, store: LeafSettings.store) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
     @AppStorage(LeafSettings.showFullCommitTitleKey, store: LeafSettings.store) private var showFullCommitTitle = LeafSettings.defaultShowFullCommitTitle
+    @AppStorage(LeafSettings.showCommitDescriptionKey, store: LeafSettings.store) private var showCommitDescription = LeafSettings.defaultShowCommitDescription
     @AppStorage(LeafSettings.hideWhitespaceChangesKey, store: LeafSettings.store) private var hideWhitespaceChanges = LeafSettings.defaultHideWhitespaceChanges
 
     var body: some View {
@@ -66,8 +71,12 @@ struct SettingsView: View {
             }
 
             Section("History") {
-                Toggle("Show full commit title", isOn: $showFullCommitTitle)
-                Text("Lets long commit titles wrap onto multiple lines instead of truncating, making each row taller.")
+                Toggle("Show full commit message", isOn: $showFullCommitTitle)
+                Text("Shows the whole commit message instead of truncating the title to one line and the description to two, making rows taller.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Show commit description", isOn: $showCommitDescription)
+                Text("Shows each commit's description under its title.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

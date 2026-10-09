@@ -23,6 +23,7 @@ struct LeafApp: App {
     @AppStorage(LeafSettings.externalEditorPathKey, store: LeafSettings.store) private var externalEditorPath = ""
     @AppStorage(LeafSettings.showRepoStatusKey, store: LeafSettings.store) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
     @AppStorage(LeafSettings.showFullCommitTitleKey, store: LeafSettings.store) private var showFullCommitTitle = LeafSettings.defaultShowFullCommitTitle
+    @AppStorage(LeafSettings.showCommitDescriptionKey, store: LeafSettings.store) private var showCommitDescription = LeafSettings.defaultShowCommitDescription
     @AppStorage(LeafSettings.syntaxHighlightingEnabledKey, store: LeafSettings.store) private var syntaxHighlightingEnabled = LeafSettings.defaultSyntaxHighlightingEnabled
     @AppStorage(LeafSettings.hideWhitespaceChangesKey, store: LeafSettings.store) private var hideWhitespaceChanges = LeafSettings.defaultHideWhitespaceChanges
     @StateObject private var checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: UpdaterHolder.shared.updater)
@@ -74,8 +75,11 @@ struct LeafApp: App {
                 Button(showRepoStatus ? "Hide Repository Status" : "Show Repository Status") {
                     showRepoStatus.toggle()
                 }
-                Button(showFullCommitTitle ? "Truncate Commit Title" : "Show Full Commit Title") {
+                Button(showFullCommitTitle ? "Truncate Commit Message" : "Show Full Commit Message") {
                     showFullCommitTitle.toggle()
+                }
+                Button(showCommitDescription ? "Hide Commit Description" : "Show Commit Description") {
+                    showCommitDescription.toggle()
                 }
                 Button(syntaxHighlightingEnabled ? "Disable Syntax Highlighting" : "Enable Syntax Highlighting") {
                     syntaxHighlightingEnabled.toggle()
