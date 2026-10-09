@@ -7,6 +7,8 @@
 
 import Testing
 import Foundation
+import AppKit
+import HighlightSwift
 @testable import Leaf
 
 /// Spins up a real throwaway repo (or bare repo) in a temp directory per test, and cleans it
@@ -1090,5 +1092,119 @@ private extension GitRepository.StashApplyOutcome {
     ])
     func repoName(url: String, expected: String) {
         #expect(GitRepository.repoName(fromURLString: url) == expected)
+    }
+}
+
+@Suite struct WordDiffTests {
+    private func substrings(_ ranges: [NSRange], in line: String) -> [String] {
+        ranges.map { (line as NSString).substring(with: $0) }
+    }
+
+    @Test func unrelatedLinesAreWholeLineReplacement() {
+        #expect(DiffCodeScrollView.diffRanges(
+            old: #"        .help("Expand title")"#,
+            new: #"        .help(isTitleExpanded ? "Collapse commit message" : "Expand commit message")"#
+        ) == nil)
+    }
+
+    @Test func singleValueChangeHighlightsOnlyThatToken() throws {
+        let old = #"let version = "1.2.3""#
+        let new = #"let version = "1.2.10""#
+        let ranges = try #require(DiffCodeScrollView.diffRanges(old: old, new: new))
+        #expect(substrings(ranges.old, in: old) == ["3"])
+        #expect(substrings(ranges.new, in: new) == ["10"])
+    }
+
+    @Test func changesNeverSplitAWord() throws {
+        let old = "frame.width = titleWidth + padding"
+        let new = "frame.width = messageWidth + padding"
+        let ranges = try #require(DiffCodeScrollView.diffRanges(old: old, new: new))
+        #expect(substrings(ranges.old, in: old) == ["titleWidth"])
+        #expect(substrings(ranges.new, in: new) == ["messageWidth"])
+    }
+
+    @Test func separateChangesGetSeparateRanges() throws {
+        let old = "call(alpha, beta, gamma, delta, epsilon)"
+        let new = "call(alpha, BETA, gamma, delta, EPSILON)"
+        let ranges = try #require(DiffCodeScrollView.diffRanges(old: old, new: new))
+        #expect(substrings(ranges.new, in: new) == ["BETA", "EPSILON"])
+    }
+
+    @Test func trivialGapBetweenChangesIsMerged() throws {
+        let old = "point = makePoint(a, b) // origin"
+        let new = "point = makePoint(x, y) // origin"
+        let ranges = try #require(DiffCodeScrollView.diffRanges(old: old, new: new))
+        #expect(substrings(ranges.new, in: new) == ["x, y"])
+    }
+
+    @Test func pureInsertionHighlightsOnlyNewSide() throws {
+        let old = "let items = [first, second]"
+        let new = "let items = [first, second, third]"
+        let ranges = try #require(DiffCodeScrollView.diffRanges(old: old, new: new))
+        #expect(ranges.old.isEmpty)
+        #expect(substrings(ranges.new, in: new) == [", third"])
+    }
+
+    @Test func rangesUseUTF16Offsets() throws {
+        let old = "label = \"🍃 old\""
+        let new = "label = \"🍃 new\""
+        let ranges = try #require(DiffCodeScrollView.diffRanges(old: old, new: new))
+        #expect(substrings(ranges.new, in: new) == ["new"])
+    }
+
+    private func diffLines(removed: [String], added: [String]) -> [DiffLine] {
+        (removed.map { (DiffLine.Kind.removed, "-" + $0) } + added.map { (DiffLine.Kind.added, "+" + $0) })
+            .enumerated()
+            .map { DiffLine(id: $0.offset, kind: $0.element.0, oldLineNumber: nil, newLineNumber: nil, text: $0.element.1) }
+    }
+
+    @Test func lumpOfChangesGetsNoWordHighlight() {
+        let lines = diffLines(removed: [
+            #"            .split(separator: "\n")"#,
+            #"            .compactMap { line -> GitCommit? in"#,
+            #"                let parts = String(line).components(separatedBy: Self.fieldSeparator)"#,
+            #"                guard parts.count == 5, let epochSeconds = TimeInterval(parts[3]) else { return nil }"#,
+        ], added: [
+            #"            .components(separatedBy: Self.recordSeparator)"#,
+            #"            .compactMap { record -> GitCommit? in"#,
+            #"                // git puts a newline between entries, which lands at the start of each record."#,
+            #"                let parts = record.trimmingCharacters(in: .newlines).components(separatedBy: Self.fieldSeparator)"#,
+            #"                guard parts.count == 6, let epochSeconds = TimeInterval(parts[3]) else { return nil }"#,
+        ])
+        #expect(DiffCodeScrollView.wordDiffRanges(for: lines).isEmpty)
+    }
+
+    @Test func blockWithAnyDissimilarPairGetsNoWordHighlight() {
+        let lines = diffLines(
+            removed: ["let width = 10", "        .help(\"Expand title\")"],
+            added: ["let width = 12", "        .help(isTitleExpanded ? \"Collapse commit message\" : \"Expand commit message\")"]
+        )
+        #expect(DiffCodeScrollView.wordDiffRanges(for: lines).isEmpty)
+    }
+
+    @Test func oneForOneEditBlockIsHighlighted() {
+        let lines = diffLines(removed: ["let width = 10", "let height = 20"], added: ["let width = 12", "let height = 24"])
+        #expect(DiffCodeScrollView.wordDiffRanges(for: lines).keys.sorted() == [0, 1, 2, 3])
+    }
+
+    @Test func identicalLinesHaveNoRanges() {
+        #expect(DiffCodeScrollView.diffRanges(old: "same", new: "same") == nil)
+    }
+}
+
+@Suite struct DiffSyntaxColorTests {
+    /// The tinted-comment swap identifies comment runs by their exact RGBA, so it silently
+    /// no-ops if the highlighter's HTML import ever alters the comment color (e.g. drops alpha).
+    @Test(arguments: [false, true])
+    func highlightedCommentColorIsRecognised(isDark: Bool) async throws {
+        let attributed = try #require(await CodeHighlighter.attributedText("let x = 1 // note", language: .swift, isDark: isDark))
+        let ns = NSAttributedString(attributed)
+        let commentStart = (ns.string as NSString).range(of: "// note").location
+        let color = try #require(ns.attribute(.foregroundColor, at: commentStart, effectiveRange: nil) as? NSColor)
+        #expect(DiffSyntaxColors.commentColor(replacing: color, for: .added) != nil)
+        #expect(DiffSyntaxColors.commentColor(replacing: color, for: .context) == nil)
+
+        let keywordColor = try #require(ns.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+        #expect(DiffSyntaxColors.commentColor(replacing: keywordColor, for: .added) == nil)
     }
 }

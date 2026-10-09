@@ -971,15 +971,18 @@ struct DiffCodeScrollView: NSViewRepresentable {
                 let highlightedNS = NSAttributedString(highlighted)
                 highlightedNS.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: highlightedNS.length)) { value, range, _ in
                     guard let value, range.location + range.length <= contentLength else { return }
-                    piece.addAttribute(.foregroundColor, value: value, range: range)
+                    let color = (value as? NSColor).flatMap { DiffSyntaxColors.commentColor(replacing: $0, for: line.kind) } ?? value
+                    piece.addAttribute(.foregroundColor, value: color, range: range)
                 }
             }
 
-            // The stronger "word diff" highlight — the sub-range that actually differs from this
+            // The stronger "word diff" highlight — the sub-ranges that actually differ from this
             // line's paired counterpart — layered on top of everything else, last, so it always wins.
             if let strongColor = DiffView.strongBackgroundNSColor(for: line.kind),
-               let wordRange = wordDiffRanges[index], wordRange.location + wordRange.length <= contentLength {
-                piece.addAttribute(.backgroundColor, value: strongColor, range: wordRange)
+               let wordRanges = wordDiffRanges[index] {
+                for wordRange in wordRanges where NSMaxRange(wordRange) <= contentLength {
+                    piece.addAttribute(.backgroundColor, value: strongColor, range: wordRange)
+                }
             }
 
             result.append(piece)
@@ -999,14 +1002,14 @@ struct DiffCodeScrollView: NSViewRepresentable {
     // MARK: - Word diff
 
     /// GitHub-style "word diff": within a block where a run of removed lines is immediately
-    /// followed by a run of added lines (a one-for-one replacement, e.g. a single changed value),
-    /// pairs them up index-wise and finds the sub-range that actually differs in each pair via
-    /// common-prefix/suffix trimming — simple, but it's exactly what produces the "just the version
-    /// number is highlighted" effect for straightforward substitutions. Blocks with an unequal
-    /// number of removed/added lines, or added/removed lines with no paired counterpart at all
-    /// (pure insertions/deletions), are left with only the whole-line background.
-    private static func wordDiffRanges(for lines: [DiffLine]) -> [Int: NSRange] {
-        var result: [Int: NSRange] = [:]
+    /// followed by a run of added lines, pairs them up index-wise and highlights the token ranges
+    /// that actually differ in each pair (see `diffRanges(old:new:)`). Only a clean one-for-one
+    /// edit gets the stronger highlight — equal removed/added counts *and* every pair similar
+    /// enough to read as an edit. Anything else (a lump of rewritten code, an inserted comment
+    /// line, pure insertions/deletions) keeps just the whole-line backgrounds, since a stray
+    /// strong highlight on one coincidentally-similar word inside a big change is just noise.
+    static func wordDiffRanges(for lines: [DiffLine]) -> [Int: [NSRange]] {
+        var result: [Int: [NSRange]] = [:]
         var index = 0
         while index < lines.count {
             guard lines[index].kind == .removed else {
@@ -1029,13 +1032,20 @@ struct DiffCodeScrollView: NSViewRepresentable {
 
             let removedCount = removedEnd - index + 1
             let addedCount = max(0, addedEnd - addedStart + 1)
-            let pairCount = min(removedCount, addedCount)
-            for offset in 0..<pairCount {
-                let oldLine = lines[index + offset]
-                let newLine = lines[addedStart + offset]
-                guard let (oldRange, newRange) = diffRanges(old: oldLine.displayText, new: newLine.displayText) else { continue }
-                result[index + offset] = oldRange
-                result[addedStart + offset] = newRange
+            if removedCount == addedCount {
+                var blockRanges: [Int: [NSRange]] = [:]
+                for offset in 0..<removedCount {
+                    let oldText = lines[index + offset].displayText
+                    let newText = lines[addedStart + offset].displayText
+                    if oldText == newText { continue }
+                    guard let (oldRanges, newRanges) = diffRanges(old: oldText, new: newText) else {
+                        blockRanges = [:]
+                        break
+                    }
+                    blockRanges[index + offset] = oldRanges
+                    blockRanges[addedStart + offset] = newRanges
+                }
+                result.merge(blockRanges) { _, new in new }
             }
 
             index = addedCount > 0 ? addedEnd + 1 : removedEnd + 1
@@ -1043,33 +1053,124 @@ struct DiffCodeScrollView: NSViewRepresentable {
         return result
     }
 
-    /// Trims the common leading and trailing substrings shared by `old` and `new`, returning the
-    /// differing middle range in each (in UTF-16 offsets, matching `NSRange`), or `nil` if the two
-    /// strings are identical.
-    private static func diffRanges(old: String, new: String) -> (old: NSRange, new: NSRange)? {
-        let oldNS = old as NSString
-        let newNS = new as NSString
-        if oldNS.isEqual(to: new) { return nil }
+    /// Below this fraction of shared (non-whitespace) characters, a removed/added pair is treated
+    /// as a whole-line replacement rather than an edit — highlighting the few coincidentally
+    /// shared tokens (a `.help(`, a closing `")`) of two unrelated lines is technically correct
+    /// but just noise.
+    static let wordDiffMinimumSimilarity = 0.5
 
-        let oldLength = oldNS.length
-        let newLength = newNS.length
-        let maxPrefix = min(oldLength, newLength)
+    /// Lines with more tokens than this (minified code, long data rows) skip the word diff —
+    /// Myers is O((N+M)·D), so a pathological pair could otherwise stall the render.
+    private static let wordDiffMaxTokenCount = 500
 
-        var prefix = 0
-        while prefix < maxPrefix, oldNS.character(at: prefix) == newNS.character(at: prefix) {
-            prefix += 1
+    private struct WordDiffToken {
+        let text: Substring
+        /// UTF-16 range within the line, matching `NSRange`/`NSAttributedString` offsets.
+        let range: NSRange
+        let isWhitespace: Bool
+    }
+
+    /// Diffs `old` against `new` at token granularity (runs of word characters, runs of
+    /// whitespace, and each other character on its own) using the stdlib's Myers
+    /// `difference(from:)`, so a change can never start or end mid-word. Returns the changed
+    /// UTF-16 ranges on each side — possibly several per line, possibly none on one side for a
+    /// pure insertion/removal — or `nil` if the strings are identical, too dissimilar (see
+    /// `wordDiffMinimumSimilarity`), or too long.
+    static func diffRanges(old: String, new: String) -> (old: [NSRange], new: [NSRange])? {
+        guard old != new else { return nil }
+        let oldTokens = tokenize(old)
+        let newTokens = tokenize(new)
+        guard oldTokens.count <= wordDiffMaxTokenCount, newTokens.count <= wordDiffMaxTokenCount else { return nil }
+
+        var oldChanged = [Bool](repeating: false, count: oldTokens.count)
+        var newChanged = [Bool](repeating: false, count: newTokens.count)
+        for change in newTokens.map(\.text).difference(from: oldTokens.map(\.text)) {
+            switch change {
+            case .remove(let offset, _, _): oldChanged[offset] = true
+            case .insert(let offset, _, _): newChanged[offset] = true
+            }
         }
 
-        var suffix = 0
-        let maxSuffix = maxPrefix - prefix
-        while suffix < maxSuffix,
-              oldNS.character(at: oldLength - 1 - suffix) == newNS.character(at: newLength - 1 - suffix) {
-            suffix += 1
+        // Similarity is measured over non-whitespace characters only, so shared indentation
+        // can't make two unrelated lines look alike.
+        func contentLength(_ tokens: [WordDiffToken], where include: (Int) -> Bool) -> Int {
+            tokens.indices.reduce(0) { sum, i in
+                include(i) && !tokens[i].isWhitespace ? sum + tokens[i].range.length : sum
+            }
+        }
+        let total = contentLength(oldTokens) { _ in true } + contentLength(newTokens) { _ in true }
+        let shared = contentLength(oldTokens) { !oldChanged[$0] } + contentLength(newTokens) { !newChanged[$0] }
+        guard total > 0, Double(shared) / Double(total) >= wordDiffMinimumSimilarity else { return nil }
+
+        return (changedRanges(oldTokens, changed: oldChanged), changedRanges(newTokens, changed: newChanged))
+    }
+
+    /// Coalesces runs of changed tokens into ranges, also absorbing a trivial unchanged gap
+    /// between two runs (whitespace plus at most one other character — the `, ` in `a, b` →
+    /// `x, y`) so one logical change reads as a single highlight rather than a broken-up one.
+    private static func changedRanges(_ tokens: [WordDiffToken], changed: [Bool]) -> [NSRange] {
+        var ranges: [NSRange] = []
+        var gapStart = 0
+        var index = 0
+        while index < tokens.count {
+            guard changed[index] else {
+                index += 1
+                continue
+            }
+            var end = index
+            while end + 1 < tokens.count, changed[end + 1] {
+                end += 1
+            }
+            let run = NSUnionRange(tokens[index].range, tokens[end].range)
+            let gapContentLength = tokens[gapStart..<index].reduce(0) { $1.isWhitespace ? $0 : $0 + $1.range.length }
+            if let last = ranges.last, gapContentLength <= 1 {
+                ranges[ranges.count - 1] = NSUnionRange(last, run)
+            } else {
+                ranges.append(run)
+            }
+            gapStart = end + 1
+            index = end + 1
+        }
+        return ranges
+    }
+
+    private static func tokenize(_ line: String) -> [WordDiffToken] {
+        enum Kind { case word, whitespace, other }
+        func kind(of character: Character) -> Kind {
+            if character.isLetter || character.isNumber || character == "_" { return .word }
+            if character.isWhitespace { return .whitespace }
+            return .other
         }
 
-        let oldRange = NSRange(location: prefix, length: oldLength - prefix - suffix)
-        let newRange = NSRange(location: prefix, length: newLength - prefix - suffix)
-        guard oldRange.length > 0 || newRange.length > 0 else { return nil }
-        return (oldRange, newRange)
+        var tokens: [WordDiffToken] = []
+        var tokenStart = line.startIndex
+        var tokenStartOffset = 0
+        var tokenKind: Kind?
+        var offset = 0
+        var index = line.startIndex
+        while index < line.endIndex {
+            let character = line[index]
+            let characterKind = kind(of: character)
+            if let tokenKind, characterKind != tokenKind || characterKind == .other {
+                tokens.append(WordDiffToken(
+                    text: line[tokenStart..<index],
+                    range: NSRange(location: tokenStartOffset, length: offset - tokenStartOffset),
+                    isWhitespace: tokenKind == .whitespace
+                ))
+                tokenStart = index
+                tokenStartOffset = offset
+            }
+            tokenKind = characterKind
+            offset += character.utf16.count
+            index = line.index(after: index)
+        }
+        if let tokenKind {
+            tokens.append(WordDiffToken(
+                text: line[tokenStart...],
+                range: NSRange(location: tokenStartOffset, length: offset - tokenStartOffset),
+                isWhitespace: tokenKind == .whitespace
+            ))
+        }
+        return tokens
     }
 }
