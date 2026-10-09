@@ -51,7 +51,7 @@ struct ChangedFilesView: View {
         // the message field is clicked directly, so this guard is what stops that from looping
         // back and reclaiming focus for the List in the same beat.
         .onChange(of: appState.focusedColumn) { _, newValue in
-            guard newValue == .files, commitFieldFocus == nil else { return }
+            guard newValue == .files, !isEditingCommitMessage(commitFieldFocus) else { return }
             isFocused = true
         }
         // The user tabbed/clicked into this column directly (not via arrow-key navigation) —
@@ -59,6 +59,21 @@ struct ChangedFilesView: View {
         .onChange(of: isFocused) { _, newValue in
             guard newValue else { return }
             appState.focusedColumn = .files
+        }
+        // The message field went away while focused (a commit swapping the footer out) rather
+        // than the user clicking somewhere else — nothing that handles keys is left as first
+        // responder, so key presses would land nowhere. Hand focus back to the file list. A
+        // click into another column leaves that column's table/text view as first responder
+        // (and moves `focusedColumn` off `.files`), so this backs off.
+        .onChange(of: commitFieldFocus) { _, newValue in
+            guard newValue == nil else { return }
+            DispatchQueue.main.async {
+                guard commitFieldFocus == nil, appState.focusedColumn == .files,
+                      let responder = NSApp.keyWindow?.firstResponder,
+                      !(responder is NSTableView), !(responder is NSTextView) else { return }
+                isFocused = false
+                DispatchQueue.main.async { isFocused = true }
+            }
         }
         // Lives at the top level (not nested in a conditional footer) so it fires regardless of
         // what's currently selected/shown — a commit or push can be triggered from the toolbar
@@ -297,17 +312,17 @@ private struct ChangedFilesList: View {
         // text cursor and escape needs to do nothing, so all three back off and let the
         // field's own default key handling run instead.
         .onKeyPress(.leftArrow) {
-            guard commitFieldFocus.wrappedValue == nil else { return .ignored }
+            guard !isEditingCommitMessage(commitFieldFocus.wrappedValue) else { return .ignored }
             appState.focusedColumn = .branches
             return .handled
         }
         .onKeyPress(.rightArrow) {
-            guard commitFieldFocus.wrappedValue == nil else { return .ignored }
+            guard !isEditingCommitMessage(commitFieldFocus.wrappedValue) else { return .ignored }
             appState.focusedColumn = .diff
             return .handled
         }
         .onKeyPress(.escape) {
-            guard commitFieldFocus.wrappedValue == nil, isNewestUnpushedCommit, !appState.isPushingCommit else { return .ignored }
+            guard !isEditingCommitMessage(commitFieldFocus.wrappedValue), isNewestUnpushedCommit, !appState.isPushingCommit else { return .ignored }
             appState.undoLastCommit()
             return .handled
         }
@@ -685,6 +700,9 @@ private struct CommitFooterView: View {
         }
         .onDisappear {
             collapseTask?.cancel()
+            // Torn down mid-edit (a commit replacing this footer) — the field can't report its
+            // own lost focus by then, so clear it here or the list's key handling stays off.
+            if focusedField != nil { focusedField = nil }
         }
     }
 
@@ -1094,4 +1112,13 @@ private extension View {
         .padding(8)
     }
     .frame(width: 420, height: 320)
+}
+
+/// Whether the user is actually typing in a commit message field right now. `focus` alone can
+/// go stale: when a commit lands, the footer holding the focused field is torn down, and
+/// SwiftUI can drop the field's coordinator before AppKit takes the text view out of the
+/// window, so the field never gets to report that it lost focus. Checking the real first
+/// responder as well keeps a stale `focus` from shutting off column navigation for good.
+private func isEditingCommitMessage(_ focus: CommitField?) -> Bool {
+    focus != nil && NSApp.keyWindow?.firstResponder is CommitNSTextView
 }

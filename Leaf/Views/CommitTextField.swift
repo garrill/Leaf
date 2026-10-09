@@ -209,6 +209,17 @@ final class CommitNSTextView: NSTextView {
         return resigned
     }
 
+    /// Removed from the window while still first responder (the commit footer swapping out for
+    /// the unpushed-commit footer the moment a commit lands) — AppKit never calls
+    /// `resignFirstResponder` for that, so without this `focus` stays stuck on this field and
+    /// every column-navigation key handler keeps backing off as if the user were still typing.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil, let window, window.firstResponder === self {
+            coordinator?.didResignFirstResponder()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     /// Cmd+Return isn't bound to any text-system command, so it has to be caught here.
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection([.shift, .command, .option, .control])
