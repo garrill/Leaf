@@ -305,25 +305,23 @@ struct DiffView: View {
         HStack(alignment: .center, spacing: 8) {
             if appState.selectedFile != nil {
                 let focused = appState.focusedColumn == .diff
-                HStack(spacing: 6) {
-                    Image(systemName: "doc.text")
-                        .foregroundStyle(focused ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-
-                    pathAndFileName(focused: focused)
-                        .font(.system(.body))
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                        .truncationTooltip(appState.selectedFile?.path ?? "")
-                }
-                .padding(.horizontal, focused ? 7 : 0)
-                .padding(.vertical, focused ? 3 : 0)
-                .background {
-                    if focused {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.accentColor)
+                // Padding is constant and cancelled out by the outer negative padding, so the
+                // accent pill grows outward into the header's margin rather than pushing the
+                // text right when the column gains focus.
+                pathAndFileName(focused: focused)
+                    .font(.system(.body))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .truncationTooltip(appState.selectedFile?.path ?? "")
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background {
+                        if focused {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.accentColor)
+                        }
                     }
-                }
-                .animation(.easeInOut(duration: 0.15), value: focused)
+                    .padding(.horizontal, -7)
             }
 
             Spacer(minLength: 8)

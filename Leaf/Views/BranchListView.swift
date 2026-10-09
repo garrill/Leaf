@@ -190,6 +190,7 @@ struct BranchListView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(appState.uncommittedChangeCount == 0 ? "No Uncommitted Changes" : "Uncommitted Changes")
+                    .foregroundStyle(appState.uncommittedChangeCount == 0 ? .secondary : .primary)
                 Spacer()
                 if appState.uncommittedChangeCount > 0 {
                     Text("\(appState.uncommittedChangeCount)")

@@ -13,7 +13,7 @@ enum DiffSyntaxColors {
     }
 
     static let base = Role(light: "#000000", dark: "#ffffff")
-    static let comment = Role(light: "#000000b3", dark: "#ffffff99")
+    static let comment = Role(light: "#000000aa", dark: "#ffffff99")
     static let keyword = Role(light: "#aa0d91", dark: "#fc5fa3")
     static let variable = Role(light: "#3f6e74", dark: "#fc5fa3")
     static let string = Role(light: "#003066", dark: "#fd8f85")
@@ -28,8 +28,8 @@ enum DiffSyntaxColors {
     /// the plain translucent black/white barely picks up the pale row background. Not part of
     /// the hljs CSS (the highlighter doesn't know a line's kind); `commentColor(replacing:for:)`
     /// swaps these in when the diff text is built.
-    static let addedComment = Role(light: "#0a2a16b3", dark: "#daf6e199")
-    static let removedComment = Role(light: "#400e0eb3", dark: "#fbe0de99")
+    static let addedComment = Role(light: "#576B5E", dark: "#daf6e199")
+    static let removedComment = Role(light: "#695454", dark: "#fbe0de99")
 
     /// If `color` is the `comment` role's color (light or dark — whichever theme the highlight
     /// was computed for), returns the tinted comment color for an added/removed line of the same
