@@ -5,7 +5,6 @@ struct RepoRowView: View {
     let repo: SidebarRepo
     let appState: AppState
     let sidebarStore: SidebarStore
-    let isRenaming: Bool
     let onStartRename: () -> Void
     let onCommitRename: (String) -> Void
 
@@ -13,6 +12,13 @@ struct RepoRowView: View {
 
     @State private var draftName: String = ""
     @FocusState private var fieldFocused: Bool
+
+    /// Read from `appState` (not passed in as a `let`) so Observation re-renders the row when
+    /// rename starts/ends — the sidebar only rebuilds its `NSHostingView`s on structural
+    /// changes, so a value copied into `rootView` at cell-build time would go stale.
+    private var isRenaming: Bool {
+        appState.renamingRepoID == repo.id
+    }
 
     var body: some View {
         HStack(spacing: 6) {

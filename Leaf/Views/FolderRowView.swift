@@ -3,7 +3,7 @@ import SwiftUI
 struct FolderRowView: View {
     let folder: SidebarFolder
     let repoCount: Int
-    let isRenaming: Bool
+    let appState: AppState
     let isHovering: Bool
     let onToggle: () -> Void
     let onStartRename: () -> Void
@@ -14,6 +14,11 @@ struct FolderRowView: View {
 
     @State private var draftName: String = ""
     @FocusState private var fieldFocused: Bool
+
+    /// Read from `appState` rather than passed in — see `RepoRowView.isRenaming`.
+    private var isRenaming: Bool {
+        appState.renamingFolderID == folder.id
+    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -105,7 +110,6 @@ private struct FolderRowPreviewRepo: View {
             repo: SidebarRepo(id: UUID(), path: "/tmp/\(name)", displayNameOverride: name, iconPath: nil, folderID: UUID(), sortIndex: 0),
             appState: appState,
             sidebarStore: sidebarStore,
-            isRenaming: false,
             onStartRename: {},
             onCommitRename: { _ in }
         )
@@ -117,12 +121,14 @@ private struct FolderRowPreviewRepo: View {
 #Preview {
     let appState = AppState()
     let sidebarStore = appState.sidebarStore
+    let renamingFolderID = UUID()
+    appState.renamingFolderID = renamingFolderID
 
     return VStack(spacing: 0) {
         FolderRowView(
             folder: SidebarFolder(id: UUID(), name: "Websites", isExpanded: true),
             repoCount: 3,
-            isRenaming: false,
+            appState: appState,
             isHovering: false,
             onToggle: {},
             onStartRename: {},
@@ -138,7 +144,7 @@ private struct FolderRowPreviewRepo: View {
         FolderRowView(
             folder: SidebarFolder(id: UUID(), name: "Apps", isExpanded: true),
             repoCount: 2,
-            isRenaming: false,
+            appState: appState,
             isHovering: true,
             onToggle: {},
             onStartRename: {},
@@ -151,9 +157,9 @@ private struct FolderRowPreviewRepo: View {
         FolderRowPreviewRepo(name: "Current", selected: false, appState: appState, sidebarStore: sidebarStore)
 
         FolderRowView(
-            folder: SidebarFolder(id: UUID(), name: "Renaming Me", isExpanded: true),
+            folder: SidebarFolder(id: renamingFolderID, name: "Renaming Me", isExpanded: true),
             repoCount: 0,
-            isRenaming: true,
+            appState: appState,
             isHovering: false,
             onToggle: {},
             onStartRename: {},

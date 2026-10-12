@@ -124,8 +124,8 @@ final class SidebarViewController: NSViewController {
             _ = appState.sidebarStore.folders
             _ = appState.selectedRepoURL
             _ = appState.focusedColumn
-            _ = appState.renamingFolderID
-            _ = appState.renamingRepoID
+            // Not `renamingRepoID`/`renamingFolderID` — rows observe those themselves, and a
+            // reload here would also re-claim first responder from the fresh rename field.
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 self?.handleStateChange()
@@ -783,11 +783,13 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             repo: repo,
             appState: appState,
             sidebarStore: sidebarStore,
-            isRenaming: appState.renamingRepoID == repo.id,
             onStartRename: { [self] in
                 appState.renamingRepoID = repo.id
             },
             onCommitRename: { [self] newName in
+                // Return commits, then the TextField's focus loss as it's torn down commits
+                // again — only the first one (while still renaming) should land.
+                guard appState.renamingRepoID == repo.id else { return }
                 let trimmed = newName.trimmingCharacters(
                     in: .whitespacesAndNewlines
                 )
@@ -800,7 +802,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 sidebarStore.updateRepo(
                     id: repo.id,
                     displayName: override,
-                    iconPath: repo.iconPath
+                    // Current value, not the `repo` captured at cell-build time — cells aren't
+                    // rebuilt for non-structural changes, so that copy can be stale.
+                    iconPath: sidebarStore.repos.first { $0.id == repo.id }?.iconPath
                 )
 
                 appState.renamingRepoID = nil
@@ -830,7 +834,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             repoCount: sidebarStore.repos.count {
                 $0.folderID == folder.id
             },
-            isRenaming: appState.renamingFolderID == folder.id,
+            appState: appState,
             isHovering: isHovering,
 
             onToggle: { [self] in
@@ -852,6 +856,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             },
 
             onCommitRename: { [self] newName in
+                guard appState.renamingFolderID == folder.id else { return }
                 sidebarStore.renameFolder(
                     id: folder.id,
                     to: newName
