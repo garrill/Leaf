@@ -50,6 +50,14 @@ enum LeafSettings {
         }
         NSWorkspace.shared.open([url], withApplicationAt: URL(fileURLWithPath: path), configuration: NSWorkspace.OpenConfiguration())
     }
+
+    /// Title for a repo-root `open(_:)` action — the Repository menu and the sidebar repo row's
+    /// context menu. Callers pass their own `@AppStorage` copy of the editor path so the title
+    /// re-renders when the setting changes.
+    static func openInApplicationTitle(editorPath: String) -> String {
+        guard !editorPath.isEmpty else { return "Open in Default Application" }
+        return "Open in \(FileManager.default.displayName(atPath: editorPath))"
+    }
 }
 
 struct SettingsView: View {

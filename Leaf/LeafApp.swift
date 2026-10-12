@@ -132,8 +132,7 @@ struct LeafApp: App {
     }
 
     private var openInApplicationTitle: String {
-        guard !externalEditorPath.isEmpty else { return "Open in Default Application" }
-        return "Open in \(FileManager.default.displayName(atPath: externalEditorPath))"
+        LeafSettings.openInApplicationTitle(editorPath: externalEditorPath)
     }
 }
 

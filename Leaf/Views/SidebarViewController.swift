@@ -73,6 +73,8 @@ final class SidebarViewController: NSViewController {
             .fileURL
         ])
         outlineView.setDraggingSourceOperationMask(.move, forLocal: true)
+        outlineView.target = coordinator
+        outlineView.doubleAction = #selector(SidebarOutlineCoordinator.openClickedRepo(_:))
         self.outlineView = outlineView
         coordinator.outlineView = outlineView
 
@@ -513,6 +515,22 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
         appState.focusedColumn = .repos
         appState.selectRepo(repo.url)
+    }
+
+    /// Double-click on a repo row — same as the Repository menu's "Open in <App>" (the configured
+    /// external editor, or the folder's macOS default otherwise). Folder rows and a row mid-rename
+    /// (double-clicking to select a word in the field) are left alone.
+    @objc func openClickedRepo(_ sender: Any?) {
+        guard let outlineView,
+              outlineView.clickedRow >= 0,
+              let boxed = outlineView.item(atRow: outlineView.clickedRow) as? SidebarOutlineItem,
+              case .repo(let id) = boxed.kind,
+              appState.renamingRepoID != id,
+              let repo = sidebarStore.repos.first(where: { $0.id == id }) else {
+            return
+        }
+
+        LeafSettings.open(repo.url)
     }
 
     func outlineViewItemDidExpand(_ notification: Notification) {

@@ -20,6 +20,11 @@ struct FolderRowView: View {
         appState.renamingFolderID == folder.id
     }
 
+    /// Live copy of `folder` — see `RepoRowView.currentRepo`.
+    private var currentFolder: SidebarFolder {
+        appState.sidebarStore.folders.first { $0.id == folder.id } ?? folder
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: folder.isExpanded ? "chevron.down" : "chevron.right")
@@ -30,7 +35,7 @@ struct FolderRowView: View {
                 .clipped()
 
             if isRenaming {
-                TextField(folder.name, text: $draftName)
+                TextField(currentFolder.name, text: $draftName)
                     .textFieldStyle(.plain)
                     .font(.subheadline)
                     .fontWeight(.semibold)
@@ -40,13 +45,13 @@ struct FolderRowView: View {
                         if !focused { commitRename() }
                     }
             } else {
-                Text(folder.name)
+                Text(currentFolder.name)
                     .font(.subheadline)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationTooltip(
-                        folder.name,
+                        currentFolder.name,
                         font: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
                     )
             }
@@ -88,7 +93,7 @@ struct FolderRowView: View {
 
     private func beginRenamingIfNeeded() {
         guard isRenaming else { return }
-        draftName = folder.name
+        draftName = currentFolder.name
         DispatchQueue.main.async {
             fieldFocused = true
         }

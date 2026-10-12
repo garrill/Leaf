@@ -9,6 +9,7 @@ struct RepoRowView: View {
     let onCommitRename: (String) -> Void
 
     @AppStorage(LeafSettings.showRepoStatusKey, store: LeafSettings.store) private var showRepoStatus = LeafSettings.defaultShowRepoStatus
+    @AppStorage(LeafSettings.externalEditorPathKey, store: LeafSettings.store) private var externalEditorPath = ""
 
     @State private var draftName: String = ""
     @FocusState private var fieldFocused: Bool
@@ -20,12 +21,19 @@ struct RepoRowView: View {
         appState.renamingRepoID == repo.id
     }
 
+    /// The store's live copy of `repo`. `repo` itself is captured when the sidebar builds the
+    /// cell, and cells are only rebuilt a pass later — showing it straight after a rename commit
+    /// flashed the old name before the new one.
+    private var currentRepo: SidebarRepo {
+        sidebarStore.repos.first { $0.id == repo.id } ?? repo
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             iconView
                 .frame(width: 16, height: 16)
             if isRenaming {
-                TextField(repo.displayName, text: $draftName)
+                TextField(currentRepo.displayName, text: $draftName)
                     .textFieldStyle(.plain)
                     .focused($fieldFocused)
                     .onSubmit { commitRename() }
@@ -33,10 +41,10 @@ struct RepoRowView: View {
                         if !focused { commitRename() }
                     }
             } else {
-                Text(repo.displayName)
+                Text(currentRepo.displayName)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .truncationTooltip(repo.displayName)
+                    .truncationTooltip(currentRepo.displayName)
             }
 
             Spacer(minLength: 4)
@@ -57,6 +65,9 @@ struct RepoRowView: View {
             Divider()
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([repo.url])
+            }
+            Button(LeafSettings.openInApplicationTitle(editorPath: externalEditorPath)) {
+                LeafSettings.open(repo.url)
             }
             if !sidebarStore.folders.isEmpty || repo.folderID != nil {
                 Divider()
@@ -86,7 +97,7 @@ struct RepoRowView: View {
     private func confirmRemoveFromSidebar() {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Are you sure you want to remove \u{201C}\(repo.displayName)\u{201D} from Leaf?"
+        alert.messageText = "Are you sure you want to remove \u{201C}\(currentRepo.displayName)\u{201D} from Leaf?"
 
         let checkbox = NSButton(checkboxWithTitle: "Also move this repository to the Bin", target: nil, action: nil)
         checkbox.state = .off
@@ -167,7 +178,7 @@ struct RepoRowView: View {
 
     private func beginRenamingIfNeeded() {
         guard isRenaming else { return }
-        draftName = repo.displayName
+        draftName = currentRepo.displayName
         DispatchQueue.main.async {
             fieldFocused = true
         }
@@ -187,6 +198,6 @@ struct RepoRowView: View {
         panel.prompt = "Choose Icon"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        sidebarStore.updateRepo(id: repo.id, displayName: repo.displayNameOverride, iconPath: url.path)
+        sidebarStore.updateRepo(id: repo.id, displayName: currentRepo.displayNameOverride, iconPath: url.path)
     }
 }
