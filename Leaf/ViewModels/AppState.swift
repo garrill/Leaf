@@ -311,6 +311,30 @@ final class AppState {
     /// tag creation targets whatever commit was right-clicked rather than always HEAD.
     var newTagTargetCommit: GitCommit?
 
+    enum MergeDirection {
+        /// The other branch's commits land on the current branch. Current branch stays checked out.
+        case otherIntoCurrent
+        /// The current branch's commits land on the other branch — requires checking the other
+        /// branch out first, which `confirmMerge()` does as part of confirming, not before.
+        case currentIntoOther
+    }
+
+    var isMergeSheetPresented = false
+    /// Set by the branch dropdown's "Merge into X" item before presenting the sheet; left `nil` by
+    /// the standalone toolbar button, so the sheet's own branch picker starts empty.
+    var mergeSheetPrefilledOtherBranch: GitBranch?
+    var mergeOtherBranch: GitBranch?
+    var mergePreview: GitRepository.MergePreview?
+    var mergePreviewErrorMessage: String?
+    var isLoadingMergePreview = false
+    /// Set once a drag/hold gesture in the sheet reaches its commit threshold.
+    var mergeCommittedDirection: MergeDirection?
+    var mergeConflictCheck: GitRepository.MergeConflictCheck?
+    var isCheckingMergeConflicts = false
+    var mergeDirtyTreeWarningVisible = false
+    var isMergeConfirming = false
+    var mergeErrorMessage: String?
+
     /// GitHub owner (user/org) of the selected repo's `origin` remote, shown as the window
     /// subtitle. `nil` for non-GitHub remotes or repos with no `origin`.
     var repoOwner: String?
@@ -1315,24 +1339,143 @@ final class AppState {
         }
     }
 
-    func mergeBranch(_ branch: GitBranch) {
-        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
-        isSyncing = true
+    /// Opens the merge sheet. `branch` is the already-known "other" branch when opened from a
+    /// branch's own "Merge into X" menu item; `nil` when opened from the standalone toolbar
+    /// button, leaving the sheet's own branch picker empty.
+    func openMergeSheet(prefilledOtherBranch branch: GitBranch?) {
+        guard currentRepository != nil, !isSyncing, !isRepositoryBusy, !isMergeInProgress else { return }
+        resetMergeSheetState()
+        mergeSheetPrefilledOtherBranch = branch
+        mergeOtherBranch = branch
+        isMergeSheetPresented = true
+        if branch != nil {
+            loadMergePreview()
+        }
+    }
+
+    func resetMergeSheetState() {
+        mergeOtherBranch = nil
+        mergePreview = nil
+        mergePreviewErrorMessage = nil
+        isLoadingMergePreview = false
+        mergeCommittedDirection = nil
+        mergeConflictCheck = nil
+        isCheckingMergeConflicts = false
+        mergeDirtyTreeWarningVisible = false
+        isMergeConfirming = false
+        mergeErrorMessage = nil
+    }
+
+    /// Recomputes `mergePreview` for the current `mergeOtherBranch` — called on sheet appearance
+    /// and whenever the sheet's branch picker changes.
+    func loadMergePreview() {
+        guard let repo = currentRepository, let other = mergeOtherBranch, let current = selectedBranch else {
+            mergePreview = nil
+            return
+        }
+        isLoadingMergePreview = true
+        mergePreviewErrorMessage = nil
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try repo.mergePreview(current: current.name, other: other.name) }
+            }.value
+            // The user may have picked a different branch while this was in flight.
+            guard self.mergeOtherBranch == other else { return }
+            self.isLoadingMergePreview = false
+            switch result {
+            case .success(let preview):
+                self.mergePreview = preview
+            case .failure(let error):
+                self.mergePreview = nil
+                self.mergePreviewErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Called once the sheet's drag/hold gesture reaches its commit threshold in a given
+    /// direction — kicks off the conflict dry-run and, when the direction requires checking the
+    /// other branch out, the dirty-working-tree warning.
+    func mergeDragDidReachThreshold(direction: MergeDirection) {
+        mergeCommittedDirection = direction
+        mergeConflictCheck = nil
+        mergeDirtyTreeWarningVisible = direction == .currentIntoOther && uncommittedChangeCount > 0
+
+        guard let repo = currentRepository, let other = mergeOtherBranch, let current = selectedBranch else { return }
+        let ours = direction == .otherIntoCurrent ? current.name : other.name
+        let theirs = direction == .otherIntoCurrent ? other.name : current.name
+
+        isCheckingMergeConflicts = true
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> GitRepository.MergeConflictCheck? in
+                guard let base = try? repo.mergeBase(current.name, other.name) else { return nil }
+                return try? repo.mergeConflictPreview(base: base, ours: ours, theirs: theirs)
+            }.value
+            guard self.mergeCommittedDirection == direction else { return }
+            self.isCheckingMergeConflicts = false
+            self.mergeConflictCheck = result
+        }
+    }
+
+    /// Reverts a drag that was released before reaching its threshold.
+    func mergeDragWasReleasedBeforeThreshold() {
+        mergeCommittedDirection = nil
+        mergeConflictCheck = nil
+        isCheckingMergeConflicts = false
+        mergeDirtyTreeWarningVisible = false
+    }
+
+    /// Runs the merge the user has committed to via the sheet's drag gesture.
+    func confirmMerge() {
+        guard let repo = currentRepository, let other = mergeOtherBranch, let current = selectedBranch,
+              let direction = mergeCommittedDirection, !isMergeConfirming else { return }
+        isMergeConfirming = true
+        mergeErrorMessage = nil
+
         Task {
             do {
-                _ = try await Task.detached(priority: .userInitiated) { try repo.merge(branch: branch.name) }.value
-                await MainActor.run {
+                let result: GitRepository.MergeResult
+                switch direction {
+                case .otherIntoCurrent:
+                    result = try await Task.detached(priority: .userInitiated) { try repo.merge(branch: other.name) }.value
+                case .currentIntoOther:
+                    result = try await Self.mergeCurrentIntoOther(
+                        repo: repo, other: other.name, current: current.name,
+                        stashFirst: self.mergeDirtyTreeWarningVisible && self.uncommittedChangeCount > 0
+                    )
+                }
+                self.isMergeConfirming = false
+                switch result {
+                case .conflicts:
+                    // Leave the user in the existing conflict-resolution flow — the merge banner
+                    // in `ChangedFilesView` and `commitOrCompleteMerge()` take it from here.
+                    self.isMergeSheetPresented = false
                     self.errorMessage = nil
-                    self.isSyncing = false
+                    self.refreshRepositoryState()
+                case .upToDate, .fastForward, .merged:
+                    self.isMergeSheetPresented = false
+                    self.errorMessage = nil
                     self.refreshRepositoryState()
                 }
             } catch {
-                await MainActor.run {
-                    self.errorMessage = error.localizedDescription
-                    self.isSyncing = false
-                }
+                self.isMergeConfirming = false
+                self.mergeErrorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Checks out `other`, merges `current` into it, and reports the result — the "current branch
+    /// into other" direction git can only do by switching HEAD first. Mirrors the stash/checkout
+    /// flow `selectBranch` already uses for a dirty-tree checkout.
+    private static func mergeCurrentIntoOther(
+        repo: GitRepository, other: String, current: String, stashFirst: Bool
+    ) async throws -> GitRepository.MergeResult {
+        try await Task.detached(priority: .userInitiated) {
+            if stashFirst {
+                try repo.stashChanges(paths: [], includeUntracked: true)
+            }
+            try repo.checkout(branch: other)
+            return try repo.merge(branch: current)
+        }.value
     }
 
     /// Entry point for the per-row "mark resolved" button: checks the working-tree file for

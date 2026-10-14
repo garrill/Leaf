@@ -717,6 +717,90 @@ nonisolated struct GitRepository {
         )
     }
 
+    /// How `current` and `other` relate to each other for the merge modal: whether one is a
+    /// straight continuation of the other (fast-forward possible) or they've both moved on
+    /// (a real merge commit is unavoidable).
+    struct MergePreview {
+        enum AheadSide { case current, other }
+        enum Relationship: Equatable {
+            case identical
+            case ancestor(aheadSide: AheadSide)
+            case diverged
+
+            static func == (lhs: Relationship, rhs: Relationship) -> Bool {
+                switch (lhs, rhs) {
+                case (.identical, .identical), (.diverged, .diverged): return true
+                case let (.ancestor(l), .ancestor(r)): return l == r
+                default: return false
+                }
+            }
+        }
+        var relationship: Relationship
+        /// Commits reachable from `current` but not `other`, newest first, capped at the preview's
+        /// `uniqueCommitCap`.
+        var currentUniqueCommits: [GitCommit]
+        var currentUniqueTotalCount: Int
+        /// Commits reachable from `other` but not `current`.
+        var otherUniqueCommits: [GitCommit]
+        var otherUniqueTotalCount: Int
+        /// Shared ancestry, walked back from the merge-base.
+        var sharedCommits: [GitCommit]
+        var sharedTotalCount: Int
+    }
+
+    /// The best common ancestor of two branches — where their histories last agreed before
+    /// diverging. Used both to size the "changes on both branches" list and, by the merge modal,
+    /// as the base for a conflict dry-run.
+    func mergeBase(_ a: String, _ b: String) throws -> String {
+        try run(["merge-base", a, b]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Everything the merge modal needs to show for a `current`/`other` branch pair, computed
+    /// without touching the working tree or the index. `current`/`other` are branch names (not
+    /// refs) — the current branch is always HEAD's own branch.
+    func mergePreview(current: String, other: String, uniqueCommitCap: Int = 5) throws -> MergePreview {
+        let counts = try run(["rev-list", "--left-right", "--count", "\(other)...\(current)"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .compactMap { Int($0) }
+        guard counts.count == 2 else {
+            throw GitError.commandFailed("Could not determine the relationship between \(current) and \(other).")
+        }
+        let otherUniqueTotalCount = counts[0]
+        let currentUniqueTotalCount = counts[1]
+
+        let relationship: MergePreview.Relationship
+        switch (currentUniqueTotalCount, otherUniqueTotalCount) {
+        case (0, 0): relationship = .identical
+        case (0, _): relationship = .ancestor(aheadSide: .other)
+        case (_, 0): relationship = .ancestor(aheadSide: .current)
+        default: relationship = .diverged
+        }
+
+        let currentUniqueCommits = currentUniqueTotalCount > 0
+            ? try commitLog(range: "\(other)..\(current)", limit: uniqueCommitCap)
+            : []
+        let otherUniqueCommits = otherUniqueTotalCount > 0
+            ? try commitLog(range: "\(current)..\(other)", limit: uniqueCommitCap)
+            : []
+
+        let base = try mergeBase(current, other)
+        let sharedTotalCount = (try? run(["rev-list", "--count", base])
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+            .flatMap(Int.init) ?? 0
+        let sharedCommits = try commitLog(range: base, limit: uniqueCommitCap)
+
+        return MergePreview(
+            relationship: relationship,
+            currentUniqueCommits: currentUniqueCommits,
+            currentUniqueTotalCount: currentUniqueTotalCount,
+            otherUniqueCommits: otherUniqueCommits,
+            otherUniqueTotalCount: otherUniqueTotalCount,
+            sharedCommits: sharedCommits,
+            sharedTotalCount: sharedTotalCount
+        )
+    }
+
     /// Creates a new branch off HEAD and switches to it in one step (`git checkout -b`).
     func createBranch(named name: String) throws {
         try run(["checkout", "-b", name])
@@ -833,10 +917,18 @@ nonisolated struct GitRepository {
     private static let recordSeparator = "\u{1E}"
 
     func commitLog(branch: String, limit: Int = 200) throws -> [GitCommit] {
+        try commitLog(range: branch, limit: limit)
+    }
+
+    /// Same as `commitLog(branch:limit:)` but accepts any revspec git's `log` understands —
+    /// in particular a two-dot range like `other..current` (commits reachable from `current`
+    /// but not `other`), which `mergePreview(current:other:)` uses to list each side's unique
+    /// commits.
+    private func commitLog(range: String, limit: Int) throws -> [GitCommit] {
         // `%b` (the body) spans multiple lines, so records are delimited by an explicit record
         // separator rather than by newline.
         let format = ["%H", "%h", "%s", "%at", "%an", "%b"].joined(separator: Self.fieldSeparator) + Self.recordSeparator
-        let output = try run(["log", branch, "-n", String(limit), "--format=\(format)"])
+        let output = try run(["log", range, "-n", String(limit), "--format=\(format)"])
         return output
             .components(separatedBy: Self.recordSeparator)
             .compactMap { record -> GitCommit? in
@@ -1034,6 +1126,35 @@ nonisolated struct GitRepository {
 
     func mergeAbort() throws {
         try run(["merge", "--abort"])
+    }
+
+    enum MergeConflictCheck {
+        case clean
+        case conflicts(paths: [String])
+        /// The installed git is older than 2.38 and doesn't support the three-arg `merge-tree`
+        /// form this check relies on — the caller should just skip showing a conflict warning.
+        case unavailable
+    }
+
+    /// Dry-runs a merge of `theirs` into `ours` (based at `base`) without touching the index or
+    /// HEAD, so the merge modal can warn about conflicts before the user commits to a real merge.
+    /// Relies on git ≥ 2.38's three-arg `merge-tree <base> <branch1> <branch2>`, which performs a
+    /// virtual merge and reports conflicts via a non-zero exit code — older git only understands a
+    /// two-arg plumbing form that behaves completely differently, so an unrecognized-option error
+    /// here is read as "unavailable" rather than a real failure.
+    func mergeConflictPreview(base: String, ours: String, theirs: String) throws -> MergeConflictCheck {
+        let (stdout, stderr, exitCode) = try runRaw(["merge-tree", base, ours, theirs])
+        if exitCode == 0 { return .clean }
+        if stderr.localizedCaseInsensitiveContains("usage:") || stderr.localizedCaseInsensitiveContains("unknown option") {
+            return .unavailable
+        }
+        let conflictPaths = stdout
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                guard let range = line.range(of: "Merge conflict in ") else { return nil }
+                return String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            }
+        return .conflicts(paths: conflictPaths)
     }
 
     /// Completes an in-progress merge: stages the given (now-resolved) paths and commits with

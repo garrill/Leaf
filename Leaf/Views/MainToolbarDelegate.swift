@@ -6,6 +6,7 @@ private extension NSToolbarItem.Identifier {
     static let sidebarTrackingSeparator = NSToolbarItem.Identifier("sidebarTrackingSeparator")
     static let branchMenu = NSToolbarItem.Identifier("branchMenu")
     static let branchTrackingSeparator = NSToolbarItem.Identifier("branchTrackingSeparator")
+    static let mergeButton = NSToolbarItem.Identifier("mergeButton")
     static let fetchButton = NSToolbarItem.Identifier("fetchButton")
     static let pullPushGroup = NSToolbarItem.Identifier("pullPushGroup")
 }
@@ -21,6 +22,7 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
     weak var splitViewController: NSSplitViewController?
     private let appState: AppState
     private weak var branchItem: NSMenuToolbarItem?
+    private weak var mergeButton: NSButton?
     private weak var fetchButton: NSButton?
     private weak var fetchSpinner: NSProgressIndicator?
     private var fetchSizeConstraints: [NSLayoutConstraint] = []
@@ -73,6 +75,23 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
             menu.delegate = self
             item.menu = menu
             branchItem = item
+            observeToolbarState()
+            return item
+
+        case .mergeButton:
+            let button = NSButton(
+                image: NSImage(systemSymbolName: "arrow.triangle.merge", accessibilityDescription: "Merge")!,
+                target: self,
+                action: #selector(openMergeSheet)
+            )
+            button.bezelStyle = .toolbar
+            button.toolTip = "Merge"
+            button.title = ""
+
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Merge"
+            item.view = button
+            mergeButton = button
             observeToolbarState()
             return item
 
@@ -156,6 +175,8 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
             .branchMenu,
             .branchTrackingSeparator,
             .flexibleSpace,
+            .mergeButton,
+            .space,
             .fetchButton,
             .space,
             .pullPushGroup
@@ -197,6 +218,10 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
         }
 
         let blocked = appState.selectedRepoURL == nil || appState.isSyncing || appState.isRepositoryBusy
+
+        if let mergeButton {
+            mergeButton.isEnabled = !blocked && !appState.isMergeInProgress
+        }
 
         if let fetchButton, let fetchSpinner {
             fetchButton.isEnabled = !(appState.selectedRepoURL == nil || appState.isRepositoryBusy || appState.isSyncing)
@@ -397,7 +422,11 @@ extension MainToolbarDelegate: NSMenuDelegate {
 
     @objc private func mergeBranch(_ sender: NSMenuItem) {
         guard let branch = sender.representedObject as? GitBranch else { return }
-        appState.mergeBranch(branch)
+        appState.openMergeSheet(prefilledOtherBranch: branch)
+    }
+
+    @objc private func openMergeSheet() {
+        appState.openMergeSheet(prefilledOtherBranch: nil)
     }
 
     @objc private func deleteBranch(_ sender: NSMenuItem) {
