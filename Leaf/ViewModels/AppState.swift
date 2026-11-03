@@ -70,6 +70,8 @@ struct UnresolvedConflictAlert: Identifiable {
 final class AppState {
     let sidebarStore = SidebarStore()
     let repoStatusStore = RepoStatusStore()
+    /// Most-recently-opened repo paths, for the command palette's empty-query suggestions.
+    let recentRepos = RecentReposStore()
 
     var selectedRepoURL: URL? {
         didSet { RepoSelectionObservable.shared.hasSelection = selectedRepoURL != nil }
@@ -509,6 +511,7 @@ final class AppState {
         // confirmed-via-Instruments source of main-thread hangs completely unrelated to whatever
         // was actually being navigated at the time.
         guard url != selectedRepoURL, !isRepositoryBusy else { return }
+        recentRepos.recordOpened(path: url.path)
         if let previousURL = selectedRepoURL {
             commitMessageDrafts[previousURL] = (commitMessage, commitDescription)
         }
@@ -1869,7 +1872,9 @@ final class AppState {
             uncommittedChangeCount: uncommittedChangeCount,
             hasUpstream: hasUpstream,
             aheadCount: aheadCount,
-            behindCount: behindCount
+            behindCount: behindCount,
+            currentBranch: selectedBranch?.name ?? detachedHeadShortSHA,
+            lastCommitDate: commits.first?.date
         )
     }
 

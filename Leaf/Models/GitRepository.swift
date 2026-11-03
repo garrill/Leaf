@@ -885,19 +885,57 @@ nonisolated struct GitRepository {
     /// changes, plus ahead/behind vs. the upstream branch. Two separate git calls, same as
     /// `statusEntries()`/`aheadBehind()` are already used individually elsewhere; bundled into one
     /// struct so `RepoRowView` has a single value to poll for and store.
+    ///
+    /// `currentBranch`/`lastCommitDate` feed the command palette's rich repo rows (branch name
+    /// plus "2h ago"); `RepoRowView` ignores them. `currentBranch` is the short SHA on a
+    /// detached HEAD.
     struct SidebarSyncStatus: Equatable {
         var uncommittedChangeCount: Int
         var hasUpstream: Bool
         var aheadCount: Int
         var behindCount: Int
+        var currentBranch: String? = nil
+        var lastCommitDate: Date? = nil
     }
 
     func sidebarSyncStatus() -> SidebarSyncStatus {
         let uncommittedChangeCount = (try? statusEntries().count) ?? 0
-        guard let counts = aheadBehind() else {
-            return SidebarSyncStatus(uncommittedChangeCount: uncommittedChangeCount, hasUpstream: false, aheadCount: 0, behindCount: 0)
+        let head = headSummary()
+        var status = SidebarSyncStatus(
+            uncommittedChangeCount: uncommittedChangeCount,
+            hasUpstream: false,
+            aheadCount: 0,
+            behindCount: 0,
+            currentBranch: head.branch,
+            lastCommitDate: head.lastCommitDate
+        )
+        if let counts = aheadBehind() {
+            status.hasUpstream = true
+            status.aheadCount = counts.ahead
+            status.behindCount = counts.behind
         }
-        return SidebarSyncStatus(uncommittedChangeCount: uncommittedChangeCount, hasUpstream: true, aheadCount: counts.ahead, behindCount: counts.behind)
+        return status
+    }
+
+    /// Current branch name (short SHA when detached) and HEAD's commit date, from a single
+    /// `git log -1` — `%D`'s decoration list carries `HEAD -> <branch>` when on a branch and a
+    /// bare `HEAD` when detached. Branch names can't contain spaces, so splitting on `", "` is
+    /// safe. An unborn branch (no commits yet) has no log at all, so falls back to `symbolic-ref`.
+    func headSummary() -> (branch: String?, lastCommitDate: Date?) {
+        if let output = try? run(["log", "-1", "--format=%ct%x1f%h%x1f%D"]) {
+            let fields = output.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\u{1F}")
+            if fields.count == 3 {
+                let date = TimeInterval(fields[0]).map { Date(timeIntervalSince1970: $0) }
+                let decorations = fields[2].components(separatedBy: ", ")
+                let branch = decorations
+                    .first { $0.hasPrefix("HEAD -> ") }
+                    .map { String($0.dropFirst("HEAD -> ".count)) }
+                return (branch ?? fields[1], date)
+            }
+        }
+        let branch = (try? run(["symbolic-ref", "--short", "-q", "HEAD"]))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (branch?.isEmpty == false ? branch : nil, nil)
     }
 
     /// Ahead/behind counts of the current branch relative to its upstream, or `nil` if it has none.

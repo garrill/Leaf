@@ -10,6 +10,8 @@ final class MainWindowController: NSWindowController {
     /// Only set once the main interface is actually presented — stays nil while the "git not
     /// found" placeholder is showing (see `presentGitUnavailableState()`).
     private var toolbarDelegate: MainToolbarDelegate?
+    /// The ⌘K palette — likewise only built once the main interface is up.
+    private var commandPaletteController: CommandPaletteController?
 
     init() {
         let window = NSWindow(
@@ -88,6 +90,10 @@ final class MainWindowController: NSWindowController {
         // is what actually makes the requested size stick.
         window?.setContentSize(NSSize(width: 1520, height: 900))
         window?.center()
+
+        let palette = CommandPaletteController(appState: appState, parentWindow: window)
+        commandPaletteController = palette
+        CommandPaletteController.shared = palette
     }
 
     /// `onRetry` re-runs the availability check and, if git is now found, tears down this

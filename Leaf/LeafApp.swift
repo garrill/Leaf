@@ -65,6 +65,11 @@ struct LeafApp: App {
                     .keyboardShortcut("g", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .sidebar) {
+                Button("Command Palette\u{2026}") { CommandPaletteController.shared?.toggle() }
+                    .keyboardShortcut("k", modifiers: [.command])
+
+                Divider()
+
                 Button(sidebarVisibility.isCollapsed ? "Show Sidebar" : "Hide Sidebar") {
                     NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
                 }
