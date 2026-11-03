@@ -10,10 +10,50 @@ final class SidebarStore {
     private let defaultsKey = "sidebarState.v2"
     private let legacyDefaultsKey = "repoPaths"
 
-    private struct Snapshot: Codable {
+    struct Snapshot: Codable, Equatable {
         var repos: [SidebarRepo]
         var folders: [SidebarFolder]
         var topLevelOrder: [TopLevelEntry]
+
+        /// Enforces the sidebar's one invariant: **every repo in `repos` is shown exactly once**
+        /// — either inside a folder that exists, or at the top level with exactly one
+        /// `.repo` entry in `topLevelOrder` — and `topLevelOrder` references nothing else.
+        /// Anything that breaks it (a repo whose top-level slot was lost, a repo pointing at a
+        /// deleted folder, a stale or duplicate order entry) is repaired rather than left as an
+        /// entry the app knows about but the outline never draws. Lost repos/folders are
+        /// appended at the end of the top level, so they reappear where they can be seen.
+        func normalized() -> Snapshot {
+            var seenRepoIDs = Set<UUID>()
+            var seenPaths = Set<String>()
+            var repos = self.repos.filter { seenRepoIDs.insert($0.id).inserted && seenPaths.insert($0.path).inserted }
+
+            var seenFolderIDs = Set<UUID>()
+            let folders = self.folders.filter { seenFolderIDs.insert($0.id).inserted }
+
+            for index in repos.indices {
+                if let folderID = repos[index].folderID, !seenFolderIDs.contains(folderID) {
+                    repos[index].folderID = nil
+                }
+            }
+            let topLevelRepoIDs = Set(repos.filter { $0.folderID == nil }.map(\.id))
+
+            var placed = Set<TopLevelEntry>()
+            var order = topLevelOrder.filter { entry in
+                let isValid: Bool
+                switch entry {
+                case .repo(let id): isValid = topLevelRepoIDs.contains(id)
+                case .folder(let id): isValid = seenFolderIDs.contains(id)
+                }
+                return isValid && placed.insert(entry).inserted
+            }
+            for folder in folders where !placed.contains(.folder(folder.id)) {
+                order.append(.folder(folder.id))
+            }
+            for repo in repos where repo.folderID == nil && !placed.contains(.repo(repo.id)) {
+                order.append(.repo(repo.id))
+            }
+            return Snapshot(repos: repos, folders: folders, topLevelOrder: order)
+        }
     }
 
     init() {
@@ -209,8 +249,10 @@ final class SidebarStore {
 
     // MARK: Persistence
 
+    /// Every mutation ends here, so the invariant (`Snapshot.normalized()`) is re-checked after
+    /// each one — a bug in any single mutation can't leave a repo hidden from the sidebar.
     private func persist() {
-        let snapshot = Snapshot(repos: repos, folders: folders, topLevelOrder: topLevelOrder)
+        let snapshot = applyNormalized(Snapshot(repos: repos, folders: folders, topLevelOrder: topLevelOrder))
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         LeafSettings.store.set(data, forKey: defaultsKey)
     }
@@ -221,9 +263,24 @@ final class SidebarStore {
             repos = snapshot.repos
             folders = snapshot.folders
             topLevelOrder = snapshot.topLevelOrder
+            // Saved data from before the invariant was enforced may already be broken — repair
+            // it and write the repaired state back.
+            let repaired = applyNormalized(snapshot)
+            if repaired != snapshot { persist() }
         } else {
             migrate()
         }
+    }
+
+    /// Normalizes `snapshot`, assigning back only what actually changed (each assignment is an
+    /// observable change that reloads the sidebar outline).
+    @discardableResult
+    private func applyNormalized(_ snapshot: Snapshot) -> Snapshot {
+        let normalized = snapshot.normalized()
+        if normalized.repos != repos { repos = normalized.repos }
+        if normalized.folders != folders { folders = normalized.folders }
+        if normalized.topLevelOrder != topLevelOrder { topLevelOrder = normalized.topLevelOrder }
+        return normalized
     }
 
     private func migrate() {

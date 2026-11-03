@@ -118,6 +118,10 @@ struct CloneRepoSheet: View {
         .animation(.easeInOut(duration: 0.2), value: appState.cloneErrorMessage)
         .onAppear {
             appState.cloneErrorMessage = nil
+            if let prefilled = appState.cloneSheetPrefilledURL {
+                urlString = prefilled
+                appState.cloneSheetPrefilledURL = nil
+            }
             isURLFieldFocused = true
         }
     }

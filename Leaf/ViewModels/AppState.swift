@@ -305,6 +305,12 @@ final class AppState {
     var renamingFolderID: UUID?
     var renamingRepoID: UUID?
     var isCloneSheetPresented = false
+    /// A URL for `CloneRepoSheet` to start with (the command palette's "Clone ‹pasted URL›"),
+    /// consumed — and cleared — when the sheet appears.
+    var cloneSheetPrefilledURL: String?
+    /// Bumped by the command palette after it selects a commit or file, so the history/file
+    /// list scrolls that row into view — programmatic `List` selection doesn't on its own.
+    var revealSelectionRequest = 0
     var isNewBranchSheetPresented = false
     var newBranchErrorMessage: String?
     var isNewTagSheetPresented = false
@@ -340,6 +346,9 @@ final class AppState {
     /// GitHub owner (user/org) of the selected repo's `origin` remote, shown as the window
     /// subtitle. `nil` for non-GitHub remotes or repos with no `origin`.
     var repoOwner: String?
+    /// The selected repo's `origin` URL as configured (`git remote get-url origin`), for the
+    /// command palette's Copy Remote URL / Open on GitHub. `nil` with no `origin`.
+    var originRemoteURL: String?
 
     private var currentRepository: GitRepository? {
         selectedRepoURL.map { GitRepository(rootURL: $0) }
@@ -373,6 +382,7 @@ final class AppState {
 
     private struct RepositorySnapshot {
         let owner: String?
+        let originURL: String?
         let isMergeInProgress: Bool
         let mergeMessage: String?
         let branches: [GitBranch]
@@ -1275,12 +1285,17 @@ final class AppState {
         changedFiles.filter { checkedFilePaths.contains($0.path) && $0.status == .conflicted }.map(\.path)
     }
 
-    func commitCheckedChanges() {
+    /// Commits the checked files with the commit footer's summary + description — or, when
+    /// `explicitMessage` is given (the command palette's "Commit ‹message›"), with exactly that
+    /// message instead, leaving the footer's draft untouched both before and after.
+    func commitCheckedChanges(explicitMessage: String? = nil) {
         guard let repo = currentRepository, !isCommitting else { return }
         let paths = changedFiles.filter { checkedFilePaths.contains($0.path) }.map(\.path)
         let unstagePaths = changedFiles.filter { !checkedFilePaths.contains($0.path) }.map(\.path)
-        let message = composedCommitMessage
-        guard !paths.isEmpty, !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let explicit = explicitMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = explicit ?? composedCommitMessage
+        let summary = explicit ?? commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !paths.isEmpty, !summary.isEmpty else { return }
 
         let conflictedPaths = checkedConflictedPaths
         guard conflictedPaths.isEmpty else {
@@ -1296,8 +1311,10 @@ final class AppState {
                 try await Task.detached(priority: .userInitiated) {
                     try repo.commit(message: message, paths: paths, unstagePaths: unstagePaths)
                 }.value
-                self.commitMessage = ""
-                self.commitDescription = ""
+                if explicit == nil {
+                    self.commitMessage = ""
+                    self.commitDescription = ""
+                }
                 self.errorMessage = nil
                 self.refreshRepositoryState()
             } catch {
@@ -1913,6 +1930,7 @@ final class AppState {
             isMergeInProgress = false
             mergeMessage = nil
             repoOwner = nil
+            originRemoteURL = nil
             return
         }
         repositoryRefreshGeneration &+= 1
@@ -1926,6 +1944,7 @@ final class AppState {
             guard let self, generation == self.repositoryRefreshGeneration, repoURL == self.selectedRepoURL else { return }
 
             self.repoOwner = snapshot.owner
+            self.originRemoteURL = snapshot.originURL
             self.isMergeInProgress = snapshot.isMergeInProgress
             self.mergeMessage = snapshot.mergeMessage
             if snapshot.isMergeInProgress {
@@ -2018,7 +2037,8 @@ final class AppState {
     }
 
     nonisolated private static func repositorySnapshot(for repo: GitRepository) -> RepositorySnapshot {
-        let owner = repo.githubOwner()
+        let originURL = repo.originRemoteURL()
+        let owner = originURL.flatMap(GitRepository.githubOwner(fromRemoteURL:))
         let isMergeInProgress = repo.isMergeInProgress()
         let mergeMessage = repo.mergeMessage()
         do {
@@ -2036,6 +2056,7 @@ final class AppState {
             let stashCount = repo.stashCount()
             return RepositorySnapshot(
                 owner: owner,
+                originURL: originURL,
                 isMergeInProgress: isMergeInProgress,
                 mergeMessage: mergeMessage,
                 branches: branches,
@@ -2053,7 +2074,7 @@ final class AppState {
                 hasOriginRemote: repo.hasOriginRemote()
             )
         } catch {
-            return RepositorySnapshot(owner: owner, isMergeInProgress: isMergeInProgress, mergeMessage: mergeMessage, branches: [], remoteOnlyBranches: [], defaultBranchName: repo.defaultBranch(), selectedBranch: nil, detachedHeadShortSHA: nil, commits: [], tags: (try? repo.tags()) ?? [], aheadBehind: repo.aheadBehind(), stashCount: repo.stashCount(), stashFileCount: 0, statusEntries: (try? repo.statusEntries()) ?? [], errorMessage: error.localizedDescription, hasOriginRemote: repo.hasOriginRemote())
+            return RepositorySnapshot(owner: owner, originURL: originURL, isMergeInProgress: isMergeInProgress, mergeMessage: mergeMessage, branches: [], remoteOnlyBranches: [], defaultBranchName: repo.defaultBranch(), selectedBranch: nil, detachedHeadShortSHA: nil, commits: [], tags: (try? repo.tags()) ?? [], aheadBehind: repo.aheadBehind(), stashCount: repo.stashCount(), stashFileCount: 0, statusEntries: (try? repo.statusEntries()) ?? [], errorMessage: error.localizedDescription, hasOriginRemote: repo.hasOriginRemote())
         }
     }
 

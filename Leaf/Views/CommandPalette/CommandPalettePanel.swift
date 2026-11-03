@@ -7,6 +7,9 @@ import SwiftUI
 /// real AppKit responder (the field editor, here).
 final class CommandPalettePanel: NSPanel {
     var onCommandNumber: ((Int) -> Void)?
+    /// ⌘↩ — the selected row's ⌘ alternate. Caught here because, like ⌘1–⌘9, it's a key
+    /// equivalent and never reaches the field editor's `doCommandBy`.
+    var onCommandReturn: (() -> Void)?
     var onDismiss: (() -> Void)?
 
     init() {
@@ -25,6 +28,9 @@ final class CommandPalettePanel: NSPanel {
         hidesOnDeactivate = true
         isMovable = false
         animationBehavior = .utilityWindow
+        // Never drawn (borderless), but it's what VoiceOver names the window.
+        title = "Command Palette"
+        setAccessibilitySubrole(.dialog)
     }
 
     override var canBecomeKey: Bool { true }
@@ -32,6 +38,10 @@ final class CommandPalettePanel: NSPanel {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command, event.keyCode == 36 || event.keyCode == 76 { // Return, keypad Enter
+            onCommandReturn?()
+            return true
+        }
         if flags == .command,
            let characters = event.charactersIgnoringModifiers,
            let number = Int(characters), (1...9).contains(number) {
@@ -72,6 +82,12 @@ final class CommandPaletteController {
     private let appState: AppState
     private weak var parentWindow: NSWindow?
     private let model = CommandPaletteModel()
+    private let usage = CommandUsageStore()
+    /// Repo folders found missing by the last background check — what `build` marks
+    /// "Folder not found". Starts empty: a repo whose folder has vanished shows as normal until
+    /// the first check (a moment after the first open) lands.
+    private var missingRepoPaths: Set<String> = []
+    private var missingCheckGeneration = 0
     private var panel: CommandPalettePanel?
     /// The panel's top edge in screen coordinates while shown — resizes keep it fixed so the
     /// card grows/shrinks downward as results change.
@@ -95,8 +111,9 @@ final class CommandPaletteController {
         let panel = self.panel ?? makePanel()
         self.panel = panel
 
-        let built = CommandPaletteItems.build(appState: appState)
-        model.reset(items: built.items, suggestions: built.suggestions)
+        let built = CommandPaletteItems.build(appState: appState, usage: usage, missingPaths: missingRepoPaths)
+        model.reset(items: built.items, suggestions: built.suggestions, dynamicItems: built.dynamicItems)
+        checkMissingRepoFolders()
         // Coalesced, async, and one repo at a time — rows show the cached status immediately and
         // pick up fresh branch/date/dirty state as each repo's check lands.
         appState.repoStatusStore.refreshAll(repos: appState.sidebarStore.repos)
@@ -124,10 +141,51 @@ final class CommandPaletteController {
 
     /// Closes first, then runs on the next turn of the run loop — so any alert, sheet or open
     /// panel the command brings up attaches to the main window rather than the palette.
-    private func run(_ item: PaletteItem) {
+    /// `modifier` picks the row's alternate action instead; a row without that alternate, or an
+    /// unavailable row, beeps and leaves the palette open.
+    private func run(_ item: PaletteItem, modifier: PaletteModifier? = nil) {
+        let action: () -> Void
+        if let modifier {
+            guard let alternate = item.alternate(for: modifier) else { return NSSound.beep() }
+            action = alternate.perform
+        } else {
+            guard item.isEnabled else {
+                // "Commit" with no message yet: Return fills in "Commit " to type one, rather
+                // than being a dead end. Only when the missing argument is the *only* reason —
+                // otherwise typing one couldn't make it runnable.
+                if item.needsArgument, let prefix = item.argumentPrefix,
+                   !model.query.lowercased().hasPrefix(prefix.lowercased()) {
+                    model.query = prefix
+                } else {
+                    NSSound.beep()
+                }
+                return
+            }
+            action = item.perform
+            if let key = item.usageKey { usage.recordUse(of: key) }
+        }
         dismiss()
         DispatchQueue.main.async {
-            item.perform()
+            action()
+        }
+    }
+
+    /// Checks every repo folder still exists, off the main thread (a `stat` on an unmounted
+    /// network volume can block for seconds). If the set of missing ones changed, the open
+    /// palette's items are rebuilt in place — query and selection kept.
+    private func checkMissingRepoFolders() {
+        missingCheckGeneration &+= 1
+        let generation = missingCheckGeneration
+        let paths = appState.sidebarStore.repos.map(\.path)
+        Task { @MainActor [weak self] in
+            let missing = await Task.detached(priority: .utility) {
+                Set(paths.filter { !FileManager.default.fileExists(atPath: $0) })
+            }.value
+            guard let self, generation == self.missingCheckGeneration, missing != self.missingRepoPaths else { return }
+            self.missingRepoPaths = missing
+            guard self.isShown else { return }
+            let built = CommandPaletteItems.build(appState: self.appState, usage: self.usage, missingPaths: missing)
+            self.model.replaceItems(built.items, suggestions: built.suggestions, dynamicItems: built.dynamicItems)
         }
     }
 
@@ -136,7 +194,7 @@ final class CommandPaletteController {
         let root = CommandPaletteView(
             model: model,
             appState: appState,
-            onRun: { [weak self] item in self?.run(item) },
+            onRun: { [weak self] item, modifier in self?.run(item, modifier: modifier) },
             onCancel: { [weak self] in self?.dismiss() },
             onHeightChange: { [weak self] height in self?.contentHeightDidChange(height) }
         )
@@ -148,6 +206,10 @@ final class CommandPaletteController {
             let index = number - 1
             guard self.model.results.indices.contains(index) else { return }
             self.run(self.model.results[index])
+        }
+        panel.onCommandReturn = { [weak self] in
+            guard let self, let item = self.model.selectedItem else { return }
+            self.run(item, modifier: .command)
         }
         panel.onDismiss = { [weak self] in self?.dismiss() }
         return panel

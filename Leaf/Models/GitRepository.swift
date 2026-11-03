@@ -286,18 +286,84 @@ nonisolated struct GitRepository {
     /// remote URL — no network call, so it works offline and for private repos without needing a
     /// GitHub token. Returns `nil` if there's no `origin` or it isn't a github.com URL.
     func githubOwner() -> String? {
+        originRemoteURL().flatMap(Self.githubOwner(fromRemoteURL:))
+    }
+
+    /// `origin`'s URL with any credentials removed (see `redactedRemoteURL`), or `nil` with no
+    /// `origin` remote. Everything in the app that shows or copies the remote goes through this,
+    /// so a token embedded in the URL is never put on screen, read by VoiceOver, or copied.
+    func originRemoteURL() -> String? {
         guard let url = try? run(["remote", "get-url", "origin"]) else { return nil }
-        return Self.githubOwner(fromRemoteURL: url.trimmingCharacters(in: .whitespacesAndNewlines))
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : Self.redactedRemoteURL(trimmed)
+    }
+
+    /// Strips credentials from a URL-form remote: the password always, and for http(s) the
+    /// user too — "https://TOKEN@github.com/…" puts a token in the user slot. An ssh user
+    /// ("ssh://git@host/…") and scp-style remotes ("git@host:path") carry no secret and are
+    /// left as they are.
+    static func redactedRemoteURL(_ url: String) -> String {
+        guard url.contains("://"), var components = URLComponents(string: url) else { return url }
+        guard components.user != nil || components.password != nil else { return url }
+        components.password = nil
+        if let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            components.user = nil
+        }
+        return components.string ?? url
+    }
+
+    /// The path segments after the host of a github.com remote, in any of git's URL forms —
+    /// "git@github.com:owner/repo.git", "https://github.com/owner/repo(.git)",
+    /// "ssh://git@github.com:22/owner/repo.git" — or `nil` for any other host. The host must be
+    /// exactly github.com (or www.), not merely end with it. The single parser behind both
+    /// `githubOwner(fromRemoteURL:)` and `githubWebURL(fromRemoteURL:)`.
+    static func githubPathComponents(fromRemoteURL url: String) -> [String]? {
+        let host: String
+        let path: String
+        if url.contains("://") {
+            guard let components = URLComponents(string: url), let componentHost = components.host else { return nil }
+            host = componentHost
+            path = components.path
+        } else {
+            // scp-style "[user@]host:path".
+            guard let colon = url.firstIndex(of: ":") else { return nil }
+            let authority = url[..<colon]
+            guard !authority.contains("/") else { return nil }
+            host = String(authority.split(separator: "@").last ?? authority)
+            path = String(url[url.index(after: colon)...])
+        }
+        let normalizedHost = host.lowercased()
+        guard normalizedHost == "github.com" || normalizedHost == "www.github.com" else { return nil }
+        let parts = path.split(separator: "/").map(String.init)
+        guard let owner = parts.first, !owner.isEmpty else { return nil }
+        return parts
+    }
+
+    /// "…github.com…/owner/repo(.git)" -> https://github.com/owner/repo. `nil` for anything
+    /// not on github.com, or without both an owner and a repo.
+    static func githubWebURL(fromRemoteURL url: String) -> URL? {
+        guard let parts = githubPathComponents(fromRemoteURL: url), parts.count >= 2 else { return nil }
+        var name = parts[1]
+        if name.hasSuffix(".git") { name = String(name.dropLast(4)) }
+        guard !name.isEmpty else { return nil }
+        return URL(string: "https://github.com/\(parts[0])/\(name)")
     }
 
     /// "git@github.com:owner/repo.git" or "https://github.com/owner/repo.git" -> "owner".
     static func githubOwner(fromRemoteURL url: String) -> String? {
-        guard let range = url.range(of: "github.com[:/]", options: .regularExpression) else {
-            return nil
-        }
-        let rest = url[range.upperBound...]
-        guard let owner = rest.split(separator: "/").first, !owner.isEmpty else { return nil }
-        return String(owner)
+        githubPathComponents(fromRemoteURL: url)?.first
+    }
+
+    /// The remote and branch name `localBranch` tracks — "fix" tracking origin/feature/fix is
+    /// ("origin", "feature/fix") — from its `branch.<name>.remote`/`.merge` config. `nil` when
+    /// it has no upstream.
+    func upstream(ofBranch localBranch: String) -> (remote: String, branch: String)? {
+        guard let remote = try? run(["config", "--get", "branch.\(localBranch).remote"]).trimmingCharacters(in: .whitespacesAndNewlines),
+              let merge = try? run(["config", "--get", "branch.\(localBranch).merge"]).trimmingCharacters(in: .whitespacesAndNewlines),
+              !remote.isEmpty, !merge.isEmpty else { return nil }
+        let prefix = "refs/heads/"
+        let branch = merge.hasPrefix(prefix) ? String(merge.dropFirst(prefix.count)) : merge
+        return (remote, branch)
     }
 
     /// Derives the folder name git itself would use for a clone destination, e.g.

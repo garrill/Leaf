@@ -1,12 +1,14 @@
+import AppKit
 import SwiftUI
 
-/// The palette card: search field on top, then up to `PaletteMatcher.maxResults` rows. A plain
-/// `VStack` rather than a `List`/`ScrollView` — there are never more than nine rows, and a stack
-/// lays out instantly with no cell reuse or selection machinery to fight.
+/// The palette card: search field on top, then up to `PaletteMatcher.maxResults` rows, then a
+/// footer naming what Return (and ⌥/⇧/⌘-Return) will do for the selected row. A plain
+/// `VStack` rather than a `List`/`ScrollView` — there are never more than nine rows, and a
+/// stack lays out instantly with no cell reuse or selection machinery to fight.
 struct CommandPaletteView: View {
     let model: CommandPaletteModel
     let appState: AppState
-    let onRun: (PaletteItem) -> Void
+    let onRun: (PaletteItem, PaletteModifier?) -> Void
     let onCancel: () -> Void
     /// Reports the card's height so the panel can resize itself to fit, keeping its top edge fixed.
     let onHeightChange: (CGFloat) -> Void
@@ -26,10 +28,11 @@ struct CommandPaletteView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 PaletteTextField(
                     model: model,
-                    onRun: {
-                        if let item = model.selectedItem { onRun(item) }
+                    onRun: { modifier in
+                        if let item = model.selectedItem { onRun(item, modifier) }
                     },
                     onCancel: onCancel
                 )
@@ -47,7 +50,8 @@ struct CommandPaletteView: View {
                             index: index,
                             isSelected: index == model.selectedIndex,
                             isHovered: item.id == hoveredItemID,
-                            appState: appState
+                            appState: appState,
+                            onRun: { modifier in onRun(item, modifier) }
                         )
                         .onHover { hovering in
                             if hovering {
@@ -56,17 +60,25 @@ struct CommandPaletteView: View {
                                 hoveredItemID = nil
                             }
                         }
-                        // Double-click runs; the single-click select is simultaneous rather than
-                        // a competing `count: 1` tap, which SwiftUI would hold back until the
-                        // double-click interval expired — selection lands on mouse-up instantly.
-                        .gesture(TapGesture(count: 2).onEnded { onRun(item) })
+                        // Double-click runs (holding ⌥/⇧/⌘ runs that alternate); the single-click
+                        // select is simultaneous rather than a competing `count: 1` tap, which
+                        // SwiftUI would hold back until the double-click interval expired —
+                        // selection lands on mouse-up instantly.
+                        .gesture(TapGesture(count: 2).onEnded {
+                            onRun(item, PaletteModifier(flags: NSEvent.modifierFlags))
+                        })
                         .simultaneousGesture(TapGesture().onEnded { model.selectedIndex = index })
                     }
                 }
                 .padding(6)
+
+                if let selected = model.selectedItem {
+                    Divider()
+                    PaletteFooter(item: selected)
+                }
             } else if !model.query.trimmingCharacters(in: .whitespaces).isEmpty {
                 Divider()
-                Text("No matching repositories, branches or commands")
+                Text("No matching repositories, branches, commits, files or commands")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -84,6 +96,81 @@ struct CommandPaletteView: View {
         }
         .padding(Self.shadowInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // VoiceOver stays in the search field while ↑/↓ move the selection, so the rows'
+        // `isSelected` trait alone is never read out — announce the selected row instead.
+        .onChange(of: announcementKey) {
+            announceSelection()
+        }
+    }
+
+    private var announcementKey: String {
+        "\(model.selectedItem?.id ?? "")|\(model.results.count)|\(model.query.isEmpty)"
+    }
+
+    private func announceSelection() {
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        let text: String
+        if let item = model.selectedItem {
+            var parts = [item.displayTitle]
+            if let reason = item.unavailableReason {
+                parts.append("unavailable, \(reason)")
+            } else if let subtitle = item.subtitle {
+                parts.append(subtitle)
+            }
+            parts.append("\(model.selectedIndex + 1) of \(model.results.count)")
+            text = parts.joined(separator: ", ")
+        } else if !model.query.trimmingCharacters(in: .whitespaces).isEmpty {
+            text = "No results"
+        } else {
+            return
+        }
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: text,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
+    }
+}
+
+/// "↩ Open   ⌥↩ Show in Finder   ⇧↩ Copy Path" for the selected row. Always present while
+/// there are results (even for a row with no alternates), so the card's height doesn't jump as
+/// the selection moves.
+private struct PaletteFooter: View {
+    let item: PaletteItem
+
+    var body: some View {
+        HStack(spacing: 14) {
+            if item.isEnabled {
+                hint("\u{21A9}", item.actionLabel)
+            } else if item.needsArgument {
+                hint("\u{21A9}", "Type \(item.argumentPlaceholder ?? "argument")")
+            } else {
+                Text("Unavailable")
+                    .foregroundStyle(.tertiary)
+            }
+            ForEach(PaletteModifier.allCases, id: \.self) { modifier in
+                if let alternate = item.alternate(for: modifier) {
+                    hint("\(modifier.glyph)\u{21A9}", alternate.title)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.caption)
+        .lineLimit(1)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 7)
+        // Each row exposes these as named accessibility actions instead.
+        .accessibilityHidden(true)
+    }
+
+    private func hint(_ keys: String, _ title: String) -> some View {
+        HStack(spacing: 4) {
+            Text(keys).foregroundStyle(.tertiary)
+            Text(title).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -93,6 +180,9 @@ private struct CommandPaletteRow: View {
     let isSelected: Bool
     let isHovered: Bool
     let appState: AppState
+    let onRun: (PaletteModifier?) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 10) {
@@ -101,7 +191,6 @@ private struct CommandPaletteRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 titleText
-                    .fontWeight(.medium)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let subtitle {
@@ -115,7 +204,7 @@ private struct CommandPaletteRow: View {
 
             Spacer(minLength: 8)
 
-            if let status = repoStatus {
+            if let status = repoStatus, item.isEnabled {
                 RepoStatusIndicators(status: status)
             }
             if let shortcut = item.shortcut {
@@ -128,6 +217,8 @@ private struct CommandPaletteRow: View {
                 .foregroundStyle(isSelected ? .secondary : .tertiary)
                 .frame(minWidth: 26, alignment: .trailing)
         }
+        // Unavailable rows recede but stay readable — they're there to explain themselves.
+        .opacity(item.isEnabled ? 1 : 0.5)
         .padding(.horizontal, 10)
         .frame(height: subtitle == nil ? 32 : 42)
         .background(
@@ -135,6 +226,19 @@ private struct CommandPaletteRow: View {
                 .fill(backgroundColor)
         )
         .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(item.displayTitle)
+        .accessibilityValue(item.unavailableReason.map { "Unavailable, \($0)" } ?? subtitle ?? "")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint(item.isEnabled ? item.actionLabel : "")
+        .accessibilityAction { onRun(nil) }
+        .accessibilityActions {
+            ForEach(PaletteModifier.allCases, id: \.self) { modifier in
+                if let alternate = item.alternate(for: modifier) {
+                    Button(alternate.title) { onRun(modifier) }
+                }
+            }
+        }
     }
 
     /// Selected (keyboard/click) is stronger than hovered, so the pointer resting on a row never
@@ -145,11 +249,36 @@ private struct CommandPaletteRow: View {
         return .clear
     }
 
-    /// "Leaf – Rename" / "View > Hide Sidebar": the repo or menu dimmed, the action itself at
-    /// full strength.
+    /// "Leaf – Rename" / "View › Hide Sidebar": the repo or menu dimmed, the action itself at
+    /// full strength, with the letters the query matched in bold.
     private var titleText: Text {
-        guard let prefix = item.displayPrefix else { return Text(item.title) }
-        return Text("\(Text(prefix).foregroundStyle(.secondary))\(item.title)")
+        let title = Text(highlightedTitle)
+        guard let prefix = item.displayPrefix else { return title }
+        return Text("\(Text(prefix).fontWeight(titleWeight).foregroundStyle(.secondary))\(title)")
+    }
+
+    /// Light text on a dark background renders visibly heavier, which made the bold matched
+    /// letters hard to tell apart in dark mode — so the unmatched text drops a weight there.
+    private var titleWeight: Font.Weight {
+        colorScheme == .dark ? .regular : .medium
+    }
+
+    private var highlightedTitle: AttributedString {
+        var result = AttributedString(item.title)
+        result.font = .body.weight(titleWeight)
+        guard !item.matchedIndices.isEmpty else { return result }
+        let matched = Set(item.matchedIndices)
+        var index = result.startIndex
+        var offset = 0
+        while index < result.endIndex {
+            let next = result.characters.index(after: index)
+            if matched.contains(offset) {
+                result[index..<next].font = .body.weight(.bold)
+            }
+            index = next
+            offset += 1
+        }
+        return result
     }
 
     private var repo: SidebarRepo? {
@@ -165,15 +294,21 @@ private struct CommandPaletteRow: View {
     }
 
     private var subtitle: String? {
-        guard let repo else { return item.subtitle }
-        if let missing = item.subtitle { return missing }
-        var parts: [String] = []
-        if let branch = repoStatus?.currentBranch { parts.append(branch) }
-        if let date = repoStatus?.lastCommitDate {
-            parts.append(date.formatted(.relative(presentation: .named)))
+        if let reason = item.unavailableReason { return reason }
+        if let repo {
+            var parts: [String] = []
+            if let branch = repoStatus?.currentBranch { parts.append(branch) }
+            if let date = repoStatus?.lastCommitDate {
+                parts.append(date.formatted(.relative(presentation: .named)))
+            }
+            if repo.path == appState.selectedRepoURL?.path { parts.append("Open") }
+            return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
         }
-        if repo.path == appState.selectedRepoURL?.path { parts.append("Open") }
-        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
+        if let date = item.date {
+            let relative = date.formatted(.relative(presentation: .named))
+            return item.subtitle.map { "\($0) \u{00B7} \(relative)" } ?? relative
+        }
+        return item.subtitle
     }
 
     @ViewBuilder

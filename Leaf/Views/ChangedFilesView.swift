@@ -203,6 +203,17 @@ private struct ChangedFilesList: View {
     @State private var pendingProgrammaticFileSelection: Set<String>?
 
     var body: some View {
+        ScrollViewReader { proxy in
+            content
+                // The command palette jumped to a file — see `BranchListView`'s equivalent.
+                .onChange(of: appState.revealSelectionRequest) {
+                    guard let path = appState.selectedFile?.path else { return }
+                    proxy.scrollTo(path, anchor: .center)
+                }
+        }
+    }
+
+    private var content: some View {
         List(appState.changedFiles, selection: $localFileSelection) { file in
             HStack {
                 if isWorkingChanges {

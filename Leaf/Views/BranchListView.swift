@@ -25,6 +25,18 @@ struct BranchListView: View {
     @AppStorage(LeafSettings.showCommitDescriptionKey, store: LeafSettings.store) private var showCommitDescription = LeafSettings.defaultShowCommitDescription
 
     var body: some View {
+        ScrollViewReader { proxy in
+            content
+                // The command palette jumped to a commit — a programmatic `List` selection
+                // doesn't scroll itself into view.
+                .onChange(of: appState.revealSelectionRequest) {
+                    guard case .commit(let commit) = appState.selectedSource else { return }
+                    proxy.scrollTo(commit.id, anchor: .center)
+                }
+        }
+    }
+
+    private var content: some View {
         ZStack {
             List(selection: $localSelection) {
                 Section {

@@ -4,11 +4,11 @@ import SwiftUI
 /// The palette's search field: a plain AppKit `NSTextField` rather than a SwiftUI `TextField`, so
 /// ↑/↓/Return/Tab/Esc come through `control(_:textView:doCommandBy:)` from the real field editor
 /// — deterministic regardless of SwiftUI focus state (see CLAUDE.md on `.onKeyPress`). The dimmed
-/// autofill ghost is a second, non-editable label placed exactly after the typed text's measured
-/// width, in the same font, so it reads as a continuation of what's being typed.
+/// autofill ghost is drawn by the field's own editor (`GhostFieldEditor`).
 struct PaletteTextField: NSViewRepresentable {
     let model: CommandPaletteModel
-    let onRun: () -> Void
+    /// Return runs the selected row; ⌥↩/⇧↩ pass the modifier for its alternate action.
+    let onRun: (PaletteModifier?) -> Void
     let onCancel: () -> Void
 
     static let font = NSFont.systemFont(ofSize: 20, weight: .regular)
@@ -52,11 +52,11 @@ struct PaletteTextField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         let model: CommandPaletteModel
-        var onRun: () -> Void
+        var onRun: (PaletteModifier?) -> Void
         var onCancel: () -> Void
         var lastFocusRequest = -1
 
-        init(model: CommandPaletteModel, onRun: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        init(model: CommandPaletteModel, onRun: @escaping (PaletteModifier?) -> Void, onCancel: @escaping () -> Void) {
             self.model = model
             self.onRun = onRun
             self.onCancel = onCancel
@@ -86,7 +86,14 @@ struct PaletteTextField: NSViewRepresentable {
                 model.selectLast()
                 return true
             case #selector(NSResponder.insertNewline(_:)):
-                onRun()
+                // ⇧↩ arrives as a plain `insertNewline:` — the modifier is only on the event.
+                // (⌘↩ never gets here; it's a key equivalent, caught by the panel.)
+                let flags = NSApp.currentEvent?.modifierFlags ?? []
+                onRun(PaletteModifier(flags: flags))
+                return true
+            case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+                // ⌥↩.
+                onRun(.option)
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
                 onCancel()
@@ -140,6 +147,8 @@ final class PaletteFieldContainer: NSView {
         textField.lineBreakMode = .byClipping
         cell.isScrollable = true
         cell.wraps = false
+        textField.setAccessibilityLabel("Command palette")
+        textField.setAccessibilityHelp("Type to search repositories, branches, commits, files and commands. Use the up and down arrows to choose, Return to run.")
         addSubview(textField)
     }
 
