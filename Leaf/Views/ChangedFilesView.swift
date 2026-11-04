@@ -79,33 +79,9 @@ struct ChangedFilesView: View {
         // what's currently selected/shown — a commit or push can be triggered from the toolbar
         // or menu bar as easily as from a footer button. See `AppState.gitFailureAlert`'s doc
         // comment for why this replaced reading the generic `errorMessage` inline in `DiffView`.
-        .alert(
-            appState.gitFailureAlert?.title ?? "",
-            isPresented: Binding(
-                get: { appState.gitFailureAlert != nil },
-                set: { isPresented in if !isPresented { appState.gitFailureAlert = nil } }
-            ),
-            presenting: appState.gitFailureAlert
-        ) { alert in
-            Button("Cancel", role: .cancel) {}
-            ForEach(alert.blockingTrackedPaths, id: \.self) { path in
-                Button("Stash \(path)") {
-                    appState.stashAndRetryPull(path: path)
-                }
-            }
-            if alert.offerPullThenPush {
-                Button("Pull from Origin") {
-                    appState.pullThenPush()
-                }
-            }
-        } message: { alert in
-            // The rejected push's destination gets its own bold line rather than being spliced
-            // into the sentence — `Text` doesn't parse Markdown from a plain `String`, so
-            // backticks around it would render as literal characters, not a code span.
-            if let remote = alert.pushRemoteURL {
-                Text("Failed to push to:\n\(Text(remote).bold())\n\(alert.message)")
-            } else {
-                Text(alert.message)
+        .onChange(of: appState.gitFailureAlert?.id) {
+            if let alert = appState.gitFailureAlert {
+                presentGitFailure(alert)
             }
         }
         /// A conflicting stash restore (`AppState.restoreStash()`) — separate from `gitFailureAlert` above since it's not a failure to report so much as a choice about what happens to the now-redundant stash entry once its content is already merged (with conflict markers) into the working tree.
@@ -130,7 +106,7 @@ struct ChangedFilesView: View {
             if alert.conflictedPaths.count == 1, let path = alert.conflictedPaths.first {
                 Text("\u{2018}\(path)\u{2019} will be conflicted if restored.")
             } else {
-                Text("The following files will be conflicted if restored:\n" + alert.conflictedPaths.joined(separator: "\n"))
+                Text("The following files will be conflicted if restored:\n" + AlertList.text(alert.conflictedPaths))
             }
         }
         // Refuses a commit whose checked files still have conflict markers — `canCommit` already
@@ -150,7 +126,7 @@ struct ChangedFilesView: View {
             if alert.conflictedPaths.count == 1, let path = alert.conflictedPaths.first {
                 Text("\u{2018}\(path)\u{2019} still has unresolved conflict markers. Fix the conflict and choose \u{201C}Mark Resolved\u{201D}, then commit again.")
             } else {
-                Text("These files still have unresolved conflict markers. Fix each conflict and choose \u{201C}Mark Resolved\u{201D}, then commit again:\n" + alert.conflictedPaths.joined(separator: "\n"))
+                Text("These files still have unresolved conflict markers. Fix each conflict and choose \u{201C}Mark Resolved\u{201D}, then commit again:\n" + AlertList.text(alert.conflictedPaths))
             }
         }
         // Raised when the resolve-button icon is clicked on a file whose contents still
@@ -171,6 +147,27 @@ struct ChangedFilesView: View {
             Text("The file \u{201C}\(alert.fileName)\u{201D} does not appear to be resolved. Are you sure you want to mark it resolved?")
         }
     }
+
+    private func presentGitFailure(_ alert: GitFailureAlert) {
+        var actions: [GitErrorAlert.Action] = []
+        // One button per file only while they fit. Past that, the buttons would run off the screen,
+        // and stashing one file of many wouldn't unblock the pull anyway.
+        if alert.blockingTrackedPaths.count <= Self.maxStashFixButtons {
+            actions += alert.blockingTrackedPaths.map { path in
+                GitErrorAlert.Action(title: "Stash \(path)") { appState.stashAndRetryPull(path: path) }
+            }
+        }
+        if alert.offerPullThenPush {
+            actions.append(GitErrorAlert.Action(title: "Pull from Origin") { appState.pullThenPush() })
+        }
+        GitErrorAlert.present(title: alert.title, message: alert.displayMessage, log: alert.log, actions: actions) {
+            if appState.gitFailureAlert?.id == alert.id {
+                appState.gitFailureAlert = nil
+            }
+        }
+    }
+
+    private static let maxStashFixButtons = 4
 
     private struct ChangedFilesLoadKey: Hashable {
         let repoURL: URL?

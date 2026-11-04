@@ -297,9 +297,7 @@ struct MergeSheet: View {
     @ViewBuilder
     private var warnings: some View {
         if let message = appState.mergePreviewErrorMessage {
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.red)
+            GitErrorMessageView(rawMessage: message)
         }
 
         if appState.isCheckingMergeConflicts {
@@ -350,9 +348,7 @@ struct MergeSheet: View {
         }
 
         if let message = appState.mergeErrorMessage {
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.red)
+            GitErrorMessageView(rawMessage: message)
         }
     }
 }

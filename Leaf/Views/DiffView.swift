@@ -218,7 +218,7 @@ struct DiffView: View {
     @ViewBuilder
     private var content: some View {
         if let errorMessage = appState.errorMessage {
-            ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
+            GitErrorPaneView(rawMessage: errorMessage)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else if appState.selectedFile == nil {
             Color.clear

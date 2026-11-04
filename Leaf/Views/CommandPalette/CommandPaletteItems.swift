@@ -827,12 +827,12 @@ enum CommandPaletteItems {
     /// For the inline-argument commands, whose sheet counterparts would show the error in the
     /// sheet itself.
     private static func presentError(_ title: String, _ message: String?) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = title
-        alert.informativeText = message ?? ""
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        let report = GitErrorReport(rawOutput: message ?? "")
+        GitErrorAlert.present(
+            title: title,
+            message: message == nil ? "" : report.summary,
+            log: report.hasFurtherDetail ? report.fullLog : nil
+        )
     }
 
     private static func countLabel(_ count: Int, _ singular: String, _ plural: String) -> String {

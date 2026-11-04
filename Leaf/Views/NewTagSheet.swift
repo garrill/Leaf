@@ -32,9 +32,7 @@ struct NewTagSheet: View {
             }
 
             if let error = appState.newTagErrorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                GitErrorMessageView(rawMessage: error)
             }
 
             HStack {

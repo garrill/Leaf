@@ -82,9 +82,7 @@ struct CloneRepoSheet: View {
                 }
 
                 if let error = appState.cloneErrorMessage {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    GitErrorMessageView(rawMessage: error)
                         .transition(.opacity)
                 }
             }

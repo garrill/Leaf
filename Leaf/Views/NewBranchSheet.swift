@@ -31,9 +31,7 @@ struct NewBranchSheet: View {
             }
 
             if let error = appState.newBranchErrorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                GitErrorMessageView(rawMessage: error)
             }
 
             HStack {

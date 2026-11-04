@@ -19,9 +19,11 @@ struct GitFailureAlert: Identifiable {
 
     let id = UUID()
     var operation: Operation
-    /// A user-facing rewording of git's raw stderr when `AppState.parseGitFailure(_:operation:)`
-    /// recognized the failure; falls back to that raw text (trimmed) otherwise.
+    /// A short, user-facing description of the failure — never git's raw output, which can run
+    /// to hundreds of progress lines. See `GitErrorReport`.
     var message: String
+    /// Git's complete output, for the alert's "Copy Full Log" button.
+    var log: String
     /// The rejected push's destination, pulled out of git's stderr separately from `message` so
     /// `ChangedFilesView` can lay it out on its own line instead of splicing a raw path into a
     /// sentence. Only set alongside `offerPullThenPush`.
@@ -37,6 +39,12 @@ struct GitFailureAlert: Identifiable {
     var offerPullThenPush = false
 
     var title: String { operation.title }
+
+    /// `message`, with a rejected push's destination on its own line rather than spliced into
+    /// the sentence.
+    var displayMessage: String {
+        pushRemoteURL.map { "Failed to push to:\n\($0)\n\n\(message)" } ?? message
+    }
 }
 
 /// A conflicting `applyStash()` while restoring the top-of-stack stash — the working tree
@@ -448,7 +456,7 @@ final class AppState {
         } else {
             alert.messageText = "Some Folders Are Not Git Repositories"
             alert.informativeText = "The following folders don't contain a git repository, so they weren't added:\n\n"
-                + folderNames.joined(separator: "\n")
+                + AlertList.text(folderNames)
         }
         alert.addButton(withTitle: "OK")
         alert.runModal()
@@ -846,7 +854,7 @@ final class AppState {
                     ? "Delete branch \u{201C}\(gone[0])\u{201D}?"
                     : "Delete \(gone.count) branches?"
                 let message = "These local branches no longer exist on the remote — deleted or "
-                    + "renamed:\n\n\(gone.joined(separator: "\n"))\n\nThis cannot be undone."
+                    + "renamed:\n\n\(AlertList.text(gone))\n\nThis cannot be undone."
                 guard Self.confirmDestructiveAction(
                     title: title, message: message, confirmButtonTitle: "Delete"
                 ) else { return }
@@ -1742,30 +1750,33 @@ final class AppState {
 
     /// Best-effort classification of git's raw stderr text (`GitError.commandFailed`'s message)
     /// into a friendlier message plus one-click fixes `ChangedFilesView`'s alert can offer.
-    /// Unrecognized text is shown verbatim (trimmed) with no extra buttons beyond Cancel.
+    /// `GitErrorReport` supplies the message for anything without a fix of its own.
     static func parseGitFailure(_ rawMessage: String, operation: GitFailureAlert.Operation) -> GitFailureAlert {
-        let trimmed = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        var alert = GitFailureAlert(operation: operation, message: trimmed)
+        let report = GitErrorReport(rawOutput: rawMessage)
+        let trimmed = report.fullLog
+        var alert = GitFailureAlert(operation: operation, message: report.summary, log: report.fullLog)
 
-        for verb in ["merge", "checkout"] where trimmed.contains("would be overwritten by \(verb)") {
-            // git's own format: an "error: ... would be overwritten by <verb>:" header line, one
-            // tab-indented path per line, then a "Please commit/stash ..." / "Aborting" footer.
-            let paths = trimmed
-                .split(separator: "\n")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { line in
-                    !line.isEmpty
-                        && !line.hasPrefix("error:")
-                        && !line.hasPrefix("hint:")
-                        && !line.hasPrefix("Please")
-                        && !line.hasPrefix("Aborting")
-                }
-            alert.blockingTrackedPaths = paths
-            alert.overwriteVerb = verb
-            alert.message = "Your local changes to the following files would be overwritten by \(verb):\n"
-                + paths.joined(separator: "\n")
-                + "\nPlease commit your changes or stash them before you \(verb)."
-            break
+        // git lists these paths one per line, tab-indented. A pull's output also has other lines
+        // around them ("From <url>", the fetched ref, "Updating a..b"), so the tab is what
+        // identifies a path.
+        let listedPaths = trimmed
+            .components(separatedBy: "\n")
+            .filter { $0.hasPrefix("\t") }
+            .map { String($0.dropFirst()) }
+
+        if trimmed.contains("untracked working tree files would be overwritten") {
+            // No Stash fix here: that stashes tracked changes only, so it wouldn't move these.
+            alert.message = "These untracked files would be overwritten. Move or remove them, then try again:\n"
+                + AlertList.text(listedPaths)
+        } else {
+            for verb in ["merge", "checkout"] where trimmed.contains("would be overwritten by \(verb)") {
+                alert.blockingTrackedPaths = listedPaths
+                alert.overwriteVerb = verb
+                alert.message = "Your local changes to the following files would be overwritten by \(verb):\n"
+                    + AlertList.text(listedPaths)
+                    + "\nPlease commit your changes or stash them before you \(verb)."
+                break
+            }
         }
 
         if operation == .push
