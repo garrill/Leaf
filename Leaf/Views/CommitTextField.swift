@@ -51,9 +51,11 @@ struct CommitTextField: NSViewRepresentable {
         textView.drawsBackground = false
         // Commit messages carry identifiers/paths/branch names — no autocorrect, smart
         // punctuation, or the inline completion panel (which also flashed empty on focus).
+        // Text replacement stays on: it only expands the user's own System Settings shortcuts
+        // (what a SwiftUI `TextField` honoured before this became an `NSTextView`).
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticTextReplacementEnabled = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isContinuousSpellCheckingEnabled = false

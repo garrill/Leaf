@@ -30,8 +30,11 @@ struct BranchListView: View {
                 // The command palette jumped to a commit — a programmatic `List` selection
                 // doesn't scroll itself into view.
                 .onChange(of: appState.revealSelectionRequest) {
-                    guard case .commit(let commit) = appState.selectedSource else { return }
-                    proxy.scrollTo(commit.id, anchor: .center)
+                    switch appState.selectedSource {
+                    case .commit(let commit)?: proxy.scrollTo(commit.id, anchor: .center)
+                    case .workingChanges?: proxy.scrollTo(ChangeSource.workingChanges, anchor: .top)
+                    default: break
+                    }
                 }
         }
     }
@@ -49,6 +52,7 @@ struct BranchListView: View {
                             uncommittedChangesRow
                         }
                     }
+                    .id(ChangeSource.workingChanges)
                     .listRowSeparator(.visible)
 
                     if appState.stashCount > 0 {

@@ -349,6 +349,17 @@ enum CommandPaletteItems {
 
         let noChanges = appState.uncommittedChangeCount == 0 ? "No uncommitted changes" : nil
         add(
+            "Show Uncommitted Changes",
+            subtitle: noChanges == nil ? countLabel(appState.uncommittedChangeCount, "change", "changes") : nil,
+            symbol: "doc.badge.ellipsis",
+            keywords: ["working", "changes", "local", "modified", "status", "select"],
+            unavailable: noChanges ?? (appState.selectedSource == .workingChanges ? "Already showing" : nil)
+        ) { state in
+            state.selectSource(.workingChanges)
+            state.focusedColumn = .branches
+            state.revealSelectionRequest &+= 1
+        }
+        add(
             "Stash All Changes",
             subtitle: noChanges == nil ? countLabel(appState.uncommittedChangeCount, "change", "changes") : nil,
             symbol: "tray.and.arrow.down",
