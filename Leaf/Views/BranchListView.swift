@@ -45,13 +45,6 @@ struct BranchListView: View {
                             uncommittedChangesRow
                                 .claimingFocusOnClick(claimFocusOnClick)
                                 .tag(ChangeSource.workingChanges)
-                                .contextMenu {
-                                    Button("Stash All Changes") { appState.stashAllChanges() }
-                                    Button("Discard All Changes\u{2026}", role: .destructive) { appState.discardAllChanges() }
-                                    Divider()
-                                    Button("Check All Files") { appState.setAllWorkingChangesChecked(true) }
-                                    Button("Uncheck All Files") { appState.setAllWorkingChangesChecked(false) }
-                                }
                         } else {
                             uncommittedChangesRow
                         }
@@ -63,10 +56,6 @@ struct BranchListView: View {
                             .claimingFocusOnClick(claimFocusOnClick)
                             .tag(ChangeSource.stash)
                             .listRowSeparator(.visible)
-                            .contextMenu {
-                                Button("Restore Stash") { appState.restoreStash() }
-                                Button("Discard Stash\u{2026}", role: .destructive) { appState.discardStash() }
-                            }
                     }
                 } header: {
                     sectionHeader("Local changes", systemImage: "doc")
@@ -86,32 +75,17 @@ struct BranchListView: View {
                         .claimingFocusOnClick(claimFocusOnClick)
                         .tag(ChangeSource.commit(commit))
                         .listRowSeparator(.visible)
-                        .contextMenu {
-                            Button("Copy SHA") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(commit.sha, forType: .string)
-                            }
-                            Button("Copy Commit Title") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(commit.summary, forType: .string)
-                            }
-                            Button("Tag Commit…") {
-                                appState.newTagTargetCommit = commit
-                                appState.isNewTagSheetPresented = true
-                            }
-                            if !commitTags.isEmpty {
-                                Divider()
-                                ForEach(commitTags) { tag in
-                                    Button("Delete Tag \"\(tag.name)\"", role: .destructive) {
-                                        appState.deleteTag(tag)
-                                    }
-                                }
-                            }
-                        }
                     }
                 } header: {
                     sectionHeader("History", systemImage: "clock")
                 }
+            }
+            // One List-level menu, built only on right-click, instead of a `.contextMenu` per
+            // row — a per-row one forces macOS `List` to build every history row up front
+            // (all 200 commits) rather than just the visible ones, which kept a full row's
+            // worth of SwiftUI graph alive per commit. Same fix as `ChangedFilesList`.
+            .contextMenu(forSelectionType: ChangeSource.self) { sources in
+                rowContextMenu(for: sources)
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
@@ -240,6 +214,51 @@ struct BranchListView: View {
     private func claimFocusOnClick() {
         isFocused = true
         appState.focusedColumn = .branches
+    }
+
+    /// Right-click menu for a single row (multi-selection isn't possible in this list). An
+    /// empty `sources` — right-clicking an untagged row or the background — shows no menu.
+    @ViewBuilder
+    private func rowContextMenu(for sources: Set<ChangeSource>) -> some View {
+        if sources.count == 1, let source = sources.first {
+            switch source {
+            case .workingChanges:
+                if appState.uncommittedChangeCount > 0 {
+                    Button("Stash All Changes") { appState.stashAllChanges() }
+                    Button("Discard All Changes\u{2026}", role: .destructive) { appState.discardAllChanges() }
+                    Divider()
+                    Button("Check All Files") { appState.setAllWorkingChangesChecked(true) }
+                    Button("Uncheck All Files") { appState.setAllWorkingChangesChecked(false) }
+                }
+            case .stash:
+                if appState.stashCount > 0 {
+                    Button("Restore Stash") { appState.restoreStash() }
+                    Button("Discard Stash\u{2026}", role: .destructive) { appState.discardStash() }
+                }
+            case .commit(let commit):
+                let commitTags = appState.tagsByCommitSHA[commit.sha] ?? []
+                Button("Copy SHA") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(commit.sha, forType: .string)
+                }
+                Button("Copy Commit Title") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(commit.summary, forType: .string)
+                }
+                Button("Tag Commit…") {
+                    appState.newTagTargetCommit = commit
+                    appState.isNewTagSheetPresented = true
+                }
+                if !commitTags.isEmpty {
+                    Divider()
+                    ForEach(commitTags) { tag in
+                        Button("Delete Tag \"\(tag.name)\"", role: .destructive) {
+                            appState.deleteTag(tag)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func sectionHeader(_ title: String, systemImage: String) -> some View {
