@@ -166,7 +166,9 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [
+        // The Merge button opens the merge helper sheet, so it's only shown while that's enabled.
+        let mergeItems: [NSToolbarItem.Identifier] = AppState.isMergeHelperEnabled ? [.mergeButton, .space] : []
+        return [
             .flexibleSpace,
             .addItem,
             .toggleSidebar,
@@ -175,8 +177,7 @@ final class MainToolbarDelegate: NSObject, NSToolbarDelegate {
             .branchMenu,
             .branchTrackingSeparator,
             .flexibleSpace,
-            .mergeButton,
-            .space,
+        ] + mergeItems + [
             .fetchButton,
             .space,
             .pullPushGroup
@@ -422,7 +423,7 @@ extension MainToolbarDelegate: NSMenuDelegate {
 
     @objc private func mergeBranch(_ sender: NSMenuItem) {
         guard let branch = sender.representedObject as? GitBranch else { return }
-        appState.openMergeSheet(prefilledOtherBranch: branch)
+        appState.requestMerge(of: branch)
     }
 
     @objc private func openMergeSheet() {

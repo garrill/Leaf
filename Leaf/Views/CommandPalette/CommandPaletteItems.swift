@@ -136,8 +136,8 @@ enum CommandPaletteItems {
             item.usageKey = "branch:\(repoPath):\(branch.name)"
             var alternates: [PaletteAlternate] = []
             if canMerge, let currentBranch {
-                alternates.append(PaletteAlternate(modifier: .option, title: "Merge into \(currentBranch.name)…") { [weak appState] in
-                    appState?.openMergeSheet(prefilledOtherBranch: branch)
+                alternates.append(PaletteAlternate(modifier: .option, title: "Merge into \(currentBranch.name)\(AppState.isMergeHelperEnabled ? "…" : "")") { [weak appState] in
+                    appState?.requestMerge(of: branch)
                 })
             }
             alternates.append(PaletteAlternate(modifier: .shift, title: "Copy Name") { copy(branch.name) })
@@ -392,7 +392,7 @@ enum CommandPaletteItems {
         }
         if appState.isMergeInProgress {
             add("Abort Merge", symbol: "xmark.circle", keywords: ["cancel", "merge"]) { $0.abortMerge() }
-        } else {
+        } else if AppState.isMergeHelperEnabled {
             add(
                 "Merge…",
                 key: "Merge",

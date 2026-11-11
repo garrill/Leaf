@@ -1367,6 +1367,43 @@ final class AppState {
         }
     }
 
+    /// Feature flag for the merge helper sheet (`MergeSheet`). While `false`, nothing in the UI
+    /// opens the sheet — the branch menu / command palette's "Merge into X" runs `mergeBranch(_:)`
+    /// directly, the toolbar Merge button and the palette's standalone "Merge…" command are hidden.
+    static let isMergeHelperEnabled = false
+
+    /// Merges `branch` straight into the current branch (no sheet). A conflicting merge leaves
+    /// the user in the existing conflict-resolution flow via `refreshRepositoryState()`.
+    func mergeBranch(_ branch: GitBranch) {
+        guard let repo = currentRepository, !isSyncing, !isRepositoryBusy else { return }
+        isSyncing = true
+        Task {
+            do {
+                _ = try await Task.detached(priority: .userInitiated) { try repo.merge(branch: branch.name) }.value
+                await MainActor.run {
+                    self.errorMessage = nil
+                    self.isSyncing = false
+                    self.refreshRepositoryState()
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isSyncing = false
+                }
+            }
+        }
+    }
+
+    /// "Merge `branch` into the current branch" entry point for menus/palette — routes to the
+    /// merge sheet when `isMergeHelperEnabled`, otherwise merges immediately.
+    func requestMerge(of branch: GitBranch) {
+        if Self.isMergeHelperEnabled {
+            openMergeSheet(prefilledOtherBranch: branch)
+        } else {
+            mergeBranch(branch)
+        }
+    }
+
     /// Opens the merge sheet. `branch` is the already-known "other" branch when opened from a
     /// branch's own "Merge into X" menu item; `nil` when opened from the standalone toolbar
     /// button, leaving the sheet's own branch picker empty.
