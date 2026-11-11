@@ -965,14 +965,20 @@ struct DiffCodeScrollView: NSViewRepresentable {
             let paragraphStyle = (line.isHunkStart && index > 0) ? hunkGapParagraphStyle : lineParagraphStyle
             piece.addAttribute(.paragraphStyle, value: paragraphStyle, range: fullRange)
 
-            // hljs only assigns explicit colors to tokens it recognizes; overlay just those runs
-            // on top of the kind-based default so unclassified characters keep the fallback color.
-            if let highlighted = validSnapshot?.lines[line.id] {
-                let highlightedNS = NSAttributedString(highlighted)
-                highlightedNS.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: highlightedNS.length)) { value, range, _ in
-                    guard let value, range.location + range.length <= contentLength else { return }
-                    let color = (value as? NSColor).flatMap { DiffSyntaxColors.commentColor(replacing: $0, for: line.kind) } ?? value
-                    piece.addAttribute(.foregroundColor, value: color, range: range)
+            // A highlighted line's unclassified text takes the theme's `base` color (as the hljs
+            // CSS cascade did); each token then overlays its own role color.
+            if let snapshot = validSnapshot, let tokens = snapshot.lines[line.id] {
+                piece.addAttribute(
+                    .foregroundColor,
+                    value: DiffSyntaxColors.color(for: .base, isDark: snapshot.isDark, lineKind: line.kind),
+                    range: NSRange(location: 0, length: contentLength)
+                )
+                for token in tokens where Int(token.location) + Int(token.length) <= contentLength {
+                    piece.addAttribute(
+                        .foregroundColor,
+                        value: DiffSyntaxColors.color(for: token.role, isDark: snapshot.isDark, lineKind: line.kind),
+                        range: token.range
+                    )
                 }
             }
 

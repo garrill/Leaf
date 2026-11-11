@@ -4,12 +4,31 @@ import AppKit
 /// `Settings` scene (no `WindowGroup`) — see its comment for why.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         resetStateIfRequestedForUITesting()
         _ = UpdaterHolder.shared
 
         showMainWindow()
+        startMemoryPressureMonitoring()
+    }
+
+    /// When macOS reports memory pressure, drop every cache that can be rebuilt from git on
+    /// demand (file lists, diffs, syntax tokens, the highlight.js context).
+    private func startMemoryPressureMonitoring() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                if let appState = self?.mainWindowController?.appState {
+                    appState.purgeCaches()
+                } else {
+                    SyntaxHighlighter.purge()
+                }
+            }
+        }
+        source.activate()
+        memoryPressureSource = source
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -1,11 +1,9 @@
 import AppKit
-import HighlightSwift
 
 /// Per-token-role syntax highlighting colors for the diff view's code. Values below start from
-/// HighlightSwift's built-in `.xcode` light/dark themes (comments and strings
-/// customised; `#rrggbbaa` alpha works since hljs HTML goes through `NSAttributedString`'s
-/// WebKit import) — but each role is broken into its own named constant (rather than one opaque CSS
-/// blob) so the Diff Theme Editor web tool can regenerate this file with different colors.
+/// highlight.js's `.xcode` light/dark themes (comments and strings customised; `#rrggbbaa`
+/// alpha is supported) — but each role is broken into its own named constant (rather than one
+/// opaque CSS blob) so the Diff Theme Editor web tool can regenerate this file with different colors.
 enum DiffSyntaxColors {
     struct Role {
         let light: String
@@ -25,34 +23,45 @@ enum DiffSyntaxColors {
     static let selector = Role(light: "#9b703f", dark: "#9b703f")
 
     /// Comment color on added/removed lines — `comment` tinted toward the row's green/red, since
-    /// the plain translucent black/white barely picks up the pale row background. Not part of
-    /// the hljs CSS (the highlighter doesn't know a line's kind); `commentColor(replacing:for:)`
-    /// swaps these in when the diff text is built.
+    /// the plain translucent black/white barely picks up the pale row background. The
+    /// highlighter doesn't know a line's kind; `color(for:isDark:lineKind:)` swaps these in when
+    /// the diff text is built.
     static let addedComment = Role(light: "#576B5E", dark: "#daf6e199")
     static let removedComment = Role(light: "#695454", dark: "#fbe0de99")
 
-    /// If `color` is the `comment` role's color (light or dark — whichever theme the highlight
-    /// was computed for), returns the tinted comment color for an added/removed line of the same
-    /// theme; otherwise `nil`. Matched on RGBA so a fully-opaque base-text run never matches.
-    static func commentColor(replacing color: NSColor, for kind: DiffLine.Kind) -> NSColor? {
-        let tinted: Role
-        switch kind {
-        case .added: tinted = addedComment
-        case .removed: tinted = removedComment
-        case .context, .meta: return nil
+    /// The color for a token `role` on a line of `lineKind`, resolved once per theme.
+    static func color(for role: SyntaxRole, isDark: Bool, lineKind: DiffLine.Kind) -> NSColor {
+        let palette = isDark ? darkPalette : lightPalette
+        if role == .comment {
+            switch lineKind {
+            case .added: return palette.addedComment
+            case .removed: return palette.removedComment
+            case .context, .meta: break
+            }
         }
-        if matches(color, comment.light) { return nsColor(tinted.light) }
-        if matches(color, comment.dark) { return nsColor(tinted.dark) }
-        return nil
+        return palette.roles[Int(role.rawValue)]
     }
 
-    private static func matches(_ color: NSColor, _ hex: String) -> Bool {
-        guard let a = color.usingColorSpace(.sRGB), let b = nsColor(hex) else { return false }
-        let tolerance: CGFloat = 0.01
-        return abs(a.redComponent - b.redComponent) < tolerance
-            && abs(a.greenComponent - b.greenComponent) < tolerance
-            && abs(a.blueComponent - b.blueComponent) < tolerance
-            && abs(a.alphaComponent - b.alphaComponent) < tolerance
+    private struct Palette {
+        let roles: [NSColor]
+        let addedComment: NSColor
+        let removedComment: NSColor
+    }
+
+    private static let lightPalette = palette(isDark: false)
+    private static let darkPalette = palette(isDark: true)
+
+    private static func palette(isDark: Bool) -> Palette {
+        func resolve(_ role: Role) -> NSColor { nsColor(isDark ? role.dark : role.light) ?? .labelColor }
+        let byRole: [SyntaxRole: Role] = [
+            .base: base, .comment: comment, .keyword: keyword, .variable: variable, .string: string,
+            .link: link, .number: number, .meta: meta, .type: type, .attribute: attribute, .selector: selector
+        ]
+        let count = Int(SyntaxRole.selector.rawValue) + 1
+        let roles = (0..<count).map { raw in
+            SyntaxRole(rawValue: UInt8(raw)).flatMap { byRole[$0] }.map(resolve) ?? .labelColor
+        }
+        return Palette(roles: roles, addedComment: resolve(addedComment), removedComment: resolve(removedComment))
     }
 
     /// Parses `#rrggbb` / `#rrggbbaa`.
@@ -64,31 +73,20 @@ enum DiffSyntaxColors {
         return NSColor(srgbRed: component(24), green: component(16), blue: component(8), alpha: component(0))
     }
 
-    /// Selector groupings mirror HighlightSwift's built-in `.xcode` theme (see the package's
-    /// `HighlightCSS.swift`) so language/token coverage is unaffected — only the colors differ.
-    private static let selectorGroups: [(selectors: String, role: Role)] = [
-        (".hljs,.hljs-subst", base),
-        (".hljs-comment,.hljs-quote", comment),
-        (".hljs-tag,.hljs-attribute,.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-name", keyword),
-        (".hljs-variable,.hljs-template-variable", variable),
-        (".hljs-code,.hljs-string,.hljs-meta .hljs-string,.hljs-meta-string", string),
-        (".hljs-regexp,.hljs-link", link),
-        (".hljs-title,.hljs-symbol,.hljs-bullet,.hljs-number", number),
-        (".hljs-section,.hljs-meta", meta),
-        (".hljs-class .hljs-title,.hljs-type,.hljs-built_in,.hljs-builtin-name,.hljs-params,.hljs-title.class_", type),
-        (".hljs-attr", attribute),
-        (".hljs-selector-id,.hljs-selector-class", selector)
+    /// hljs CSS class selectors per role, mirroring highlight.js's `.xcode` theme so
+    /// language/token coverage is unaffected — only the colors differ. Resolved against hljs's
+    /// span classes by `SyntaxRoleResolver` with CSS precedence (specificity, then rule order).
+    nonisolated static let selectorRoles: [(selectors: String, role: SyntaxRole)] = [
+        (".hljs,.hljs-subst", .base),
+        (".hljs-comment,.hljs-quote", .comment),
+        (".hljs-tag,.hljs-attribute,.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-name", .keyword),
+        (".hljs-variable,.hljs-template-variable", .variable),
+        (".hljs-code,.hljs-string,.hljs-meta .hljs-string,.hljs-meta-string", .string),
+        (".hljs-regexp,.hljs-link", .link),
+        (".hljs-title,.hljs-symbol,.hljs-bullet,.hljs-number", .number),
+        (".hljs-section,.hljs-meta", .meta),
+        (".hljs-class .hljs-title,.hljs-type,.hljs-built_in,.hljs-builtin-name,.hljs-params,.hljs-title.class_", .type),
+        (".hljs-attr", .attribute),
+        (".hljs-selector-id,.hljs-selector-class", .selector)
     ]
-
-    private static func css(isDark: Bool) -> String {
-        var rules = ["pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}"]
-        rules += selectorGroups.map { "\($0.selectors){color:\(isDark ? $0.role.dark : $0.role.light)}" }
-        rules.append(".hljs-doctag,.hljs-strong{font-weight:700}")
-        rules.append(".hljs-formula,.hljs-emphasis{font-style:italic}")
-        return rules.joined()
-    }
-
-    static func colors(isDark: Bool) -> HighlightColors {
-        .custom(css: css(isDark: isDark))
-    }
 }

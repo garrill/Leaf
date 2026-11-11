@@ -15,8 +15,8 @@ struct ImageDiffView: View {
 
     @State private var mode: Mode = .sideBySide
 
-    private var oldImage: NSImage? { appState.imageDiffOld.flatMap(NSImage.init(data:)) }
-    private var newImage: NSImage? { appState.imageDiffNew.flatMap(NSImage.init(data:)) }
+    private var oldImage: NSImage? { appState.imageDiffOldImage }
+    private var newImage: NSImage? { appState.imageDiffNewImage }
 
     var body: some View {
         if oldImage == nil || newImage == nil {

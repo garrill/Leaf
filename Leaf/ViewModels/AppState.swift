@@ -173,8 +173,16 @@ final class AppState {
     }
 
     var diffText: String = ""
-    var imageDiffOld: Data?
-    var imageDiffNew: Data?
+    /// Raw image bytes for an image file's before/after. Each is decoded into an `NSImage` once
+    /// per change (below) rather than by `ImageDiffView` on every `body` pass.
+    var imageDiffOld: Data? {
+        didSet { imageDiffOldImage = imageDiffOld.flatMap(NSImage.init(data:)) }
+    }
+    var imageDiffNew: Data? {
+        didSet { imageDiffNewImage = imageDiffNew.flatMap(NSImage.init(data:)) }
+    }
+    private(set) var imageDiffOldImage: NSImage?
+    private(set) var imageDiffNewImage: NSImage?
     /// True when the current selection's diff was skipped because the file is too large to
     /// render (see `GitRepository.isFileTooLargeToDiff`) — `DiffView` shows a placeholder instead
     /// of ever handing the text to `DiffCodeTextView`.
@@ -410,9 +418,16 @@ final class AppState {
 
     /// Selection data is immutable for a particular repository state. Keeping it here makes
     /// back/forward history navigation and revisiting a file instantaneous, while the watcher
-    /// below clears it as soon as Git or the working tree changes.
-    private var changedFilesCache: [ChangeSource: ChangedFilesCacheValue] = [:]
-    private var diffTextCache: [DiffCacheKey: DiffCacheValue] = [:]
+    /// below clears it as soon as Git or the working tree changes. Both are LRU-bounded — without
+    /// a cap, a long session clicking through a big repo's history kept every file list and
+    /// every diff (each up to the 5 MB blob cap) it had ever shown.
+    private var changedFilesCache = BoundedCache<ChangeSource, ChangedFilesCacheValue>(costLimit: 50_000) {
+        // Roughly entries held; floor of 1 so empty lists still count towards the budget.
+        max($0.files.count + $0.statusEntries.count, 1)
+    }
+    private var diffTextCache = BoundedCache<DiffCacheKey, DiffCacheValue>(costLimit: 16 * 1024 * 1024) {
+        $0.text.utf8.count + 64
+    }
     private var selectionCacheGeneration = 0
     private var repositoryRefreshGeneration = 0
     private var uncommittedSummaryGeneration = 0
@@ -422,6 +437,15 @@ final class AppState {
         uncommittedSummaryGeneration &+= 1
         changedFilesCache.removeAll()
         diffTextCache.removeAll()
+    }
+
+    /// Called on system memory pressure (`AppDelegate`). Only drops data that can be recomputed
+    /// from git on the next selection — what's on screen stays as-is. Generations aren't bumped,
+    /// so in-flight loads still land.
+    func purgeCaches() {
+        changedFilesCache.removeAll()
+        diffTextCache.removeAll()
+        SyntaxHighlighter.purge()
     }
 
     func addRepoViaPicker() {
@@ -2072,7 +2096,7 @@ final class AppState {
                       self.selectedRepoURL == repoURL,
                       self.selectionCacheGeneration == cacheGeneration else { return }
                 let source = ChangeSource.commit(commit)
-                guard self.changedFilesCache[source] == nil else { continue }
+                guard !self.changedFilesCache.contains(source) else { continue }
                 guard let files = await Task.detached(priority: .utility, operation: {
                     try? repo.filesChanged(in: commit)
                 }).value else { continue }

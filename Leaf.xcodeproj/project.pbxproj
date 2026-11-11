@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		2C6E3B4C57E9A0D835F76A72 /* HighlightSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 44EC0817DFFC7A3788D34941 /* HighlightSwift */; };
 		B17D5FA46F1840EDA98813FB /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = EDA48EABA71D4085A399A5FE /* Sparkle */; };
 /* End PBXBuildFile section */
 
@@ -70,7 +69,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2C6E3B4C57E9A0D835F76A72 /* HighlightSwift in Frameworks */,
 				B17D5FA46F1840EDA98813FB /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -132,7 +130,6 @@
 			);
 			name = Leaf;
 			packageProductDependencies = (
-				44EC0817DFFC7A3788D34941 /* HighlightSwift */,
 				EDA48EABA71D4085A399A5FE /* Sparkle */,
 			);
 			productName = Leaf;
@@ -218,7 +215,6 @@
 			mainGroup = FBFA9B17300E806A00AC97F6;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				8FAA94362965E3A6EE6F75C8 /* XCRemoteSwiftPackageReference "HighlightSwift" */,
 				958394CA704340238E85A791 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -427,7 +423,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_TEAM = VL4Z3W8N24;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -441,7 +437,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.3;
+				MARKETING_VERSION = 0.7.4;
 				PRODUCT_BUNDLE_IDENTIFIER = garrill.Leaf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -466,7 +462,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_TEAM = VL4Z3W8N24;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -480,7 +476,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.3;
+				MARKETING_VERSION = 0.7.4;
 				PRODUCT_BUNDLE_IDENTIFIER = garrill.Leaf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -616,14 +612,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		8FAA94362965E3A6EE6F75C8 /* XCRemoteSwiftPackageReference "HighlightSwift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/appstefan/HighlightSwift";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.1.0;
-			};
-		};
 		958394CA704340238E85A791 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
@@ -635,11 +623,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		44EC0817DFFC7A3788D34941 /* HighlightSwift */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 8FAA94362965E3A6EE6F75C8 /* XCRemoteSwiftPackageReference "HighlightSwift" */;
-			productName = HighlightSwift;
-		};
 		EDA48EABA71D4085A399A5FE /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 958394CA704340238E85A791 /* XCRemoteSwiftPackageReference "Sparkle" */;

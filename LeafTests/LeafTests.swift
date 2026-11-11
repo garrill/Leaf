@@ -8,7 +8,6 @@
 import Testing
 import Foundation
 import AppKit
-import HighlightSwift
 @testable import Leaf
 
 /// Spins up a real throwaway repo (or bare repo) in a temp directory per test, and cleans it
@@ -1193,18 +1192,122 @@ private extension GitRepository.StashApplyOutcome {
 }
 
 @Suite struct DiffSyntaxColorTests {
-    /// The tinted-comment swap identifies comment runs by their exact RGBA, so it silently
-    /// no-ops if the highlighter's HTML import ever alters the comment color (e.g. drops alpha).
-    @Test(arguments: [false, true])
-    func highlightedCommentColorIsRecognised(isDark: Bool) async throws {
-        let attributed = try #require(await CodeHighlighter.attributedText("let x = 1 // note", language: .swift, isDark: isDark))
-        let ns = NSAttributedString(attributed)
-        let commentStart = (ns.string as NSString).range(of: "// note").location
-        let color = try #require(ns.attribute(.foregroundColor, at: commentStart, effectiveRange: nil) as? NSColor)
-        #expect(DiffSyntaxColors.commentColor(replacing: color, for: .added) != nil)
-        #expect(DiffSyntaxColors.commentColor(replacing: color, for: .context) == nil)
+    /// End to end through the real bundled highlight.js: a trailing comment comes back as a
+    /// `.comment` token at the right offset, and that role picks up the tinted color on +/- lines.
+    @Test func highlightedCommentIsTokenizedAndTinted() async throws {
+        let text = "let x = 1 // note"
+        let lines = try #require(await SyntaxHighlighter.tokens(for: text, language: "swift"))
+        #expect(lines.count == 1)
+        let commentStart = (text as NSString).range(of: "// note").location
+        let comment = try #require(lines[0].first { $0.role == .comment })
+        #expect(Int(comment.location) == commentStart)
+        #expect(Int(comment.length) == 7)
+        #expect(lines[0].first?.role == .keyword && lines[0].first?.location == 0)
 
-        let keywordColor = try #require(ns.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
-        #expect(DiffSyntaxColors.commentColor(replacing: keywordColor, for: .added) == nil)
+        for isDark in [false, true] {
+            let plain = DiffSyntaxColors.color(for: .comment, isDark: isDark, lineKind: .context)
+            #expect(DiffSyntaxColors.color(for: .comment, isDark: isDark, lineKind: .added) != plain)
+            #expect(DiffSyntaxColors.color(for: .keyword, isDark: isDark, lineKind: .added)
+                    == DiffSyntaxColors.color(for: .keyword, isDark: isDark, lineKind: .context))
+        }
+    }
+
+    /// Leading indentation must survive: offsets are relative to the untrimmed text.
+    @Test func leadingWhitespaceKeepsOffsetsAligned() async throws {
+        let text = "    return nil\n}"
+        let lines = try #require(await SyntaxHighlighter.tokens(for: text, language: "swift"))
+        #expect(lines.count == 2)
+        #expect(lines[0].first { $0.role == .keyword }?.location == 4)
+    }
+
+    @Test func unknownLanguageIsNotHighlighted() async {
+        #expect(await SyntaxHighlighter.tokens(for: "(defn f [] 1)", language: "clojure") == nil)
+    }
+}
+
+@Suite struct HighlightHTMLParserTests {
+    private func tokens(_ html: String) -> [[SyntaxToken]] {
+        HighlightHTMLParser.parse(html).tokens
+    }
+
+    @Test func entitiesDecodeToSingleCharacters() {
+        let result = HighlightHTMLParser.parse(#"a &lt;<span class="hljs-string">&quot;x&amp;y&quot;</span>&#x27;"#)
+        // a, space, <, "x&y", '
+        #expect(result.decodedUTF16Count == 9)
+        #expect(result.tokens == [[SyntaxToken(location: 3, length: 5, role: .string)]])
+    }
+
+    @Test func multiLineSpanIsSplitPerLine() {
+        let result = HighlightHTMLParser.parse("x <span class=\"hljs-comment\">/* a\nbb\n c */</span> y")
+        #expect(result.tokens == [
+            [SyntaxToken(location: 2, length: 4, role: .comment)],
+            [SyntaxToken(location: 0, length: 2, role: .comment)],
+            [SyntaxToken(location: 0, length: 5, role: .comment)]
+        ])
+        #expect(result.decodedUTF16Count == "x /* a\nbb\n c */ y".utf16.count)
+    }
+
+    @Test func nestedSpanInheritsAndSubstResetsToBase() {
+        let html = #"<span class="hljs-string">"a<span class="hljs-subst">\(b)</span>c"</span>"#
+        #expect(tokens(html) == [[
+            SyntaxToken(location: 0, length: 2, role: .string),
+            SyntaxToken(location: 6, length: 2, role: .string)
+        ]])
+    }
+
+    @Test func descendantAndCompoundSelectorsResolveLikeCSS() {
+        // `.hljs-meta .hljs-string` → string (beats inherited meta); `.hljs-title.class_` → type,
+        // more specific than plain `.hljs-title` (number).
+        #expect(tokens(#"<span class="hljs-meta">#if <span class="hljs-string">"x"</span></span>"#) == [[
+            SyntaxToken(location: 0, length: 4, role: .meta),
+            SyntaxToken(location: 4, length: 3, role: .string)
+        ]])
+        #expect(tokens(#"<span class="hljs-title class_">Foo</span> <span class="hljs-title">bar</span>"#) == [[
+            SyntaxToken(location: 0, length: 3, role: .type),
+            SyntaxToken(location: 4, length: 3, role: .number)
+        ]])
+        #expect(tokens(#"<span class="hljs-class"><span class="hljs-title">Foo</span></span>"#) == [[
+            SyntaxToken(location: 0, length: 3, role: .type)
+        ]])
+    }
+
+    @Test func offsetsAreUTF16() {
+        // "é" is 1 UTF-16 unit (2 UTF-8 bytes); "😀" is 2 units (4 bytes).
+        let result = HighlightHTMLParser.parse(#"é😀<span class="hljs-keyword">let</span>"#)
+        #expect(result.tokens == [[SyntaxToken(location: 3, length: 3, role: .keyword)]])
+        #expect(result.decodedUTF16Count == "é😀let".utf16.count)
+    }
+}
+
+@Suite struct BoundedCacheTests {
+    @Test func evictsLeastRecentlyUsedByCost() {
+        var cache = BoundedCache<String, Int>(costLimit: 10) { $0 }
+        cache["a"] = 4
+        cache["b"] = 4
+        _ = cache["a"] // a is now more recent than b
+        cache["c"] = 4 // over budget → evicts b
+        #expect(cache.contains("a"))
+        #expect(!cache.contains("b"))
+        #expect(cache.contains("c"))
+        #expect(cache.totalCost == 8)
+    }
+
+    @Test func oversizedValueIsNotStoredAndReplacesExisting() {
+        var cache = BoundedCache<String, Int>(costLimit: 10) { $0 }
+        cache["a"] = 3
+        cache["b"] = 2
+        cache["a"] = 11
+        #expect(!cache.contains("a"))
+        #expect(cache.contains("b"))
+        #expect(cache.totalCost == 2)
+    }
+
+    @Test func overwriteUpdatesCost() {
+        var cache = BoundedCache<String, Int>(costLimit: 10) { $0 }
+        cache["a"] = 3
+        cache["a"] = 5
+        #expect(cache.totalCost == 5)
+        cache["a"] = nil
+        #expect(cache.totalCost == 0 && cache.count == 0)
     }
 }

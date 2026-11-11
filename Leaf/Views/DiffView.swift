@@ -1,5 +1,4 @@
 import AppKit
-import HighlightSwift
 import SwiftUI
 
 struct DiffLine: Identifiable {
@@ -461,7 +460,7 @@ struct DiffView: View {
 
     /// Highlights the diff by reconstructing each hunk's old side (context + removed lines) and
     /// new side (context + added lines) as one text block per side, in order, and sending each
-    /// block through HighlightSwift as a single call. This needs no extra git blob fetches — the
+    /// block through `SyntaxHighlighter` as a single call. This needs no extra git blob fetches — the
     /// hunk already carries both sides' text — and gives hljs enough surrounding code to tokenize
     /// multi-line constructs (strings, comments) far better than highlighting line-by-line, at the
     /// cost of occasionally mis-tokenizing right at a hunk boundary.
@@ -488,7 +487,7 @@ struct DiffView: View {
         let lines = Self.parse(targetDiffText)
         guard !lines.isEmpty, lines.count <= Self.maxHighlightedLineCount else { return }
 
-        let language = appState.selectedFile.flatMap { CodeHighlighter.language(forPath: $0.path) }
+        let language = appState.selectedFile.flatMap { SyntaxHighlighter.language(forPath: $0.path) }
         let isDark = colorScheme == .dark
 
         var oldSideRun: [DiffLine] = []
@@ -521,82 +520,32 @@ struct DiffView: View {
         }
         flush()
 
-        var result: [Int: AttributedString] = [:]
+        var result: [Int: [SyntaxToken]] = [:]
 
-        // Runs are independent hunk-side blocks, so highlight them all concurrently rather than
-        // waiting on one JS round-trip before starting the next.
-        await withTaskGroup(of: (run: [DiffLine], attributed: AttributedString?, text: String).self) { group in
+        // Runs are independent hunk-side blocks. They're all queued at once (the JS engine is an
+        // actor, so they're evaluated one after another off the main thread) rather than awaiting
+        // each round-trip before submitting the next.
+        await withTaskGroup(of: (run: [DiffLine], tokens: [[SyntaxToken]]?).self) { group in
             for run in runs {
                 // Joined here, on the main actor, since `DiffLine.displayText` is a main-actor
                 // isolated computed property (this file's default isolation) and can't be
                 // referenced via key path from inside the concurrently-executing child task below.
                 let text = run.map(\.displayText).joined(separator: "\n")
                 group.addTask {
-                    let attributed = await CodeHighlighter.attributedText(text, language: language, isDark: isDark)
-                    return (run, attributed, text)
+                    (run, await SyntaxHighlighter.tokens(for: text, language: language))
                 }
             }
-            for await (run, attributed, text) in group {
-                guard let attributed else { continue }
-                let pieces = Self.splitLines(Self.restoringTrimmedWhitespace(original: text, highlighted: attributed))
-                guard pieces.count == run.count else { continue }
-                for (line, piece) in zip(run, pieces) {
-                    result[line.id] = piece
+            for await (run, tokens) in group {
+                guard let tokens, tokens.count == run.count else { continue }
+                for (line, lineTokens) in zip(run, tokens) {
+                    result[line.id] = lineTokens
                 }
             }
         }
 
         if !Task.isCancelled {
-            highlightSnapshot = HighlightSnapshot(diffText: targetDiffText, lines: result)
+            highlightSnapshot = HighlightSnapshot(diffText: targetDiffText, isDark: isDark, lines: result)
         }
-    }
-
-    /// `HighlightSwift`'s `Highlight.attributedText` runs the block through
-    /// `text.trimmingCharacters(in: .whitespacesAndNewlines)` before handing it to hljs, so its
-    /// returned `AttributedString` is shorter than what was sent whenever a run starts or ends
-    /// with whitespace — almost always true here, since a hunk's first line carries the code's
-    /// own leading indentation. Left uncorrected, splitting that shorter string back into
-    /// per-line pieces desyncs every character offset against `displayText`, so color ranges for
-    /// a hunk's first (and sometimes last) line land a few characters early — visible as syntax
-    /// colors that look "cut" mid-token right at the top of each hunk. Re-padding with the exact
-    /// same (unstyled) whitespace that was trimmed restores alignment before `splitLines` runs.
-    private static func restoringTrimmedWhitespace(original: String, highlighted: AttributedString) -> AttributedString {
-        let charset = CharacterSet.whitespacesAndNewlines
-        var leadingEnd = original.startIndex
-        while leadingEnd < original.endIndex, original[leadingEnd].unicodeScalars.allSatisfy(charset.contains) {
-            leadingEnd = original.index(after: leadingEnd)
-        }
-        var trailingStart = original.endIndex
-        while trailingStart > leadingEnd {
-            let previous = original.index(before: trailingStart)
-            guard original[previous].unicodeScalars.allSatisfy(charset.contains) else { break }
-            trailingStart = previous
-        }
-        let leadingWhitespace = String(original[original.startIndex..<leadingEnd])
-        let trailingWhitespace = String(original[trailingStart..<original.endIndex])
-        guard !leadingWhitespace.isEmpty || !trailingWhitespace.isEmpty else { return highlighted }
-
-        var result = AttributedString(leadingWhitespace)
-        result += highlighted
-        result += AttributedString(trailingWhitespace)
-        return result
-    }
-
-    /// Splits a syntax-highlighted block back into its per-line pieces on "\n", preserving each
-    /// line's token colors, since HighlightSwift only hands back one AttributedString per call.
-    private static func splitLines(_ attributed: AttributedString) -> [AttributedString] {
-        var lines: [AttributedString] = []
-        var start = attributed.startIndex
-        var index = attributed.startIndex
-        while index < attributed.endIndex {
-            if attributed.characters[index] == "\n" {
-                lines.append(AttributedString(attributed[start..<index]))
-                start = attributed.index(afterCharacter: index)
-            }
-            index = attributed.index(afterCharacter: index)
-        }
-        lines.append(AttributedString(attributed[start..<attributed.endIndex]))
-        return lines
     }
 }
 
@@ -606,7 +555,13 @@ struct HighlightSnapshot {
     /// are unchanged — e.g. a color-scheme toggle re-highlighting the same lines in new colors.
     let id = UUID()
     let diffText: String
-    let lines: [Int: AttributedString]
+    /// The theme the token colors are resolved for. Tokens themselves are theme-independent
+    /// (so a light/dark toggle re-highlights straight from `SyntaxHighlighter`'s cache).
+    let isDark: Bool
+    /// Per diff-line id. Present only for lines hljs actually highlighted — every character of
+    /// such a line gets a color (`base` for unclassified text), matching what the browser-style
+    /// CSS cascade would produce; absent lines keep the diff's plain kind-based color.
+    let lines: [Int: [SyntaxToken]]
 }
 
 private struct HighlightRequest: Equatable {
