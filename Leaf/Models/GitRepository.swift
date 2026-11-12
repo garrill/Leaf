@@ -298,6 +298,37 @@ nonisolated struct GitRepository {
         return trimmed.isEmpty ? nil : Self.redactedRemoteURL(trimmed)
     }
 
+    // MARK: Commit message completion sources
+
+    /// Every uncommitted change (staged and unstaged) against `HEAD`, zero context lines, cut to
+    /// `byteLimit` — what `CompletionIdentifiers.extract` mines for symbol names. Falls back to
+    /// the index diff in a repo with no commits yet. `nil` when git fails.
+    func uncommittedDiffForCompletion(byteLimit: Int = 1_000_000) -> String? {
+        let arguments = ["diff", "-U0", "--no-color", "--no-ext-diff"]
+        var output = (try? runRaw(arguments + ["HEAD"])).flatMap { $0.exitCode == 0 ? $0.stdout : nil }
+        if output == nil {
+            output = (try? runRaw(arguments + ["--cached"])).flatMap { $0.exitCode == 0 ? $0.stdout : nil }
+        }
+        guard let output else { return nil }
+        return output.utf8.count > byteLimit ? String(decoding: output.utf8.prefix(byteLimit), as: UTF8.self) : output
+    }
+
+    /// Author name/email plus `Co-authored-by` trailers for the newest `limit` commits, in the
+    /// record format `CompletionPeople.parse` reads (fields `\u{1F}`, trailers `\u{1E}`,
+    /// records `\u{1D}`). `nil` with no commits.
+    func authorLogForCompletion(limit: Int = 2000) -> String? {
+        try? run([
+            "log", "-n\(limit)", "--no-color",
+            "--format=%aN%x1f%aE%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1e)%x1d",
+        ])
+    }
+
+    /// `git config user.email`, or `nil` when unset.
+    func configuredUserEmail() -> String? {
+        let email = (try? run(["config", "user.email"]))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return email?.isEmpty == false ? email : nil
+    }
+
     /// Strips credentials from a URL-form remote: the password always, and for http(s) the
     /// user too — "https://TOKEN@github.com/…" puts a token in the user slot. An ssh user
     /// ("ssh://git@host/…") and scp-style remotes ("git@host:path") carry no secret and are

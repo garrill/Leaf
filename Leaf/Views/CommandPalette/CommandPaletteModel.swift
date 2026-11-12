@@ -45,14 +45,7 @@ struct PaletteItem: Identifiable {
         case command
     }
 
-    /// What fuzzy (subsequence) matching runs against: the title, some other text (a file's
-    /// full path), or nothing — commit summaries are long prose, where scattered single-letter
-    /// hits are noise rather than intent.
-    enum FuzzyTarget {
-        case title
-        case text(String)
-        case none
-    }
+    typealias FuzzyTarget = MatchFuzzyTarget
 
     let id: String
     let kind: Kind
@@ -132,14 +125,7 @@ struct PaletteItem: Identifiable {
     }
 
     /// Precomputed once at build time so filtering never lowercases per keystroke.
-    fileprivate(set) var titleKey: [Character] = []
-    fileprivate(set) var titleWordStarts: Set<Int> = []
-    fileprivate(set) var keywordKeys: [String] = []
-    /// `nil` when fuzzy matching is off; the title's own key/word starts for `.title`.
-    fileprivate(set) var fuzzyKey: [Character]?
-    fileprivate(set) var fuzzyWordStarts: Set<Int> = []
-    /// Whether `fuzzyKey` is the title itself — only then do fuzzy hits map to title letters.
-    fileprivate(set) var fuzzyMatchesTitle = false
+    let matchKey: MatchKey
 
     init(
         id: String,
@@ -166,7 +152,36 @@ struct PaletteItem: Identifiable {
         self.keywords = keywords
         self.boost = boost
         self.perform = perform
+        matchKey = MatchKey(title: title, keywords: keywords, fuzzy: fuzzy)
+    }
+}
+
+/// What fuzzy (subsequence) matching runs against: the title, some other text (a file's
+/// full path), or nothing — commit summaries are long prose, where scattered single-letter
+/// hits are noise rather than intent.
+nonisolated enum MatchFuzzyTarget {
+    case title
+    case text(String)
+    case none
+}
+
+/// The lowercased, precomputed form of a row's searchable text, scored by `PaletteMatcher`.
+/// Shared by the command palette's `PaletteItem` and the commit field's `CompletionItem`.
+nonisolated struct MatchKey {
+    let titleKey: [Character]
+    let titleWordStarts: Set<Int>
+    let keywordKeys: [String]
+    /// `nil` when fuzzy matching is off; the title's own key/word starts for `.title`.
+    let fuzzyKey: [Character]?
+    let fuzzyWordStarts: Set<Int>
+    /// Whether `fuzzyKey` is the title itself — only then do fuzzy hits map to title letters.
+    let fuzzyMatchesTitle: Bool
+    /// The original title's character count — highlighting is skipped when lowercasing changed it.
+    let titleCount: Int
+
+    init(title: String, keywords: [String] = [], fuzzy: MatchFuzzyTarget = .title) {
         titleKey = Array(title.lowercased())
+        titleCount = title.count
         titleWordStarts = PaletteMatcher.wordStarts(in: titleKey)
         keywordKeys = keywords.map { $0.lowercased() }
         switch fuzzy {
@@ -178,8 +193,11 @@ struct PaletteItem: Identifiable {
             let key = Array(text.lowercased())
             fuzzyKey = key
             fuzzyWordStarts = PaletteMatcher.wordStarts(in: key)
+            fuzzyMatchesTitle = false
         case .none:
             fuzzyKey = nil
+            fuzzyWordStarts = []
+            fuzzyMatchesTitle = false
         }
     }
 }
@@ -188,13 +206,17 @@ struct PaletteItem: Identifiable {
 /// prefix of a word in the title, contiguous substring, keyword prefix, then a fuzzy
 /// subsequence (every query character in order) that favours word-start and consecutive hits.
 /// `nil` means no match at all.
-enum PaletteMatcher {
+nonisolated enum PaletteMatcher {
     static let maxResults = 9
     /// Ranking penalty for an unavailable command, so it never beats a runnable match of the
     /// same tier but still shows when it's what was typed.
     static let unavailablePenalty = 60
 
     static func score(query: [Character], item: PaletteItem) -> Int? {
+        score(query: query, key: item.matchKey)
+    }
+
+    static func score(query: [Character], key item: MatchKey) -> Int? {
         guard !query.isEmpty else { return 0 }
         let title = item.titleKey
         if title == query { return 1000 }
@@ -231,7 +253,7 @@ enum PaletteMatcher {
         scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.index < $1.index }
         return scored.prefix(limit).map { entry in
             var item = items[entry.index]
-            item.matchedIndices = matchedIndices(query: queryKey, in: item)
+            item.matchedIndices = matchedIndices(query: queryKey, in: item.matchKey)
             return item
         }
     }
@@ -242,9 +264,9 @@ enum PaletteMatcher {
     /// fuzzy key (a file's directory) — bolding look-alike letters in the title would claim a
     /// match that isn't there. Offsets are only meaningful when lowercasing kept the title's
     /// character count — otherwise nothing is highlighted rather than the wrong letters.
-    static func matchedIndices(query: [Character], in item: PaletteItem) -> [Int] {
+    static func matchedIndices(query: [Character], in item: MatchKey) -> [Int] {
         let title = item.titleKey
-        guard !query.isEmpty, title.count == item.title.count else { return [] }
+        guard !query.isEmpty, title.count == item.titleCount else { return [] }
         if let index = firstIndex(of: query, in: title) {
             return Array(index..<(index + query.count))
         }

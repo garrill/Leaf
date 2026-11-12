@@ -38,6 +38,8 @@ struct CommitTextField: NSViewRepresentable {
     var isSingleParagraph = false
     var onSubmit: () -> Void = {}
     var onCommandReturn: () -> Void = {}
+    /// The completion popup (`` ` `` files, `@` people, `#` issues, …), shared by both fields.
+    var completion: CommitCompletionController?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -142,9 +144,34 @@ struct CommitTextField: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            parent.completion?.update(textView: textView, isSummary: parent.field == .summary)
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.completion?.update(textView: textView, isSummary: parent.field == .summary)
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            // While the completion popup is open it owns the arrows, Return, Tab and Esc —
+            // checked first so Return doesn't commit and Tab doesn't jump fields.
+            if let completion = parent.completion, completion.isVisible {
+                switch commandSelector {
+                case #selector(NSResponder.moveUp(_:)):
+                    completion.moveSelection(by: -1)
+                    return true
+                case #selector(NSResponder.moveDown(_:)):
+                    completion.moveSelection(by: 1)
+                    return true
+                case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+                    if completion.accept() { return true }
+                case #selector(NSResponder.cancelOperation(_:)):
+                    completion.cancel()
+                    return true
+                default:
+                    break
+                }
+            }
             switch commandSelector {
             case #selector(NSResponder.insertNewline(_:)) where parent.isSingleParagraph:
                 parent.onSubmit()
@@ -175,6 +202,7 @@ struct CommitTextField: NSViewRepresentable {
         }
 
         func didResignFirstResponder() {
+            parent.completion?.dismiss()
             if parent.focus == parent.field {
                 parent.focus = nil
             }
@@ -215,6 +243,7 @@ final class CommitNSTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection([.shift, .command, .option, .control])
         if event.keyCode == 36, modifiers == .command {
+            coordinator?.parent.completion?.dismiss()
             coordinator?.parent.onCommandReturn()
             return
         }

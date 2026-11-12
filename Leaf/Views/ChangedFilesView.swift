@@ -667,6 +667,8 @@ private struct CommitFooterView: View {
     /// the description field out from under the very click meant to focus it.
     @State private var isEditing = false
     @State private var collapseTask: Task<Void, Never>?
+    /// Completion popup for both fields (`` ` `` files/symbols, `@` people, `#` issues, …).
+    @State private var completion = CommitCompletionController()
     @Environment(\.displayScale) private var displayScale
 
     private static let cornerRadius: CGFloat = 18
@@ -706,7 +708,9 @@ private struct CommitFooterView: View {
                 scheduleCollapse()
             }
         }
+        .onAppear { completion.appState = appState }
         .onDisappear {
+            completion.dismiss()
             collapseTask?.cancel()
             // Torn down mid-edit (a commit replacing this footer) — the field can't report its
             // own lost focus by then, so clear it here or the list's key handling stays off.
@@ -733,7 +737,8 @@ private struct CommitFooterView: View {
                 maxLines: 2,
                 isSingleParagraph: true,
                 onSubmit: commitIfPossible,
-                onCommandReturn: commitIfPossible
+                onCommandReturn: commitIfPossible,
+                completion: completion
             )
 
             if isExpanded {
@@ -753,7 +758,8 @@ private struct CommitFooterView: View {
                     focus: $focusedField,
                     minLines: 3,
                     maxLines: 3,
-                    onCommandReturn: commitIfPossible
+                    onCommandReturn: commitIfPossible,
+                    completion: completion
                 )
                 .transition(.opacity)
             }

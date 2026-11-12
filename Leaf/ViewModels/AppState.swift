@@ -446,6 +446,7 @@ final class AppState {
         changedFilesCache.removeAll()
         diffTextCache.removeAll()
         SyntaxHighlighter.purge()
+        CompletionDataStore.shared.purge()
     }
 
     func addRepoViaPicker() {
