@@ -105,7 +105,16 @@ struct LeafApp: App {
                 Button("Fetch") { AppStateHolder.shared?.fetchRemote() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                     .disabled(!repoSelection.hasSelection)
-                Button("Remove") { AppStateHolder.shared?.removeSelectedRepo() }
+                // The main menu sees ⌘⌫ before a focused text field's own key bindings do, so
+                // while editing text (commit message/description, rename, search…) hand the
+                // keystroke back as the native "delete to beginning of line" instead.
+                Button("Remove") {
+                    if let textView = NSApp.keyWindow?.firstResponder as? NSTextView, textView.isEditable {
+                        textView.doCommand(by: #selector(NSResponder.deleteToBeginningOfLine(_:)))
+                    } else {
+                        AppStateHolder.shared?.removeSelectedRepo()
+                    }
+                }
                     .keyboardShortcut(.delete, modifiers: [.command])
                     .disabled(!repoSelection.hasSelection)
 
