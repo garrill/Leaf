@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0]
+
+* Added command palette
+* Added commit descriptions
+* Double click a repo to open in default program
+* Improved chunk highlighting
+* Improved syntax highlighting
+* Improved git error message display
+* Fixed keyboard navigation getting swallowed by hidden commit message
+* Renaming repos works more reliably
+* Optimised to reduce memory footprint 
+
 ## [0.7.0]
 
 * Fixed MacOS 27 bugs
