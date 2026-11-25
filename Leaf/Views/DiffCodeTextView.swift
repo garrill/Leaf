@@ -931,6 +931,11 @@ struct DiffCodeScrollView: NSViewRepresentable {
         // read straight off the layout manager's line fragments — grows along with it everywhere.
         let lineParagraphStyle = NSMutableParagraphStyle()
         lineParagraphStyle.lineHeightMultiple = 1.3
+        // AppKit's default is a dozen fixed 28pt stops, which ignores the font size and runs out on
+        // very deep lines. Dropping them makes every tab use the repeating interval instead.
+        let characterWidth = (" " as NSString).size(withAttributes: [.font: bodyFont]).width
+        lineParagraphStyle.tabStops = []
+        lineParagraphStyle.defaultTabInterval = CGFloat(tabColumns(for: lines)) * characterWidth
         // Same, but with extra space before the paragraph — applied only to a hunk's first line
         // (other than the file's very first line) so consecutive hunks read as visually separate
         // blocks instead of one continuous run, now that there's no `@@ ... @@` header row between
@@ -938,6 +943,8 @@ struct DiffCodeScrollView: NSViewRepresentable {
         let hunkGapParagraphStyle = NSMutableParagraphStyle()
         hunkGapParagraphStyle.lineHeightMultiple = 1.3
         hunkGapParagraphStyle.paragraphSpacingBefore = hunkGapHeight
+        hunkGapParagraphStyle.tabStops = []
+        hunkGapParagraphStyle.defaultTabInterval = lineParagraphStyle.defaultTabInterval
         // Only trust the snapshot if it was computed for this exact diff text — a still-running
         // (or superseded) highlight task must never paint stale colors onto newly-selected text.
         let validSnapshot = highlightSnapshot?.diffText == diffText ? highlightSnapshot : nil
@@ -1003,6 +1010,27 @@ struct DiffCodeScrollView: NSViewRepresentable {
         }
 
         return (result, metadata)
+    }
+
+    // MARK: - Tab width
+
+    /// Tab width in columns, one value for the whole diff: 2 when at least 10% of its non-blank
+    /// tab-indented lines are 5 or more tabs deep, otherwise 4. A proportion rather than the
+    /// maximum depth, so one outlier line can't shrink everything.
+    static func tabColumns(for lines: [DiffLine]) -> Int {
+        var indentedCount = 0
+        var deepCount = 0
+        let tab = UInt8(ascii: "\t")
+        for line in lines where line.kind != .meta {
+            // `text` still carries its one-character diff marker.
+            let content = line.text.utf8.dropFirst()
+            guard content.first == tab,
+                  content.contains(where: { $0 != tab && $0 != UInt8(ascii: " ") && $0 != UInt8(ascii: "\r") })
+            else { continue }
+            indentedCount += 1
+            if content.prefix(while: { $0 == tab }).count >= 5 { deepCount += 1 }
+        }
+        return deepCount > 0 && deepCount * 10 >= indentedCount ? 2 : 4
     }
 
     // MARK: - Word diff

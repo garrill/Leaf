@@ -343,6 +343,9 @@ final class AppState {
         case currentIntoOther
     }
 
+    /// The branch shown in the compare sheet; `nil` while it's closed.
+    var branchComparisonTarget: GitBranch?
+
     var isMergeSheetPresented = false
     /// Set by the branch dropdown's "Merge into X" item before presenting the sheet; left `nil` by
     /// the standalone toolbar button, so the sheet's own branch picker starts empty.
@@ -812,6 +815,24 @@ final class AppState {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    func comparisonBase(for branch: GitBranch) -> (name: String, isDefaultBranch: Bool)? {
+        GitRepository.comparisonBase(
+            for: branch.name, defaultBranch: defaultBranchName,
+            localBranches: branches.map(\.name), current: selectedBranch?.name
+        )
+    }
+
+    /// Loads the compare sheet's data off the main thread.
+    func loadBranchComparison(_ branch: GitBranch) async throws -> GitRepository.BranchComparison {
+        guard let repo = currentRepository, let base = comparisonBase(for: branch) else {
+            throw GitError.commandFailed("There is no branch to compare with.")
+        }
+        let name = branch.name
+        return try await Task.detached(priority: .userInitiated) {
+            try repo.compareBranch(name, base: base.name, isDefaultBranch: base.isDefaultBranch)
+        }.value
+    }
+
     /// Deletes a local branch after confirming — this is a force delete (`git branch -D`), so the
     /// confirmation alert is the only safety net; there's no separate "unmerged changes" warning.
     func deleteBranch(_ branch: GitBranch) {
@@ -983,6 +1004,11 @@ final class AppState {
 
     func deleteTag(_ tag: GitTag) {
         guard let repo = currentRepository else { return }
+        guard Self.confirmDestructiveAction(
+            title: "Delete tag \u{201C}\(tag.name)\u{201D}?",
+            message: "This deletes the local tag only. A copy already pushed to the remote is left in place.",
+            confirmButtonTitle: "Delete"
+        ) else { return }
         do {
             try repo.deleteTag(named: tag.name)
             errorMessage = nil
@@ -1362,9 +1388,14 @@ final class AppState {
     /// they were pre-commit, and `refreshRepositoryState()`'s usual selection heuristic then
     /// naturally lands back on `.workingChanges` showing those same changes again.
     func undoLastCommit() {
-        guard let repo = currentRepository,
-              case .commit(let commit) = selectedSource,
-              commits.first?.sha == commit.sha else { return }
+        guard case .commit(let commit) = selectedSource else { return }
+        undoLastCommit(commit)
+    }
+
+    /// As above, for a caller that names the commit rather than relying on the selection (the
+    /// command palette). Overwrites the commit message fields with the undone commit's.
+    func undoLastCommit(_ commit: GitCommit) {
+        guard let repo = currentRepository, commits.first?.sha == commit.sha else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {

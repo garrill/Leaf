@@ -119,6 +119,9 @@ struct BranchListView: View {
         .sheet(isPresented: $appState.isNewTagSheetPresented) {
             NewTagSheet(appState: appState, isPresented: $appState.isNewTagSheetPresented)
         }
+        .sheet(item: $appState.branchComparisonTarget) { branch in
+            BranchInfoSheet(appState: appState, branch: branch)
+        }
         .sheet(isPresented: $appState.isMergeSheetPresented) {
             MergeSheet(appState: appState, isPresented: $appState.isMergeSheetPresented)
         }

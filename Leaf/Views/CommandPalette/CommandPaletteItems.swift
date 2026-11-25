@@ -46,6 +46,7 @@ enum CommandPaletteItems {
         }
         if let scope {
             items += branchItems(appState: appState, scope: scope)
+            items += tagItems(appState: appState, scope: scope)
             items += gitCommandItems(appState: appState, scope: scope)
             items += copyAndGitHubItems(appState: appState, scope: scope)
         }
@@ -141,6 +142,9 @@ enum CommandPaletteItems {
                 })
             }
             alternates.append(PaletteAlternate(modifier: .shift, title: "Copy Name") { copy(branch.name) })
+            alternates.append(PaletteAlternate(modifier: .command, title: "Delete…") { [weak appState] in
+                appState?.deleteBranch(branch)
+            })
             item.alternates = alternates
             items.append(item)
         }
@@ -162,6 +166,165 @@ enum CommandPaletteItems {
             items.append(item)
         }
         return items
+    }
+
+    // MARK: - Tags
+
+    /// Return jumps to the tagged commit, when it's in the loaded history.
+    private static func tagItems(appState: AppState, scope: String) -> [PaletteItem] {
+        guard !appState.isRepositoryBusy, !appState.tags.isEmpty else { return [] }
+        let commitsBySHA = Dictionary(appState.commits.map { ($0.sha, $0) }, uniquingKeysWith: { first, _ in first })
+        return appState.tags.map { tag in
+            let commit = commitsBySHA[tag.sha]
+            var item = PaletteItem(
+                id: "tag:\(tag.name)",
+                kind: .commit,
+                title: tag.name,
+                scope: scope,
+                subtitle: commit.map { "Tag on \($0.shortSha) \($0.summary)" },
+                symbol: "tag",
+                keywords: ["tag"],
+                boost: -15,
+                perform: { [weak appState] in
+                    guard let appState, let commit else { return }
+                    appState.selectSource(.commit(commit))
+                    appState.focusedColumn = .branches
+                    appState.revealSelectionRequest &+= 1
+                }
+            )
+            item.actionLabel = "Show Commit"
+            item.unavailableReason = commit == nil ? "Tagged commit isn\u{2019}t in the loaded history" : nil
+            item.alternates = [
+                PaletteAlternate(modifier: .shift, title: "Copy Name") { copy(tag.name) },
+                PaletteAlternate(modifier: .option, title: "Delete Tag…") { [weak appState] in appState?.deleteTag(tag) },
+            ]
+            return item
+        }
+    }
+
+    // MARK: - Argument pickers
+
+    /// A command whose argument is picked from a list ("Merge ‹branch›"): typing `prefix` (or
+    /// one of `aliases`) and a space lists `candidates`, filtered by whatever follows.
+    struct ArgumentPicker {
+        struct Candidate {
+            let name: String
+            var subtitle: String?
+            let perform: () -> Void
+        }
+
+        let key: String
+        /// The command's own row, e.g. "Delete Branch…".
+        let title: String
+        /// What comes before the argument, without its trailing space: "Delete Branch".
+        let prefix: String
+        /// Lowercased. Longest first where one starts another.
+        var aliases: [String] = []
+        let placeholder: String
+        let symbol: String
+        let actionLabel: String
+        var keywords: [String] = []
+        /// Why no candidate can be picked right now.
+        var unavailable: String?
+        let candidates: [Candidate]
+
+        var phrases: [String] { [prefix.lowercased()] + aliases }
+
+        /// What the command's own row says it's missing.
+        var typeHint: String { "Type \(prefix) \u{2039}\(placeholder)\u{203A}" }
+    }
+
+    static func argumentPickers(appState: AppState) -> [ArgumentPicker] {
+        typealias Candidate = ArgumentPicker.Candidate
+        let busy = appState.isRepositoryBusy ? "Wait for the current operation to finish" : nil
+        let otherBranches = appState.branches.filter { !$0.isCurrent }
+        let noOthers = otherBranches.isEmpty ? "No other branches" : nil
+
+        let switchable = otherBranches.map { branch in
+            Candidate(name: branch.name) { [weak appState] in appState?.selectBranch(branch) }
+        } + appState.remoteOnlyBranches.map { remote in
+            Candidate(name: remote.name, subtitle: "Check out \(remote.upstreamRef)") { [weak appState] in
+                appState?.checkoutRemoteBranch(remote)
+            }
+        }
+        let current = appState.selectedBranch?.name
+        let mergeReason = busy
+            ?? (appState.isSyncing ? "Wait for the current sync to finish" : nil)
+            ?? (appState.isMergeInProgress ? "A merge is already in progress" : nil)
+            ?? (current == nil ? "Not on a branch" : nil)
+            ?? noOthers
+
+        return [
+            ArgumentPicker(
+                key: "Switch to Branch", title: "Switch to Branch…", prefix: "Switch to",
+                aliases: ["checkout", "check out", "switch"], placeholder: "branch",
+                symbol: "arrow.triangle.branch", actionLabel: "Switch", keywords: ["checkout", "branch"],
+                unavailable: busy ?? (switchable.isEmpty ? "No other branches" : nil), candidates: switchable
+            ),
+            ArgumentPicker(
+                key: "Merge", title: "Merge…", prefix: "Merge", placeholder: "branch",
+                symbol: "arrow.triangle.merge", actionLabel: "Merge", keywords: ["combine", "integrate"],
+                unavailable: mergeReason,
+                candidates: otherBranches.map { branch in
+                    Candidate(name: branch.name, subtitle: current.map { "Into \($0)" }) { [weak appState] in
+                        appState?.requestMerge(of: branch)
+                    }
+                }
+            ),
+            ArgumentPicker(
+                key: "Delete Branch", title: "Delete Branch…", prefix: "Delete Branch",
+                aliases: ["remove branch"], placeholder: "branch",
+                symbol: "trash", actionLabel: "Delete…", keywords: ["remove"],
+                unavailable: busy ?? noOthers,
+                candidates: otherBranches.map { branch in
+                    Candidate(name: branch.name) { [weak appState] in appState?.deleteBranch(branch) }
+                }
+            ),
+            ArgumentPicker(
+                key: "Delete Tag", title: "Delete Tag…", prefix: "Delete Tag",
+                aliases: ["remove tag"], placeholder: "tag",
+                symbol: "tag.slash", actionLabel: "Delete…", keywords: ["remove"],
+                unavailable: busy ?? (appState.tags.isEmpty ? "No tags" : nil),
+                candidates: appState.tags.map { tag in
+                    Candidate(name: tag.name) { [weak appState] in appState?.deleteTag(tag) }
+                }
+            ),
+        ]
+    }
+
+    /// The rows for a picker `query` has entered — empty when it's entered none (or that picker
+    /// is unavailable; its own row then says why).
+    static func pickerItems(for query: String, pickers: [ArgumentPicker], scope: String?) -> [PaletteItem] {
+        for picker in pickers where picker.unavailable == nil {
+            guard let typed = pickerArgument(in: query, after: picker.phrases) else { continue }
+            // Matched against the bare names, so "merge m" isn't matched by the "m" in "Merge".
+            let names = picker.candidates.enumerated().map { index, candidate in
+                PaletteItem(id: String(index), kind: .command, title: candidate.name, symbol: picker.symbol, perform: {})
+            }
+            let matches = typed.isEmpty
+                ? Array(names.prefix(PaletteMatcher.maxResults))
+                : PaletteMatcher.filter(names, query: typed)
+            return matches.compactMap { match in
+                guard let index = Int(match.id) else { return nil }
+                let candidate = picker.candidates[index]
+                let lead = picker.prefix + " "
+                var item = PaletteItem(
+                    id: "pick:\(picker.key):\(index):\(candidate.name)",
+                    kind: .command,
+                    title: lead + candidate.name,
+                    scope: scope,
+                    subtitle: candidate.subtitle,
+                    symbol: picker.symbol,
+                    fuzzy: .none,
+                    perform: candidate.perform
+                )
+                item.actionLabel = picker.actionLabel
+                item.usageKey = "git:\(picker.key)"
+                item.matchedIndices = match.matchedIndices.map { $0 + lead.count }
+                return item
+            }
+        }
+        return []
     }
 
     // MARK: - Commits & files
@@ -347,6 +510,26 @@ enum CommandPaletteItems {
             ) { $0.commitOrCompleteMerge() }
         }
 
+        add(
+            "Pull Then Push",
+            subtitle: branchName.map { "Pull \($0), then push it" },
+            symbol: "arrow.up.arrow.down",
+            keywords: ["sync", "update"],
+            unavailable: syncReason ?? notOnBranch
+                ?? (appState.hasUpstream ? nil : "No upstream branch to pull from")
+                ?? (appState.aheadCount == 0 ? "Nothing to push" : nil)
+        ) { $0.pullThenPush() }
+        let lastCommit = appState.commits.first
+        add(
+            "Undo Last Commit",
+            subtitle: lastCommit.map { "\($0.shortSha) \($0.summary)" },
+            symbol: "arrow.uturn.backward",
+            keywords: ["reset", "revert", "uncommit"],
+            unavailable: undoUnavailableReason(appState: appState)
+        ) { state in
+            if let lastCommit { state.undoLastCommit(lastCommit) }
+        }
+
         let noChanges = appState.uncommittedChangeCount == 0 ? "No uncommitted changes" : nil
         add(
             "Show Uncommitted Changes",
@@ -368,7 +551,62 @@ enum CommandPaletteItems {
         ) { $0.stashAllChanges() }
         add("Discard All Changes…", key: "Discard All Changes", symbol: "trash", keywords: ["reset", "revert", "clean"], unavailable: noChanges) { $0.discardAllChanges() }
 
+        let showsWorking = appState.selectedSource == .workingChanges
+        let checkedCount = appState.checkedFilePaths.count
+        add(
+            "Check All Files",
+            symbol: "checklist.checked",
+            keywords: ["stage", "select"],
+            unavailable: noChanges ?? (showsWorking && checkedCount == appState.changedFiles.count ? "All files are checked" : nil)
+        ) { $0.setAllWorkingChangesChecked(true) }
+        add(
+            "Uncheck All Files",
+            symbol: "checklist.unchecked",
+            keywords: ["unstage", "deselect"],
+            unavailable: noChanges ?? (showsWorking && checkedCount == 0 ? "No files are checked" : nil)
+        ) { $0.setAllWorkingChangesChecked(false) }
+
+        // Conflicted files are left out of these three, as in the file list's context menu.
+        let selectedFiles = showsWorking ? appState.changedFiles.filter { appState.selectedFilePaths.contains($0.path) } : []
+        let actionable = selectedFiles.filter { $0.status != .conflicted }
+        let noSelection = !showsWorking ? "Select Uncommitted Changes first"
+            : selectedFiles.isEmpty ? "No file selected"
+            : actionable.isEmpty ? "Resolve the conflict first" : nil
+        let selectedNoun = actionable.count > 1 ? "Selected Files" : "Selected File"
+        let selectedSubtitle = actionable.count == 1 ? actionable.first?.path
+            : actionable.isEmpty ? nil : countLabel(actionable.count, "file", "files")
+        add("Stash \(selectedNoun)", key: "Stash Selected", subtitle: selectedSubtitle, symbol: "tray.and.arrow.down", keywords: ["shelve"], unavailable: noSelection) {
+            $0.stashChanges(for: actionable)
+        }
+        add("Discard \(selectedNoun)…", key: "Discard Selected", subtitle: selectedSubtitle, symbol: "trash", keywords: ["revert", "reset"], unavailable: noSelection) {
+            $0.discardChanges(for: actionable)
+        }
+        add("Ignore \(selectedNoun)", key: "Ignore Selected", subtitle: selectedSubtitle, symbol: "eye.slash", keywords: ["gitignore"], unavailable: noSelection) {
+            $0.ignoreFiles(actionable)
+        }
+        let conflicted = selectedFiles.count == 1 ? selectedFiles.first { $0.status == .conflicted } : nil
+        add(
+            "Mark Resolved",
+            subtitle: conflicted?.path,
+            symbol: "checkmark.seal",
+            keywords: ["conflict", "merge"],
+            unavailable: conflicted == nil ? "Select a conflicted file first" : nil
+        ) { state in
+            if let conflicted { state.requestMarkResolved(conflicted) }
+        }
+
         let noStash = appState.stashCount == 0 ? "No stashed changes" : nil
+        add(
+            "Show Stashed Changes",
+            subtitle: noStash == nil ? countLabel(appState.stashFileCount, "file", "files") : nil,
+            symbol: "tray",
+            keywords: ["view", "select"],
+            unavailable: noStash ?? (appState.selectedSource == .stash ? "Already showing" : nil)
+        ) { state in
+            state.selectSource(.stash)
+            state.focusedColumn = .branches
+            state.revealSelectionRequest &+= 1
+        }
         add(
             "Restore Stash",
             subtitle: noStash == nil ? countLabel(appState.stashFileCount, "file", "files") : nil,
@@ -387,30 +625,35 @@ enum CommandPaletteItems {
             argumentPrefix: "New Branch ",
             argumentPlaceholder: "branch name"
         ) { $0.isNewBranchSheetPresented = true }
-        let head = appState.commits.first
+        let tagTarget = targetCommit(appState: appState)
         add(
             "New Tag…",
             key: "New Tag",
-            subtitle: head.map { "On \($0.shortSha) \($0.summary)" },
+            subtitle: tagTarget.map { "On \($0.shortSha) \($0.summary)" },
             symbol: "tag",
-            keywords: ["create", "release", "version"],
-            unavailable: head == nil ? "No commits to tag yet" : nil,
+            keywords: ["create", "release", "version", "commit"],
+            unavailable: tagTarget == nil ? "No commits to tag yet" : nil,
             argumentPrefix: "New Tag ",
             argumentPlaceholder: "tag name"
         ) { state in
-            state.newTagTargetCommit = head
+            state.newTagTargetCommit = tagTarget
             state.isNewTagSheetPresented = true
         }
         if appState.isMergeInProgress {
             add("Abort Merge", symbol: "xmark.circle", keywords: ["cancel", "merge"]) { $0.abortMerge() }
-        } else if AppState.isMergeHelperEnabled {
+        }
+        for picker in argumentPickers(appState: appState) {
+            let opensSheet = picker.key == "Merge" && AppState.isMergeHelperEnabled
             add(
-                "Merge…",
-                key: "Merge",
-                symbol: "arrow.triangle.merge",
-                keywords: ["combine", "integrate"],
-                unavailable: syncReason ?? notOnBranch
-            ) { $0.openMergeSheet(prefilledOtherBranch: nil) }
+                picker.title,
+                key: picker.key,
+                symbol: picker.symbol,
+                keywords: picker.keywords,
+                unavailable: picker.unavailable ?? (opensSheet ? nil : picker.typeHint),
+                needsArgument: picker.unavailable == nil && !opensSheet,
+                argumentPrefix: picker.prefix + " ",
+                argumentPlaceholder: picker.placeholder
+            ) { if opensSheet { $0.openMergeSheet(prefilledOtherBranch: nil) } }
         }
         add(
             "Prune Gone Branches",
@@ -429,6 +672,31 @@ enum CommandPaletteItems {
         if appState.uncommittedChangeCount == 0 { return "No changes to commit" }
         if appState.selectedSource != .workingChanges { return "Select Uncommitted Changes to commit" }
         if appState.checkedFilePaths.isEmpty { return "No files checked" }
+        return nil
+    }
+
+    /// The selected commit when browsing history, otherwise HEAD.
+    private static func targetCommit(appState: AppState) -> GitCommit? {
+        if case .commit(let commit)? = appState.selectedSource { return commit }
+        return appState.commits.first
+    }
+
+    /// Why the newest commit can't be undone. Undoing puts its message back in the commit
+    /// fields, so a draft already there blocks it rather than being silently overwritten.
+    private static func undoUnavailableReason(appState: AppState) -> String? {
+        guard let head = appState.commits.first else { return "No commits yet" }
+        if appState.selectedBranch == nil { return "Not on a branch" }
+        if appState.isSyncing || appState.isPushingCommit { return "Wait for the current sync to finish" }
+        if appState.isCommitting { return "Already committing" }
+        if appState.isMergeInProgress { return "A merge is in progress" }
+        if appState.commits.count < 2 { return "The first commit can\u{2019}t be undone" }
+        let isPushed = appState.hasUpstream
+            ? appState.aheadCount == 0
+            : appState.hasOriginRemote && !appState.unpushedCommitSHAs.contains(head.sha)
+        if isPushed { return "Last commit is already pushed" }
+        if !(appState.commitMessage + appState.commitDescription).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Clear the commit message draft first"
+        }
         return nil
     }
 
@@ -452,17 +720,14 @@ enum CommandPaletteItems {
             items.append(item)
         }
 
-        // The selected commit when browsing history, otherwise HEAD.
-        let targetCommit: GitCommit? = {
-            if case .commit(let commit)? = appState.selectedSource { return commit }
-            return appState.commits.first
-        }()
+        let targetCommit = targetCommit(appState: appState)
 
         if let branch = appState.selectedBranch?.name {
             add("Copy Branch Name", subtitle: branch, symbol: "doc.on.doc", keywords: ["clipboard", "copy", "branch"]) { copy(branch) }
         }
         if let commit = targetCommit {
             add("Copy Commit SHA", subtitle: "\(commit.shortSha) \(commit.summary)", symbol: "doc.on.doc", keywords: ["clipboard", "copy", "hash"]) { copy(commit.sha) }
+            add("Copy Commit Title", subtitle: commit.summary, symbol: "doc.on.doc", keywords: ["clipboard", "copy", "message"]) { copy(commit.summary) }
         }
         if let remote = appState.originRemoteURL {
             add("Copy Remote URL", subtitle: remote, symbol: "doc.on.doc", keywords: ["clipboard", "copy", "origin"]) { copy(remote) }
@@ -520,6 +785,7 @@ enum CommandPaletteItems {
             symbol: String,
             shortcut: String? = nil,
             keywords: [String] = [],
+            unavailable: String? = nil,
             _ perform: @escaping () -> Void
         ) {
             let key = key ?? title
@@ -534,6 +800,7 @@ enum CommandPaletteItems {
                 keywords: keywords,
                 perform: perform
             )
+            item.unavailableReason = unavailable
             item.usageKey = "menu:\(key)"
             items.append(item)
         }
@@ -548,6 +815,32 @@ enum CommandPaletteItems {
             add("Choose Icon…", scope: scope, symbol: "photo", keywords: ["image", "icon", "repository"]) { [weak appState] in appState?.chooseIconForSelectedRepo() }
             add("Remove…", scope: scope, symbol: "minus.circle", shortcut: "⌘⌫", keywords: ["delete", "repository"]) { [weak appState] in appState?.removeSelectedRepo() }
             add("Find in Diff", scope: scope, symbol: "magnifyingglass", shortcut: "⌘F", keywords: ["search"]) { [weak appState] in appState?.showDiffFind() }
+            let noMatches = appState.diffFindMatchCount == 0 ? "No matches \u{2013} use Find in Diff first" : nil
+            add("Find Next in Diff", scope: scope, symbol: "chevron.right", shortcut: "⌘G", keywords: ["search"], unavailable: noMatches) { [weak appState] in appState?.diffFindNext() }
+            add("Find Previous in Diff", scope: scope, symbol: "chevron.left", shortcut: "⇧⌘G", keywords: ["search"], unavailable: noMatches) { [weak appState] in appState?.diffFindPrevious() }
+
+            let store = appState.sidebarStore
+            if let repo = store.repos.first(where: { $0.url == appState.selectedRepoURL }) {
+                for folder in store.folders {
+                    add(
+                        "Move to \u{201C}\(folder.name)\u{201D}",
+                        key: "Move to Group:\(folder.id)",
+                        scope: scope,
+                        symbol: "folder.badge.plus",
+                        keywords: ["group", "sidebar", "organize"],
+                        unavailable: repo.folderID == folder.id ? "Already in this group" : nil
+                    ) { [weak store] in store?.moveRepo(id: repo.id, intoFolder: folder.id, before: nil) }
+                }
+                if !store.folders.isEmpty || repo.folderID != nil {
+                    add(
+                        "Move to Top Level",
+                        scope: scope,
+                        symbol: "arrow.up.left",
+                        keywords: ["group", "sidebar", "organize"],
+                        unavailable: repo.folderID == nil ? "Already at the top level" : nil
+                    ) { [weak store] in store?.moveRepoToTopLevel(id: repo.id, before: nil) }
+                }
+            }
         }
 
         add(SidebarVisibility.shared.isCollapsed ? "Show Sidebar" : "Hide Sidebar", key: "Toggle Sidebar", menu: "View", symbol: "sidebar.left", shortcut: "⌃⌘S") {
@@ -621,6 +914,7 @@ enum CommandPaletteItems {
         }
 
         guard let scope else { return items }
+        items += pickerItems(for: query, pickers: argumentPickers(appState: appState), scope: scope)
         let busyReason = appState.isRepositoryBusy ? "Wait for the current operation to finish" : nil
 
         if let name = argument(in: text, after: ["new branch", "create branch", "branch"]).map(sanitizedRefName) {
@@ -646,26 +940,26 @@ enum CommandPaletteItems {
         }
 
         if let name = argument(in: text, after: ["new tag", "create tag", "tag"]).map(sanitizedRefName) {
-            let head = appState.commits.first
+            let target = targetCommit(appState: appState)
             let exists = appState.tags.contains { $0.name == name }
             var item = PaletteItem(
                 id: "dynamic:newTag",
                 kind: .command,
                 title: "New Tag \u{201C}\(name)\u{201D}",
                 scope: scope,
-                subtitle: head.map { "On \($0.shortSha) \($0.summary)" },
+                subtitle: target.map { "On \($0.shortSha) \($0.summary)" },
                 symbol: "tag",
                 fuzzy: .none,
                 perform: { [weak appState] in
-                    guard let head else { return }
-                    appState?.createTag(named: name, at: head.sha) { success in
+                    guard let target else { return }
+                    appState?.createTag(named: name, at: target.sha) { success in
                         if !success { presentError("Couldn\u{2019}t Create Tag", appState?.newTagErrorMessage) }
                     }
                 }
             )
             item.actionLabel = "Create"
             item.unavailableReason = busyReason
-                ?? (head == nil ? "No commits to tag yet" : nil)
+                ?? (target == nil ? "No commits to tag yet" : nil)
                 ?? (exists ? "A tag named \u{201C}\(name)\u{201D} already exists" : nil)
             item.ghostOverride = ""
             items.append(item)
@@ -744,6 +1038,17 @@ enum CommandPaletteItems {
             guard let range = text.range(of: phrase + " ", options: [.caseInsensitive, .anchored]) else { continue }
             let rest = text[range.upperBound...].trimmingCharacters(in: .whitespaces)
             return rest.isEmpty ? nil : rest
+        }
+        return nil
+    }
+
+    /// Like `argument(in:after:)`, but for a picker: the bare "merge " already counts, as an
+    /// empty argument (list everything). `query` is untrimmed — that trailing space is the signal.
+    nonisolated static func pickerArgument(in query: String, after phrases: [String]) -> String? {
+        let text = String(query.drop(while: \.isWhitespace))
+        for phrase in phrases {
+            guard let range = text.range(of: phrase + " ", options: [.caseInsensitive, .anchored]) else { continue }
+            return text[range.upperBound...].trimmingCharacters(in: .whitespaces)
         }
         return nil
     }

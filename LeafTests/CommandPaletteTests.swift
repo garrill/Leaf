@@ -84,6 +84,33 @@ private func item(_ title: String, keywords: [String] = [], boost: Int = 0) -> P
         #expect(model.ghost == .hint("Leaf \u{2013} Rename"))
     }
 
+    @Test func heldModifierNamesItsAlternateInTheGhost() {
+        let repo = SidebarRepo(id: UUID(), path: "/amricc", displayNameOverride: nil, iconPath: nil, folderID: nil, sortIndex: 0)
+        var repoItem = PaletteItem(id: "r", kind: .repo(repo), title: "amricc", symbol: "circle", perform: {})
+        repoItem.alternates = [PaletteAlternate(modifier: .command, title: "Open in Nova") {}]
+        var branch = PaletteItem(id: "b", kind: .branch, title: "main", symbol: "circle", perform: {})
+        branch.alternates = [PaletteAlternate(modifier: .shift, title: "Copy Name") {}]
+
+        let model = CommandPaletteModel()
+        model.reset(items: [repoItem, branch], suggestions: [repoItem])
+        model.heldModifier = .command
+        #expect(model.ghost == .completion("amricc \u{2013} Open in Nova"))
+        model.query = "am"
+        #expect(model.ghost == .completion("ricc \u{2013} Open in Nova"))
+        model.query = "ricc"
+        #expect(model.ghost == .hint("amricc \u{2013} Open in Nova"))
+        // No ⇧ alternate on the repo: the primary action stays.
+        model.heldModifier = .shift
+        #expect(model.ghost == .hint("amricc \u{2013} Open"))
+        model.query = "ma"
+        #expect(model.ghost == .completion("in \u{2013} Copy Name"))
+        model.heldModifier = nil
+        #expect(model.ghost == .completion("in"))
+        model.heldModifier = .command
+        model.reset(items: [repoItem], suggestions: [repoItem])
+        #expect(model.ghost == .completion("amricc \u{2013} Open"))
+    }
+
     @Test func selectionWraps() {
         let model = CommandPaletteModel()
         model.reset(items: [], suggestions: [item("A"), item("B"), item("C")])
@@ -237,6 +264,84 @@ private func item(_ title: String, keywords: [String] = [], boost: Int = 0) -> P
         model.query = "new branch x"
         #expect(model.ghost == nil)
         #expect(!model.acceptCompletion())
+    }
+}
+
+@MainActor @Suite struct PaletteArgumentPickerTests {
+    private func makeState() -> AppState {
+        let state = AppState()
+        state.branches = [
+            GitBranch(name: "main", isCurrent: true),
+            GitBranch(name: "develop", isCurrent: false),
+            GitBranch(name: "feature/login", isCurrent: false),
+        ]
+        state.selectedBranch = state.branches[0]
+        state.tags = [GitTag(name: "v1.0", sha: "abc")]
+        return state
+    }
+
+    private func titles(_ query: String, _ state: AppState) -> [String] {
+        CommandPaletteItems.pickerItems(for: query, pickers: CommandPaletteItems.argumentPickers(appState: state), scope: "Leaf").map(\.title)
+    }
+
+    @Test func bareCommandAndSpaceListsEveryCandidateButTheCurrentBranch() {
+        let state = makeState()
+        #expect(titles("Merge ", state) == ["Merge develop", "Merge feature/login"])
+        #expect(titles("merge", state).isEmpty)
+        #expect(titles("delete branch ", state) == ["Delete Branch develop", "Delete Branch feature/login"])
+        #expect(titles("delete tag ", state) == ["Delete Tag v1.0"])
+    }
+
+    @Test func argumentFiltersByNameOnlyAndAliasesWork() {
+        let state = makeState()
+        #expect(titles("merge log", state) == ["Merge feature/login"])
+        #expect(titles("merge main", state).isEmpty)
+        #expect(titles("checkout dev", state) == ["Switch to develop"])
+        #expect(titles("switch to dev", state) == ["Switch to develop"])
+        #expect(titles("switch dev", state) == ["Switch to develop"])
+    }
+
+    @Test func deleteAndCreatePhrasesDontCollide() {
+        let state = makeState()
+        func ids(_ query: String) -> [String] {
+            CommandPaletteItems.dynamicItems(for: query, appState: state, scope: "Leaf").map(\.id)
+        }
+        #expect(!ids("delete branch dev").contains("dynamic:newBranch"))
+        #expect(!ids("delete tag v1").contains("dynamic:newTag"))
+        #expect(ids("branch foo") == ["dynamic:newBranch"])
+        #expect(ids("tag foo") == ["dynamic:newTag"])
+    }
+
+    @Test func unavailablePickerListsNothing() {
+        let state = makeState()
+        state.isMergeInProgress = true
+        #expect(titles("merge ", state).isEmpty)
+        #expect(!titles("switch to ", state).isEmpty)
+    }
+
+    @Test func pickedRowsCompleteAndAreCappedAtNine() {
+        let state = makeState()
+        state.branches += (0..<20).map { GitBranch(name: "b\($0)", isCurrent: false) }
+        #expect(titles("merge ", state).count == PaletteMatcher.maxResults)
+        let model = CommandPaletteModel()
+        model.reset(items: [], suggestions: [], dynamicItems: {
+            CommandPaletteItems.dynamicItems(for: $0, appState: state, scope: "Leaf")
+        })
+        model.query = "merge dev"
+        #expect(model.ghost == .completion("elop \u{2013} Leaf"))
+        #expect(model.acceptCompletion())
+        #expect(model.query == "Merge develop")
+        #expect(model.selectedItem?.title == "Merge develop")
+    }
+
+    @Test func rowWaitingOnlyForItsArgumentIsSelectedByDefault() {
+        var merge = item("Merge…")
+        merge.unavailableReason = "Type Merge"
+        merge.needsArgument = true
+        let model = CommandPaletteModel()
+        model.reset(items: [merge, item("Emerge")], suggestions: [])
+        model.query = "merge"
+        #expect(model.selectedItem?.title == "Merge…")
     }
 }
 

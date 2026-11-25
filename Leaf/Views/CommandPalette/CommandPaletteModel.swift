@@ -340,6 +340,9 @@ final class CommandPaletteModel {
     }
     private(set) var results: [PaletteItem] = []
     var selectedIndex = 0
+    /// The modifier currently held down — the field's autofill then names the alternate action
+    /// Return would run ("Leaf – Open in Nova") instead of the primary one.
+    var heldModifier: PaletteModifier?
     /// Bumped to ask the text field to (re)claim first responder — e.g. each time the palette opens.
     private(set) var focusRequest = 0
 
@@ -360,6 +363,7 @@ final class CommandPaletteModel {
         self.suggestions = suggestions
         self.dynamicItems = dynamicItems
         query = ""
+        heldModifier = nil
         refilter()
         focusRequest &+= 1
     }
@@ -412,10 +416,20 @@ final class CommandPaletteModel {
         if let override = item.ghostOverride {
             return override.isEmpty ? nil : .completion(override)
         }
-        if query.isEmpty {
-            if case .repo = item.kind { return .completion(item.title + item.ghostTrailer) }
-            return .completion(item.displayTitle)
+        let alternateTrailer = heldModifier
+            .flatMap { item.alternate(for: $0) }
+            .map { " \u{2013} \($0.title)" }
+        // With no alternate, only a repo's action follows its name; other rows already carry
+        // their scope in `displayTitle`.
+        let fullTitle: String
+        if let alternateTrailer {
+            fullTitle = item.displayTitle + alternateTrailer
+        } else if case .repo = item.kind {
+            fullTitle = item.title + item.ghostTrailer
+        } else {
+            fullTitle = item.displayTitle
         }
+        if query.isEmpty { return .completion(fullTitle) }
         let lowered = query.lowercased()
         if let prefix = item.argumentPrefix, let placeholder = item.argumentPlaceholder {
             if lowered == prefix.lowercased() { return .completion("\u{2039}\(placeholder)\u{203A}") }
@@ -424,11 +438,10 @@ final class CommandPaletteModel {
             }
         }
         if item.title.lowercased().hasPrefix(lowered) {
-            let rest = String(item.title.dropFirst(query.count)) + item.ghostTrailer
+            let rest = String(item.title.dropFirst(query.count)) + (alternateTrailer ?? item.ghostTrailer)
             return rest.isEmpty ? nil : .completion(rest)
         }
-        if case .repo = item.kind { return .hint(item.title + item.ghostTrailer) }
-        return .hint(item.displayTitle)
+        return .hint(fullTitle)
     }
 
     /// Tab/→ at the end of the field: fill in the selected row's full title — or, for a command
@@ -457,7 +470,8 @@ final class CommandPaletteModel {
             results = dynamic + matched
         }
         // Land on something Return can actually run; an unavailable row is still selectable
-        // with the arrows (to read why), just never the default.
-        selectedIndex = results.firstIndex(where: \.isEnabled) ?? 0
+        // with the arrows (to read why), just never the default — except one only waiting for
+        // its argument, where Return fills in the prefix.
+        selectedIndex = results.firstIndex { $0.isEnabled || $0.needsArgument } ?? 0
     }
 }

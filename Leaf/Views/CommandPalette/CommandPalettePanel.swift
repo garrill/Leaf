@@ -10,6 +10,8 @@ final class CommandPalettePanel: NSPanel {
     /// ⌘↩ — the selected row's ⌘ alternate. Caught here because, like ⌘1–⌘9, it's a key
     /// equivalent and never reaches the field editor's `doCommandBy`.
     var onCommandReturn: (() -> Void)?
+    /// A modifier key went down or up.
+    var onModifierChange: ((PaletteModifier?) -> Void)?
     var onDismiss: (() -> Void)?
 
     init() {
@@ -53,6 +55,9 @@ final class CommandPalettePanel: NSPanel {
 
     /// A click in the transparent shadow margin around the card counts as clicking outside it.
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .flagsChanged {
+            onModifierChange?(PaletteModifier(flags: event.modifierFlags))
+        }
         if event.type == .leftMouseDown || event.type == .rightMouseDown,
            let contentView,
            !contentView.bounds.insetBy(dx: CommandPaletteView.shadowInset, dy: CommandPaletteView.shadowInset)
@@ -210,6 +215,12 @@ final class CommandPaletteController {
         panel.onCommandReturn = { [weak self] in
             guard let self, let item = self.model.selectedItem else { return }
             self.run(item, modifier: .command)
+        }
+        // The ⌘ still down from the ⌘K that opened the palette is never reported (only changes
+        // are), so opening doesn't flash the ⌘ alternate.
+        panel.onModifierChange = { [weak self] modifier in
+            guard let self, self.model.heldModifier != modifier else { return }
+            self.model.heldModifier = modifier
         }
         panel.onDismiss = { [weak self] in self?.dismiss() }
         return panel

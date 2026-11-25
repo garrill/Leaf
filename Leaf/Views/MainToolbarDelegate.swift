@@ -373,7 +373,7 @@ extension MainToolbarDelegate: NSMenuDelegate {
     }
 
     /// One branch entry: a checkmarked item when it's the checked-out branch, otherwise a submenu
-    /// with the checkout/merge/delete actions.
+    /// with the checkout/merge/compare/delete actions.
     private func branchMenuItem(_ branch: GitBranch) -> NSMenuItem {
         let item = NSMenuItem(title: branch.name, action: nil, keyEquivalent: "")
         if branch.isCurrent {
@@ -387,6 +387,13 @@ extension MainToolbarDelegate: NSMenuDelegate {
         let merge = menuItem("Merge into \(currentBranchName)", action: #selector(mergeBranch(_:)), object: branch)
         merge.isEnabled = !appState.isSyncing && !appState.isMergeInProgress
         submenu.addItem(merge)
+        let base = appState.comparisonBase(for: branch)
+        let compare = menuItem(
+            base.map { "Compare with \($0.name)…" } ?? "Compare…",
+            action: #selector(compareBranch(_:)), object: branch
+        )
+        compare.isEnabled = base != nil
+        submenu.addItem(compare)
         submenu.addItem(.separator())
         submenu.addItem(menuItem("Delete", action: #selector(deleteBranch(_:)), object: branch))
         item.submenu = submenu
@@ -424,6 +431,11 @@ extension MainToolbarDelegate: NSMenuDelegate {
     @objc private func mergeBranch(_ sender: NSMenuItem) {
         guard let branch = sender.representedObject as? GitBranch else { return }
         appState.requestMerge(of: branch)
+    }
+
+    @objc private func compareBranch(_ sender: NSMenuItem) {
+        guard let branch = sender.representedObject as? GitBranch else { return }
+        appState.branchComparisonTarget = branch
     }
 
     @objc private func openMergeSheet() {

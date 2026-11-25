@@ -867,6 +867,201 @@ nonisolated struct GitRepository {
         )
     }
 
+    /// Everything the branch compare sheet shows about a local branch, gathered without checking
+    /// it out. See `compareBranch(_:base:isDefaultBranch:)`.
+    struct BranchComparison {
+        enum Verdict: Equatable {
+            /// Every commit is in the base branch.
+            case merged
+            /// The commits aren't in the base's history, but their changes are (squash merge,
+            /// rebase, cherry-pick).
+            case contentIncluded
+            /// Nothing would be lost by deleting it (it's `merged` or `contentIncluded`), but it was
+            /// used within `recentUseInterval`, so it's probably still wanted.
+            case recentlyUsed
+            /// Not in the base, but every commit is on a remote (or in the base).
+            case backedUpOnRemote
+            /// `localOnlyCount` commits are neither in the base nor on any remote.
+            case unmerged(localOnlyCount: Int)
+            /// The default branch itself — compared for information only.
+            case notApplicable
+        }
+
+        enum Upstream: Equatable {
+            case none
+            case inSync(String)
+            /// `track` is git's own "ahead 1, behind 2".
+            case outOfSync(String, track: String)
+            case gone(String)
+        }
+
+        var baseName: String
+        var isDefaultBranch: Bool
+        /// Commits on the branch that aren't in the base.
+        var aheadCount: Int
+        /// Commits in the base that the branch doesn't have.
+        var behindCount: Int
+        var isContentIncluded: Bool
+        /// Commits that are neither in the base nor on any remote-tracking ref.
+        var localOnlyCount: Int
+        var upstream: Upstream
+        /// Set when the branch is checked out in a worktree, where git refuses to delete it.
+        var worktreePath: String?
+        var lastCommit: GitCommit?
+        /// Newest of the `aheadCount` commits.
+        var uniqueCommits: [GitCommit]
+        var lastFetchDate: Date?
+        /// Latest of the tip commit, the branch's own reflog (commits, creation, pulls) and
+        /// checkouts to or from it in this worktree.
+        var lastUsedDate: Date?
+
+        static let recentUseInterval: TimeInterval = 14 * 24 * 60 * 60
+
+        func verdict(asOf now: Date = Date()) -> Verdict {
+            if isDefaultBranch { return .notApplicable }
+            if aheadCount == 0 || isContentIncluded {
+                let isInUse = worktreePath != nil
+                let isRecent = lastUsedDate.map { now.timeIntervalSince($0) < Self.recentUseInterval } ?? false
+                if isInUse || isRecent { return .recentlyUsed }
+                return aheadCount == 0 ? .merged : .contentIncluded
+            }
+            return localOnlyCount == 0 ? .backedUpOnRemote : .unmerged(localOnlyCount: localOnlyCount)
+        }
+    }
+
+    /// What a branch should be compared with: the remote's default branch, else a local
+    /// `main`/`master`, else the current branch. The default branch itself is compared with the
+    /// current one. `nil` when there's nothing to compare with.
+    static func comparisonBase(
+        for branch: String, defaultBranch: String?, localBranches: [String], current: String?
+    ) -> (name: String, isDefaultBranch: Bool)? {
+        let mainline = defaultBranch ?? ["main", "master"].first { localBranches.contains($0) }
+        if let mainline, mainline != branch { return (mainline, false) }
+        guard let current, current != branch else { return nil }
+        return (current, mainline == branch)
+    }
+
+    /// Compares local `branch` with `base`, touching no refs, index or working tree. Both
+    /// `origin/<base>` and the local `<base>` count: the local one can be behind a merge made on
+    /// the server, or hold a merge that isn't pushed yet. Full ref names throughout, so a tag with
+    /// the same name is never picked up instead.
+    func compareBranch(
+        _ branch: String, base: String, isDefaultBranch: Bool, commitCap: Int = 20
+    ) throws -> BranchComparison {
+        let ref = "refs/heads/\(branch)"
+        let baseRefs = ["refs/remotes/origin/\(base)", "refs/heads/\(base)"].filter {
+            (try? run(["rev-parse", "--verify", "--quiet", "\($0)^{commit}"])) != nil
+        }
+        guard let primaryBase = baseRefs.first else {
+            throw GitError.commandFailed("The branch \u{201C}\(base)\u{201D} could not be found.")
+        }
+
+        let aheadCount = try commitCount([ref, "--not"] + baseRefs)
+        let behindCount = try commitCount([primaryBase, "--not", ref])
+        let localOnlyCount = aheadCount == 0 ? 0 : try commitCount([ref, "--not"] + baseRefs + ["--remotes"])
+        let isContentIncluded = aheadCount > 0 && baseRefs.contains { isContent(of: ref, includedIn: $0) }
+
+        let info = try run([
+            "for-each-ref",
+            "--format=%(upstream:short)%1f%(upstream:track,nobracket)%1f%(worktreepath)",
+            ref,
+        ])
+        .trimmingCharacters(in: .newlines)
+        .components(separatedBy: Self.fieldSeparator)
+        let upstreamName = info.first ?? ""
+        let track = info.count > 1 ? info[1] : ""
+        let worktreePath = info.count > 2 ? info[2] : ""
+
+        let upstream: BranchComparison.Upstream
+        if upstreamName.isEmpty {
+            upstream = .none
+        } else if track == "gone" {
+            upstream = .gone(upstreamName)
+        } else {
+            upstream = track.isEmpty ? .inSync(upstreamName) : .outOfSync(upstreamName, track: track)
+        }
+
+        let lastCommit = try commitLog(revisions: [ref], limit: 1).first
+        return BranchComparison(
+            baseName: base,
+            isDefaultBranch: isDefaultBranch,
+            aheadCount: aheadCount,
+            behindCount: behindCount,
+            isContentIncluded: isContentIncluded,
+            localOnlyCount: localOnlyCount,
+            upstream: upstream,
+            worktreePath: worktreePath.isEmpty ? nil : worktreePath,
+            lastCommit: lastCommit,
+            uniqueCommits: aheadCount > 0
+                ? try commitLog(revisions: [ref, "--not"] + baseRefs, limit: commitCap) : [],
+            lastFetchDate: lastFetchDate(),
+            lastUsedDate: [lastCommit?.date, lastReflogDate(ofBranch: branch)].compactMap { $0 }.max()
+        )
+    }
+
+    private func commitCount(_ revisions: [String]) throws -> Int {
+        let output = try run(["rev-list", "--count"] + revisions + ["--"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let count = Int(output) else {
+            throw GitError.commandFailed("Could not count the commits on this branch.")
+        }
+        return count
+    }
+
+    /// Whether `base` already has `ref`'s changes even though it lacks its commits. Any failure
+    /// (conflicts, unrelated histories, a git too old for `--write-tree`) answers false, so
+    /// uncertainty never reads as "safe to delete".
+    private func isContent(of ref: String, includedIn base: String) -> Bool {
+        // Squash merge: merging the branch now would leave base's files exactly as they are.
+        if let merged = try? runRaw(["merge-tree", "--write-tree", base, ref]), merged.exitCode == 0,
+           let baseTree = try? run(["rev-parse", "\(base)^{tree}"]) {
+            let mergedTree = merged.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !mergedTree.isEmpty, mergedTree == baseTree.trimmingCharacters(in: .whitespacesAndNewlines) {
+                return true
+            }
+        }
+        // Rebase/cherry-pick: each commit has an equivalent in base. `git cherry` skips merge
+        // commits, so it proves nothing about a range containing one.
+        guard let merges = try? commitCount(["--merges", ref, "--not", base]), merges == 0,
+              let cherry = try? run(["cherry", base, ref]) else { return false }
+        let lines = cherry.split(separator: "\n")
+        return !lines.isEmpty && lines.allSatisfy { $0.hasPrefix("-") }
+    }
+
+    /// When `branch` was last updated or checked out here, from the reflogs. A plain checkout only
+    /// appears in HEAD's ("checkout: moving from a to b"). `nil` when reflogs are off or expired.
+    private func lastReflogDate(ofBranch branch: String) -> Date? {
+        func entries(_ ref: String, limit: Int) -> [(date: Date, message: String)] {
+            let output = (try? run([
+                "log", "-g", "-n", String(limit), "--date=unix", "--format=%gd%x1f%gs", ref, "--",
+            ])) ?? ""
+            return output.split(separator: "\n").compactMap { line in
+                // `%gd` is "HEAD@{1700000000}" here.
+                let parts = line.components(separatedBy: Self.fieldSeparator)
+                guard parts.count == 2, let brace = parts[0].range(of: "@{", options: .backwards),
+                      let seconds = TimeInterval(parts[0][brace.upperBound...].dropLast()) else { return nil }
+                return (Date(timeIntervalSince1970: seconds), parts[1])
+            }
+        }
+        let updated = entries("refs/heads/\(branch)", limit: 1).first?.date
+        let checkedOut = entries("HEAD", limit: 2000).first { entry in
+            let prefix = "checkout: moving from "
+            guard entry.message.hasPrefix(prefix) else { return false }
+            // Branch names can't contain spaces, so " to " is unambiguous.
+            return entry.message.dropFirst(prefix.count).components(separatedBy: " to ").contains(branch)
+        }?.date
+        return [updated, checkedOut].compactMap { $0 }.max()
+    }
+
+    /// When this repo last fetched, from `FETCH_HEAD`'s modification date.
+    private func lastFetchDate() -> Date? {
+        guard let path = try? run(["rev-parse", "--git-path", "FETCH_HEAD"])
+            .trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        // Relative to the repo normally, absolute in a linked worktree.
+        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : rootURL.appendingPathComponent(path)
+        return (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
     /// Creates a new branch off HEAD and switches to it in one step (`git checkout -b`).
     func createBranch(named name: String) throws {
         try run(["checkout", "-b", name])
@@ -1029,10 +1224,14 @@ nonisolated struct GitRepository {
     /// but not `other`), which `mergePreview(current:other:)` uses to list each side's unique
     /// commits.
     private func commitLog(range: String, limit: Int) throws -> [GitCommit] {
+        try commitLog(revisions: [range], limit: limit)
+    }
+
+    private func commitLog(revisions: [String], limit: Int) throws -> [GitCommit] {
         // `%b` (the body) spans multiple lines, so records are delimited by an explicit record
         // separator rather than by newline.
         let format = ["%H", "%h", "%s", "%at", "%an", "%b"].joined(separator: Self.fieldSeparator) + Self.recordSeparator
-        let output = try run(["log", range, "-n", String(limit), "--format=\(format)"])
+        let output = try run(["log", "-n", String(limit), "--format=\(format)"] + revisions + ["--"])
         return output
             .components(separatedBy: Self.recordSeparator)
             .compactMap { record -> GitCommit? in

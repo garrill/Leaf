@@ -9,69 +9,73 @@
 
 <p align="center">A lightweight, native git client for macOS.</p>
 
-Leaf is a free and open-source git client for MacOS. It is based on a four column layout to show repositories, branch history, changed files and file diffs all side-by-side. It talks to the git you have installed directly, so it has your config, credentials, and hooks.
+Leaf is a free and open-source git client for MacOS. It is based on a four column layout to show repositories, branch history, changed files and file diffs all side-by-side.
 
-This is intentionally a bare-bones, simple to use git client, best for solo devs / small teams working on repositories with a few branches. It doesn't handle the more complex side of git and there are no plans to add more features.
-
-## Installation
-
-Download the latest `.dmg` from the [GitHub Releases page](https://github.com/garrill/Leaf/releases).
-
-## Features
-
-- **Multi-repo sidebar** group repositories into folders, then reorder, rename and add icons to repos to help organisation
-- **Basic git workflow** — switch and merge branches; commit, stage and unstage files; fetch, pull and push; add and remove tags
-- **Rich diff viewer** — syntax-highlighted, word-level diffs, plus side by-side or swipe over image diffs
+This is intentionally a bare-bones and simple to use, best for solo devs / small teams working on repositories with a few branches. It covers the everyday git workflow, but doesn't handle the more complex side of git and there are no plans to add more features.
 
 <picture>
 	<source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
 	<img src="docs/screenshot-light.png" alt="Leaf screenshot">
 </picture>
 
-## Requirements
+## Download
 
-- macOS with Xcode (minimum MacOS 26)
-- git — Leaf will detect if it's missing and help you install it
-- No `Package.swift` manifest — this is a plain Xcode project, not an SPM package
+1. Download the latest `.dmg` from the [Releases page](https://github.com/garrill/Leaf/releases/latest).
+2. Open it and drag **Leaf** into your Applications folder.
+3. Launch Leaf and add a repository, either from a folder on your Mac or by cloning from a URL.
 
-## Building & running
+Leaf is signed and notarized by Apple, and it updates itself: you'll be offered new versions as they come out, or you can choose **Check for Updates…** from the app menu at any time.
 
-There's no `Package.swift`; this is a plain Xcode project. It does pull in two SPM dependencies (`HighlightSwift`, `Sparkle`) via Xcode's own package resolution, which happens automatically on first build.
+**Requirements:** macOS 26 or later, and git. If git isn't installed, Leaf should prompt you ti install it.
 
-```sh
-xcodebuild -project Leaf.xcodeproj -scheme Leaf -configuration Debug build
-open /path/to/DerivedData/.../Build/Products/Debug/Leaf.app
-```
+## Features
 
-Or open `Leaf.xcodeproj` in Xcode and run the `Leaf` scheme.
+### Keep all your repos in one place
+- The sidebar lists all your repos, where you can add local repos or clone new ones.
+- Sidebar organisation that you would expect, you can add repos to folders, rename them and pick icons so they are visible at a glance.
+- Activity dot in sidebar lets you know if it has uncommited, unpushed or unpulled changes.
+- Double click a repo to open it in your code editor.
 
-Quit any running instance before rebuilding — `xcodebuild` won't overwrite a running app bundle:
+### Everyday git workflow
+- Stage, unstage and commit, with an optional commit description
+- Fetch, pull and push, with progress shown as it happens for larger jobs
+- Create, switch, merge and delete branches, and prune stale remote branches
+- Add, remove and push tags
+- Stash your changes and bring them back later
+- Discard changes safely: discarded files go to the Trash, so you can get them back
+- Ignore files straight from the file list
+- Git errors come with a short, plain-English summary, and you can copy the full log when you need the detail
 
-```sh
-osascript -e 'tell application "Leaf" to quit'
-```
+### Diff viewer
+- Syntax highlighting
+- Word-level highlights that show exactly what changed within a line
+- Search inside a diff
+- Optionally hide whitespace-only changes
+- Image diffs, shown side by side or with a swipe comparison
 
-## Architecture, at a glance
+### Keyboard navigation
+- **Command palette (⌘K):** jump to any repo, branch, commit or file, or run a command, all from one search box
+- Move between columns with ← and →
+- Press Return to commit, and Escape to undo your last commit
 
-- **Git backend**: shells out to `/usr/bin/git` directly (no libgit2/SwiftGit2) — see `GitRepository.swift`.
-- **State**: `AppState` is the single source of truth for the whole app.
-- **Layout**: `NSSplitViewController` (sidebar | branches/history | files | diff), hosting each column as its own SwiftUI view.
-- **Sidebar**: `NSOutlineView` for native drag-reorder.
-- **Diff view**: `NSTextView`, for proper multi-line selection.
-- App Sandbox is intentionally disabled — the app shells out inside arbitrary repo folders on disk.
+### Feels at home on macOS
+- Built natively in SwiftUI and AppKit, with Liquid Glass styling
+- Light and dark mode
+- Lightweight and quick, even on large commits
+
+<picture>
+	<source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark-command-palette.png">
+	<img src="docs/screenshot-light-command-palette.png" alt="Leaf screenshot">
+</picture>
 
 ## Privacy
 
-Leaf runs entirely on your Mac. It talks only to the git you already have installed and to the remotes you configure — nothing about your repositories, code, or usage is collected or sent anywhere.
+Leaf uses the git you have installed already, and it runs entirely on your Mac. It only talks to git and to the remotes you've configured. It doesn't collect or send anything about your repositories, your code or how you use the app.
 
-## Testing
+## Feedback
 
-`LeafTests` has real unit tests against `GitRepository`, run against throwaway repos in a temp directory (real `git`, no mocks) — see `LeafTests/LeafTests.swift`. `LeafUITests` has a handful of real `XCUIApplication` tests (launch, empty state, Settings window, menu contents) — see `LeafUITests/LeafUITests.swift`; `LeafUITestsLaunchTests.swift` is still the stock Xcode placeholder.
-
-```sh
-xcodebuild -project Leaf.xcodeproj -scheme Leaf test
-```
+Leaf is in beta. If you find a bug or have a suggestion, please [open an issue](https://github.com/garrill/Leaf/issues). The [changelog](CHANGELOG.md) lists what's new in each release.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Free and open source under the MIT license. See [LICENSE](LICENSE).
